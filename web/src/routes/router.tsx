@@ -1,32 +1,38 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom';
-import { AppShell } from '@/components/layout/AppShell';
 import { LoginGate } from './LoginGate';
 import { LoginPage } from '@/pages/LoginPage';
-import { UploadPage } from '@/pages/UploadPage';
-import { SearchPage } from '@/pages/SearchPage';
+import { ExplorerPage } from '@/pages/ExplorerPage';
 import { FileDetailPage } from '@/pages/FileDetailPage';
-import { SettingsPage } from '@/pages/SettingsPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
+
+// Phase 2 — kept around but not routed.
+// import { SearchPage } from '@/pages/SearchPage';
+// import { SettingsPage } from '@/pages/SettingsPage';
 
 export const router = createBrowserRouter([
   { path: '/login', element: <LoginPage /> },
+  // Index → /drive
+  { path: '/', element: <Navigate to="/drive" replace /> },
+
+  // Explorer: catch-all under /drive so /drive/Photos/2012 etc all hit the same page.
   {
-    path: '/',
+    path: '/drive/*',
     element: (
       <LoginGate>
-        <AppShell />
+        <ExplorerPage />
       </LoginGate>
     ),
-    children: [
-      { index: true, element: <UploadPage /> },
-      { path: 'search', element: <SearchPage /> },
-      { path: 'files/:id', element: <FileDetailPage /> },
-      { path: 'settings', element: <SettingsPage /> },
-      // Phase 2 route placeholders — redirect for now.
-      { path: 'timeline', element: <Navigate to="/" replace /> },
-      { path: 'faces', element: <Navigate to="/" replace /> },
-      { path: 'tags', element: <Navigate to="/" replace /> },
-      { path: '*', element: <NotFoundPage /> },
-    ],
   },
+
+  // File detail — kept minimal.
+  {
+    path: '/files/:id',
+    element: (
+      <LoginGate>
+        <FileDetailPage />
+      </LoginGate>
+    ),
+  },
+
+  { path: '*', element: <NotFoundPage /> },
 ]);

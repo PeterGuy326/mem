@@ -103,6 +103,8 @@ export const api = {
     apiFetch<T>(path, { ...opts, method: 'POST', body }),
   put: <T>(path: string, body?: unknown, opts?: RequestOptions) =>
     apiFetch<T>(path, { ...opts, method: 'PUT', body }),
+  apiPatch: <T>(path: string, body?: unknown, opts?: RequestOptions) =>
+    apiFetch<T>(path, { ...opts, method: 'PATCH', body }),
   del: <T>(path: string, opts?: RequestOptions) => apiFetch<T>(path, { ...opts, method: 'DELETE' }),
   upload: <T>(path: string, formData: FormData) =>
     apiFetch<T>(path, { method: 'POST', formData }),

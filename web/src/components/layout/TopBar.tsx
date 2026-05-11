@@ -1,7 +1,10 @@
+/**
+ * Placeholder kept around. Search input + settings link removed per product
+ * direction (we only ship the file-explorer for now). The Explorer page
+ * inlines its own top bar with Logo + breadcrumb + Avatar.
+ */
 import { useNavigate } from 'react-router-dom';
-import { Search, LogOut } from 'lucide-react';
-import { Input } from '@/components/ui/Input';
-import { Kbd } from '@/components/ui/Kbd';
+import { LogOut } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { useAuth } from '@/hooks/useAuth';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
@@ -10,39 +13,19 @@ export function TopBar() {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
 
-  function onSearchSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const form = e.currentTarget;
-    const data = new FormData(form);
-    const q = String(data.get('q') ?? '').trim();
-    if (q) navigate(`/search?q=${encodeURIComponent(q)}`);
-  }
-
   return (
-    <header className="sticky top-0 z-30 h-14 border-b border-border bg-bg/85 backdrop-blur-md">
-      <div className="h-full px-6 flex items-center gap-6">
-        <form onSubmit={onSearchSubmit} className="flex-1 max-w-2xl">
-          <Input
-            name="q"
-            placeholder="搜索图片、文档、人物… 比如 “2012 年和小明在云南拍的照片”"
-            leadingIcon={<Search />}
-            trailing={<Kbd>⏎</Kbd>}
-            autoComplete="off"
-          />
-        </form>
-        <div className="flex items-center gap-2 ml-auto">
+    <header className="sticky top-0 z-30 h-12 border-b border-border bg-bg/85 backdrop-blur-md">
+      <div className="h-full px-4 flex items-center gap-3">
+        <div className="ml-auto flex items-center gap-2">
           <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild>
               <button
-                className="flex items-center gap-2 rounded-md px-2 h-9 hover:bg-bg-inset transition-colors"
+                className="flex items-center gap-2 rounded-md px-2 h-8 hover:bg-bg-inset transition-colors"
                 aria-label="账户菜单"
               >
-                <div className="h-7 w-7 rounded-md bg-accent/20 text-accent grid place-items-center text-xs font-semibold">
+                <div className="h-6 w-6 rounded-md bg-accent/20 text-accent grid place-items-center text-xs font-semibold">
                   {(user?.email ?? 'M').slice(0, 1).toUpperCase()}
                 </div>
-                <span className="hidden lg:block text-sm text-fg-muted">
-                  {user?.email ?? 'guest'}
-                </span>
               </button>
             </DropdownMenu.Trigger>
             <DropdownMenu.Portal>
@@ -55,16 +38,6 @@ export function TopBar() {
                   {user?.email ?? '未登录'}
                 </DropdownMenu.Label>
                 <DropdownMenu.Separator className="my-1 h-px bg-border" />
-                <DropdownMenu.Item asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="w-full justify-start"
-                    onClick={() => navigate('/settings')}
-                  >
-                    设置
-                  </Button>
-                </DropdownMenu.Item>
                 <DropdownMenu.Item asChild>
                   <Button
                     variant="ghost"
