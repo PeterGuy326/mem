@@ -1,0 +1,103 @@
+# mem — Local development stack
+# Phase 1 MVP: postgres (with pgvector) + redis + minio + memd + worker
+# Web UI 单独 `cd web && npm run dev` 启动 (vite)
+#
+# 使用: docker compose up -d
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: mem-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mem
+      POSTGRES_PASSWORD: mem
+      POSTGRES_DB: mem
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mem"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: mem-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: mem-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: mem
+      MINIO_ROOT_PASSWORD: mem-minio-password
+    ports:
+      - "9000:9000"  # S3 API
+      - "9001:9001"  # Console
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Bootstrap: create default bucket
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 mem mem-minio-password;
+      mc mb --ignore-existing local/mem;
+      mc anonymous set download local/mem || true;
+      exit 0;
+      "
+
+  # === 应用服务（Phase 1 W1 开始接入）===
+  # memd:
+  #   build: ./server
+  #   container_name: mem-memd
+  #   restart: unless-stopped
+  #   depends_on:
+  #     postgres: { condition: service_healthy }
+  #     redis:    { condition: service_healthy }
+  #     minio:    { condition: service_healthy }
+  #   environment:
+  #     MEM_DB_URL: postgres://mem:mem@postgres:5432/mem?sslmode=disable
+  #     MEM_REDIS_URL: redis://redis:6379
+  #     MEM_S3_ENDPOINT: http://minio:9000
+  #     MEM_S3_BUCKET: mem
+  #     MEM_S3_ACCESS_KEY: mem
+  #     MEM_S3_SECRET_KEY: mem-minio-password
+  #     MEM_WORKER_GRPC: worker:50051
+  #   ports:
+  #     - "8080:8080"
+
+  # worker:
+  #   build: ./worker
+  #   container_name: mem-worker
+  #   restart: unless-stopped
+  #   ports:
+  #     - "50051:50051"
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:

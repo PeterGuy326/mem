@@ -1,0 +1,70 @@
+# === OS ===
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# === Editors ===
+.idea/
+.vscode/
+*.iml
+
+# === Env / Secrets ===
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+secrets/
+
+# === Go (server/) ===
+server/bin/
+server/dist/
+server/coverage.out
+server/coverage.html
+server/*.test
+server/.air.toml
+
+# === Python (worker/) ===
+worker/__pycache__/
+worker/**/__pycache__/
+worker/*.pyc
+worker/.venv/
+worker/venv/
+worker/dist/
+worker/build/
+worker/*.egg-info/
+worker/.pytest_cache/
+worker/.ruff_cache/
+worker/.mypy_cache/
+
+# === Node / Web (web/) ===
+web/node_modules/
+web/dist/
+web/build/
+web/.next/
+web/out/
+web/coverage/
+web/.turbo/
+
+# === Generated proto ===
+**/*_pb2.py
+**/*_pb2_grpc.py
+**/*.pb.go
+server/internal/workerpb/*.pb.go
+worker/mem_worker/proto/*_pb2.py
+worker/mem_worker/proto/*_pb2_grpc.py
+worker/mem_worker/proto/*_pb2.pyi
+
+# === Local data / scratch ===
+data/
+storage/
+.scratch/
+*.log
+
+# === Docker ===
+.docker-data/
+
+# === Misc ===
+node_modules/
+*.tsbuildinfo
