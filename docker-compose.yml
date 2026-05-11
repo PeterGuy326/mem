@@ -88,7 +88,7 @@ services:
   #     MEM_S3_SECRET_KEY: mem-minio-password
   #     MEM_WORKER_GRPC: worker:50051
   #   ports:
-  #     - "8080:8080"
+  #     - "8787:8787"
 
   # worker:
   #   build: ./worker

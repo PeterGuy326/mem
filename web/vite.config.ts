@@ -15,7 +15,7 @@ export default defineConfig({
     proxy: {
       // Dev-mode direct proxy to Go backend (`memd`). Used when VITE_USE_MOCK=false.
       '/v1': {
-        target: 'http://localhost:8080',
+        target: 'http://localhost:8787',
         changeOrigin: true,
       },
     },

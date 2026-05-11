@@ -18,7 +18,7 @@ npm run dev          # http://localhost:5173 — 默认开启 MSW mock
 
 ```bash
 echo "VITE_USE_MOCK=false" > .env.local
-npm run dev          # /v1/* 通过 Vite proxy 转到 http://localhost:8080
+npm run dev          # /v1/* 通过 Vite proxy 转到 http://localhost:8787
 ```
 
 ### 构建 / Lint / 类型检查
@@ -36,7 +36,7 @@ npm run typecheck    # tsc --noEmit
 ```
 web/
 ├── index.html
-├── vite.config.ts          # /v1/* → :8080 proxy
+├── vite.config.ts          # /v1/* → :8787 proxy
 ├── tailwind.config.js      # 设计 tokens
 ├── src/
 │   ├── main.tsx            # 入口，按 VITE_USE_MOCK 启 MSW

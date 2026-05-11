@@ -16,7 +16,7 @@ import (
 // Config is the resolved memd runtime configuration.
 type Config struct {
 	// HTTP
-	HTTPAddr string // e.g. ":8080"
+	HTTPAddr string // e.g. ":8787"
 
 	// PostgreSQL (with pgvector)
 	DBURL string
@@ -46,7 +46,7 @@ type Config struct {
 // required values are missing or malformed.
 func Load() (*Config, error) {
 	cfg := &Config{
-		HTTPAddr:    getenv("MEM_HTTP_ADDR", ":8080"),
+		HTTPAddr:    getenv("MEM_HTTP_ADDR", ":8787"),
 		DBURL:       getenv("MEM_DB_URL", "postgres://mem:mem@localhost:5432/mem?sslmode=disable"),
 		RedisURL:    getenv("MEM_REDIS_URL", "redis://localhost:6379"),
 		S3Endpoint:  getenv("MEM_S3_ENDPOINT", "http://localhost:9000"),

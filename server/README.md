@@ -9,7 +9,7 @@
 ```
 server/
 ├── cmd/
-│   ├── memd/          — HTTP daemon entrypoint (default :8080)
+│   ├── memd/          — HTTP daemon entrypoint (default :8787)
 │   ├── mem/           — User-facing CLI (cobra)
 │   └── mem-mcp/       — MCP server stub (W4 scope)
 ├── internal/
@@ -38,7 +38,7 @@ docker compose up -d
 # 2. Build + run memd
 cd server
 go run ./cmd/memd
-# logs: "db connected" -> "db migrations applied" -> "http listening :8080"
+# logs: "db connected" -> "db migrations applied" -> "http listening :8787"
 ```
 
 Service URLs in the docker-compose dev stack:
@@ -51,7 +51,7 @@ Service URLs in the docker-compose dev stack:
 
 | Var | Default | Description |
 |---|---|---|
-| `MEM_HTTP_ADDR` | `:8080` | HTTP listen address |
+| `MEM_HTTP_ADDR` | `:8787` | HTTP listen address |
 | `MEM_DB_URL` | `postgres://mem:mem@localhost:5432/mem?sslmode=disable` | PostgreSQL DSN (pgvector required) |
 | `MEM_REDIS_URL` | `redis://localhost:6379` | Redis URL (used in W2+) |
 | `MEM_S3_ENDPOINT` | `http://localhost:9000` | S3-compatible endpoint |

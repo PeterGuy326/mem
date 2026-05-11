@@ -39,7 +39,7 @@ func newRootCmd() *cobra.Command {
 		Short: "mem — Agent-Native AI 网盘 CLI",
 		Long:  `mem is the command-line interface for the mem AI drive.`,
 	}
-	root.PersistentFlags().StringVar(&server, "server", "", "memd base URL (overrides config; e.g. http://localhost:8080)")
+	root.PersistentFlags().StringVar(&server, "server", "", "memd base URL (overrides config; e.g. http://localhost:8787)")
 	root.PersistentFlags().StringVar(&format, "format", "text", "output format: text|json")
 
 	root.AddCommand(newLoginCmd())

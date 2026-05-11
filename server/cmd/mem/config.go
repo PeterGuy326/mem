@@ -35,7 +35,7 @@ func loadConfig() (*cliConfig, error) {
 	b, err := os.ReadFile(p)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return &cliConfig{Server: "http://localhost:8080"}, nil
+			return &cliConfig{Server: "http://localhost:8787"}, nil
 		}
 		return nil, err
 	}
@@ -44,7 +44,7 @@ func loadConfig() (*cliConfig, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	if cfg.Server == "" {
-		cfg.Server = "http://localhost:8080"
+		cfg.Server = "http://localhost:8787"
 	}
 	return &cfg, nil
 }
