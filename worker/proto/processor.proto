@@ -1,0 +1,139 @@
+// mem AI Worker — Processor gRPC contract.
+//
+// This proto is the contract between the Go backend (server/internal/workerpb)
+// and the Python AI Worker (worker/mem_worker). It mirrors the Processor
+// abstraction defined in SPEC.md §9.1 ProcessResult.
+//
+// Version: v0.1 (W1). Backwards-incompatible changes require a bump.
+
+syntax = "proto3";
+
+package mem.worker.v1;
+
+option go_package = "github.com/mem/mem/server/internal/workerpb;workerpb";
+
+// ============================================================================
+// Service
+// ============================================================================
+
+service ProcessorService {
+  // Process a single file end-to-end:
+  //   1. Resolve storage_uri -> bytes
+  //   2. Route to a Processor by mime
+  //   3. Run the Processor + Provider(s)
+  //   4. Return a ProcessResponse with everything needed to persist
+  rpc Process(ProcessRequest) returns (ProcessResponse) {}
+
+  // Liveness / readiness probe. Always cheap. Does NOT require external
+  // services (Ollama, S3) to be reachable.
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse) {}
+}
+
+// ============================================================================
+// Process
+// ============================================================================
+
+message ProcessRequest {
+  // File identity (mirrors files.id in PostgreSQL).
+  string file_id = 1;
+
+  // Where to read the bytes from. Currently only "s3://bucket/key" is supported.
+  // Future: "file:///abs/path", "http(s)://...".
+  string storage_uri = 2;
+
+  // MIME type as detected by the Go backend (magic-number based, not extension).
+  string mime = 3;
+
+  // Content hash (sha256, hex). For idempotency / dedup; the worker MUST NOT
+  // re-fetch when the hash matches a cache hit (future optimization).
+  string sha256 = 4;
+
+  // Owning user. Required for per-user provider configuration / quotas.
+  string user_id = 5;
+
+  // Original file name (for hints to LLM/VLM: "this file is called X").
+  string name = 6;
+
+  // Free-form options forwarded from the request (e.g. provider overrides,
+  // skip flags, tag hints). Serialized JSON to keep proto schema stable.
+  bytes options_json = 7;
+}
+
+message ProcessResponse {
+  // Mirrors SPEC §9.1 ProcessResult.
+  string summary = 1;          // LLM summary, may be empty
+  string caption = 2;          // VLM caption (image only), may be empty
+  repeated string tags = 3;    // auto-generated tags
+  repeated Entity entities = 4;
+  map<string, Embedding> embeddings = 5;   // keys: "text", "visual", "face"
+  // Free-form structured metadata (EXIF, codec info, …). JSON-encoded to keep
+  // the wire schema stable as Processors add fields.
+  bytes metadata_json = 6;
+
+  // Which processor handled the file (for debugging / metrics).
+  string processor = 7;
+
+  // Pipeline-level status, in case partial success matters.
+  ProcessStatus status = 8;
+  string error = 9;            // non-empty if status == STATUS_FAILED
+}
+
+enum ProcessStatus {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_OK = 1;
+  STATUS_PARTIAL = 2;          // some embeddings produced, some failed
+  STATUS_FAILED = 3;
+  STATUS_SKIPPED = 4;          // no processor matched / unsupported mime
+}
+
+// ============================================================================
+// Building blocks
+// ============================================================================
+
+message Entity {
+  // Type: "person" | "place" | "org" | "event" | …  (SPEC §6.1 entities.type)
+  string type = 1;
+  string name = 2;             // may be empty for unnamed face clusters
+  // Free-form per-entity metadata (e.g. face bbox, gps lat/lng). JSON.
+  bytes metadata_json = 3;
+  float confidence = 4;        // 0.0 – 1.0
+}
+
+message Embedding {
+  // The provider used to generate this vector (e.g. "ollama:nomic-embed-text").
+  string provider = 1;
+
+  // Dimensionality (redundant with len(values[i]) but useful for early checks).
+  int32 dim = 2;
+
+  // One or more vectors. Single-vector kinds (visual) have len(rows) == 1;
+  // multi-vector kinds (text chunks, faces) have len(rows) == N.
+  repeated EmbeddingRow rows = 3;
+}
+
+message EmbeddingRow {
+  // The vector itself. Length must equal Embedding.dim.
+  repeated float values = 1;
+  // For text: chunk index. For face: face index. -1 if not applicable.
+  int32 index = 2;
+  // For text: the chunk text. For face: empty.
+  string chunk_text = 3;
+  // Free-form per-row metadata (e.g. face bbox). JSON.
+  bytes metadata_json = 4;
+}
+
+// ============================================================================
+// Health
+// ============================================================================
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  enum ServingStatus {
+    UNKNOWN = 0;
+    SERVING = 1;
+    NOT_SERVING = 2;
+  }
+  ServingStatus status = 1;
+  string version = 2;
+}

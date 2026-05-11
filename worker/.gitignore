@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Generated gRPC stubs (regenerate with `make proto`)
+mem_worker/proto/processor_pb2.py
+mem_worker/proto/processor_pb2_grpc.py
+mem_worker/proto/*_pb2.py
+mem_worker/proto/*_pb2_grpc.py
+mem_worker/proto/*.pyi
+
+# Env
+.env
+.env.local
+
+# OS
+.DS_Store
