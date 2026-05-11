@@ -80,7 +80,8 @@ mem search "草地上的金毛"
 
 ## 设计文档
 
-完整产品 + 架构 + CLI / MCP / 数据模型规范见 **[SPEC.md](SPEC.md)**。
+- 完整产品 + 架构 + CLI / MCP / 数据模型规范见 **[SPEC.md](SPEC.md)**
+- MCP server 接入指南（Claude Desktop / Cursor / Cline）见 **[docs/mcp.md](docs/mcp.md)**
 
 ---
 

@@ -18,6 +18,7 @@ Thumbs.db
 secrets/
 
 # === Go (server/) ===
+/bin/                     # repo-root build output from `make build`
 server/bin/
 server/dist/
 server/coverage.out
