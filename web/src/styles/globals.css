@@ -1,0 +1,157 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Design tokens
+ * ----
+ * Style brief: Linear / Vercel / Raycast. Restrained, dark-first, geometric.
+ * Accent: indigo-500-ish, dialed down a touch for the dark canvas.
+ * Color tokens are emitted as space-separated RGB triples so Tailwind's
+ * `<alpha-value>` token works (e.g. `bg-bg/60`).
+ */
+:root {
+  /* Dark (default) */
+  --bg: 10 11 15;            /* near black, slightly warm */
+  --bg-subtle: 14 16 22;     /* sidebar / second surface */
+  --bg-panel: 18 21 28;      /* cards */
+  --bg-inset: 23 27 36;      /* inputs, code blocks */
+
+  --fg: 232 234 240;         /* primary text */
+  --fg-muted: 156 163 175;   /* secondary text */
+  --fg-subtle: 107 114 128;  /* tertiary, captions */
+
+  --border: 30 35 46;
+  --border-strong: 48 55 72;
+
+  --accent: 129 140 248;        /* indigo-400 */
+  --accent-hover: 165 180 252;  /* indigo-300 */
+  --accent-muted: 67 56 202;    /* indigo-700 */
+
+  --success: 52 211 153;
+  --warn: 251 191 36;
+  --danger: 248 113 113;
+
+  /* Spacing scale follows Tailwind defaults; no override here. */
+  color-scheme: dark;
+}
+
+.light {
+  /* Reserved for W2 — values are placeholders, not used in W1. */
+  --bg: 250 250 252;
+  --bg-subtle: 244 245 248;
+  --bg-panel: 255 255 255;
+  --bg-inset: 240 242 246;
+  --fg: 17 24 39;
+  --fg-muted: 75 85 99;
+  --fg-subtle: 156 163 175;
+  --border: 226 230 237;
+  --border-strong: 203 213 225;
+  --accent: 79 70 229;
+  --accent-hover: 99 102 241;
+  --accent-muted: 224 231 255;
+  --success: 5 150 105;
+  --warn: 217 119 6;
+  --danger: 220 38 38;
+  color-scheme: light;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-bg text-fg font-sans antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11', 'ss01';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Selection */
+  ::selection {
+    background-color: rgb(var(--accent) / 0.35);
+    color: rgb(var(--fg));
+  }
+
+  /* Scrollbar — match the dark canvas */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(var(--border-strong) / 0.6);
+    border: 2px solid transparent;
+    background-clip: content-box;
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgb(var(--border-strong));
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  /* Focus ring — keyboard only, geometric not glow-y */
+  :focus-visible {
+    @apply outline-none ring-2 ring-accent/60 ring-offset-2 ring-offset-bg;
+  }
+
+  /* Heading defaults */
+  h1, h2, h3 {
+    @apply tracking-tight text-fg;
+  }
+}
+
+@layer components {
+  .surface {
+    @apply bg-bg-panel border border-border rounded-lg;
+  }
+
+  .surface-inset {
+    @apply bg-bg-inset border border-border rounded-md;
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* Hairline divider that looks crisp on dark */
+  .hairline {
+    @apply border-t border-border;
+  }
+
+  /* Subtle dot grid for hero backgrounds */
+  .dot-grid {
+    background-image: radial-gradient(
+      circle at 1px 1px,
+      rgb(var(--border-strong) / 0.5) 1px,
+      transparent 0
+    );
+    background-size: 24px 24px;
+  }
+}
+
+/* Skeleton shimmer */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background-color: rgb(var(--bg-inset));
+}
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgb(var(--border-strong) / 0.25),
+    transparent
+  );
+  animation: shimmer 1.6s infinite;
+}
