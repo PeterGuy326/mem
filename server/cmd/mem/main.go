@@ -50,6 +50,10 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newCatCmd())
 	root.AddCommand(newInfoCmd())
 	root.AddCommand(newLsCmd())
+	root.AddCommand(newMkdirCmd())
+	root.AddCommand(newMvCmd())
+	root.AddCommand(newRenameCmd())
+	root.AddCommand(newFolderCmd())
 	root.AddCommand(newVersionCmd())
 	return root
 }

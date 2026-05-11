@@ -29,6 +29,7 @@ import (
 
 	"github.com/PeterGuy326/mem/server/internal/auth"
 	"github.com/PeterGuy326/mem/server/internal/file"
+	"github.com/PeterGuy326/mem/server/internal/folder"
 )
 
 // Version is overridden by ldflags at release-build time.
@@ -36,9 +37,10 @@ var Version = "dev"
 
 // Server bundles the dependencies a handler needs.
 type Server struct {
-	Auth *auth.Service
-	File *file.Service
-	Log  *slog.Logger
+	Auth   *auth.Service
+	File   *file.Service
+	Folder *folder.Service
+	Log    *slog.Logger
 }
 
 // Router returns a chi.Router with all v1 routes wired.
@@ -72,6 +74,15 @@ func (s *Server) Router() http.Handler {
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/files", s.handleListFiles)
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/files/{id}", s.handleGetFile)
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/files/{id}/content", s.handleGetContent)
+		r.With(s.requireScope(auth.ScopeWrite)).Patch("/v1/files/{id}", s.handlePatchFile)
+		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/files/{id}/related", s.handleFileRelated)
+
+		// Folders (SPEC §6.3)
+		r.With(s.requireScope(auth.ScopeWrite)).Post("/v1/folders", s.handleCreateFolder)
+		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/folders", s.handleListFolders)
+		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/folders/tree", s.handleFolderTree)
+		r.With(s.requireScope(auth.ScopeWrite)).Patch("/v1/folders/{id}", s.handlePatchFolder)
+		r.With(s.requireScope(auth.ScopeDelete)).Delete("/v1/folders/{id}", s.handleDeleteFolder)
 	})
 
 	return r
@@ -254,11 +265,12 @@ func (s *Server) handlePutFile(w http.ResponseWriter, r *http.Request) {
 	u := r.Context().Value(ctxUser).(*auth.User)
 
 	var (
-		name string
-		mime string
-		size int64 = -1
-		tags []string
-		body = r.Body
+		name       string
+		mime       string
+		targetPath string
+		size       int64 = -1
+		tags       []string
+		body       = r.Body
 	)
 	stream := r.URL.Query().Get("stream") == "1"
 	if stream {
@@ -274,6 +286,7 @@ func (s *Server) handlePutFile(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		tags = splitTags(r.URL.Query().Get("tags"))
+		targetPath = r.URL.Query().Get("path")
 	} else {
 		// multipart/form-data — single "file" field
 		if err := r.ParseMultipartForm(32 << 20); err != nil {
@@ -296,11 +309,12 @@ func (s *Server) handlePutFile(w http.ResponseWriter, r *http.Request) {
 		if v := r.FormValue("tags"); v != "" {
 			tags = splitTags(v)
 		}
+		targetPath = r.FormValue("path")
 	}
 
-	res, err := s.File.Put(r.Context(), u.ID, name, mime, size, tags, body)
+	res, err := s.File.Put(r.Context(), u.ID, name, mime, targetPath, size, tags, body)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "put_failed", err.Error())
+		writeError(w, http.StatusBadRequest, "put_failed", err.Error())
 		return
 	}
 	status := http.StatusCreated
@@ -363,8 +377,14 @@ func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
 	u := r.Context().Value(ctxUser).(*auth.User)
 	q := r.URL.Query()
 	f := file.ListFilter{
-		Tag:  q.Get("tag"),
-		Type: q.Get("type"),
+		Tag:    q.Get("tag"),
+		Type:   q.Get("type"),
+		Path:   q.Get("path"),
+		Prefix: q.Get("prefix"),
+	}
+	if f.Path != "" && f.Prefix != "" {
+		writeError(w, http.StatusBadRequest, "bad_filter", "use either ?path= or ?prefix=, not both")
+		return
 	}
 	if v := q.Get("since"); v != "" {
 		t, err := time.Parse(time.RFC3339, v)
@@ -402,4 +422,241 @@ func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
 		"page":  f.Page,
 		"limit": f.Limit,
 	})
+}
+
+// --- file PATCH + related ---
+
+type patchFileReq struct {
+	Name *string `json:"name,omitempty"`
+	Path *string `json:"path,omitempty"`
+}
+
+func (s *Server) handlePatchFile(w http.ResponseWriter, r *http.Request) {
+	u := r.Context().Value(ctxUser).(*auth.User)
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_id", err.Error())
+		return
+	}
+	var req patchFileReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	if req.Name == nil && req.Path == nil {
+		writeError(w, http.StatusBadRequest, "no_op", "supply at least one of `name` or `path`")
+		return
+	}
+	var (
+		out *file.File
+	)
+	if req.Path != nil {
+		out, err = s.File.Move(r.Context(), u.ID, id, *req.Path)
+		if err != nil {
+			writeFileMutateError(w, err)
+			return
+		}
+	}
+	if req.Name != nil {
+		out, err = s.File.Rename(r.Context(), u.ID, id, *req.Name)
+		if err != nil {
+			writeFileMutateError(w, err)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleFileRelated is a W3 stub — returns an empty array so the API surface
+// is stable for the CLI / Web client to start integrating against.
+func (s *Server) handleFileRelated(w http.ResponseWriter, r *http.Request) {
+	u := r.Context().Value(ctxUser).(*auth.User)
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_id", err.Error())
+		return
+	}
+	// Ensure the file actually belongs to the user — keeps `?file_id=` from
+	// leaking existence between users.
+	if _, err := s.File.Get(r.Context(), u.ID, id); err != nil {
+		if errors.Is(err, file.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "no such file")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"file_id": id,
+		"related": []any{},
+		"note":    "W3 stub — real relation engine arrives with the file_relations table populated",
+	})
+}
+
+func writeFileMutateError(w http.ResponseWriter, err error) {
+	if errors.Is(err, file.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "no such file")
+		return
+	}
+	writeError(w, http.StatusBadRequest, "mutate_failed", err.Error())
+}
+
+// --- folders ---
+
+type folderCreateReq struct {
+	Path string `json:"path"`
+}
+
+func (s *Server) handleCreateFolder(w http.ResponseWriter, r *http.Request) {
+	u := r.Context().Value(ctxUser).(*auth.User)
+	var req folderCreateReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	if req.Path == "" {
+		writeError(w, http.StatusBadRequest, "missing_path", "supply `path` (absolute, e.g. `/Photos/2012`)")
+		return
+	}
+	f, err := s.Folder.Create(r.Context(), u.ID, req.Path)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "create_failed", err.Error())
+		return
+	}
+	if f == nil {
+		// root — treat as no-op success
+		writeJSON(w, http.StatusOK, map[string]any{"path": "/"})
+		return
+	}
+	writeJSON(w, http.StatusCreated, f)
+}
+
+func (s *Server) handleListFolders(w http.ResponseWriter, r *http.Request) {
+	u := r.Context().Value(ctxUser).(*auth.User)
+	parent := r.URL.Query().Get("parent")
+	if parent == "" {
+		parent = "/"
+	}
+	folders, files, err := s.Folder.List(r.Context(), u.ID, parent)
+	if err != nil {
+		if errors.Is(err, folder.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "no such folder")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "list_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"parent":  parent,
+		"folders": folders,
+		"files":   files,
+	})
+}
+
+func (s *Server) handleFolderTree(w http.ResponseWriter, r *http.Request) {
+	u := r.Context().Value(ctxUser).(*auth.User)
+	tree, err := s.Folder.Tree(r.Context(), u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, tree)
+}
+
+type folderPatchReq struct {
+	Name       *string `json:"name,omitempty"`
+	ParentPath *string `json:"parent_path,omitempty"`
+}
+
+func (s *Server) handlePatchFolder(w http.ResponseWriter, r *http.Request) {
+	u := r.Context().Value(ctxUser).(*auth.User)
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_id", err.Error())
+		return
+	}
+	cur, err := s.Folder.GetByID(r.Context(), u.ID, id)
+	if err != nil {
+		if errors.Is(err, folder.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "no such folder")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	var req folderPatchReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	if req.Name == nil && req.ParentPath == nil {
+		writeError(w, http.StatusBadRequest, "no_op", "supply `name` and/or `parent_path`")
+		return
+	}
+	curPath := cur.Path
+	if req.ParentPath != nil {
+		if err := s.Folder.Move(r.Context(), u.ID, curPath, *req.ParentPath); err != nil {
+			writeFolderMutateError(w, err)
+			return
+		}
+		curPath = *req.ParentPath
+		if curPath == "/" {
+			curPath = "/" + cur.Name
+		} else {
+			curPath = curPath + "/" + cur.Name
+		}
+	}
+	if req.Name != nil {
+		if err := s.Folder.Rename(r.Context(), u.ID, curPath, *req.Name); err != nil {
+			writeFolderMutateError(w, err)
+			return
+		}
+	}
+	updated, err := s.Folder.GetByID(r.Context(), u.ID, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) handleDeleteFolder(w http.ResponseWriter, r *http.Request) {
+	u := r.Context().Value(ctxUser).(*auth.User)
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_id", err.Error())
+		return
+	}
+	recursive := r.URL.Query().Get("recursive") == "true"
+	cur, err := s.Folder.GetByID(r.Context(), u.ID, id)
+	if err != nil {
+		if errors.Is(err, folder.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "no such folder")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	if err := s.Folder.Delete(r.Context(), u.ID, cur.Path, recursive); err != nil {
+		writeFolderMutateError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func writeFolderMutateError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, folder.ErrNotFound):
+		writeError(w, http.StatusNotFound, "not_found", "no such folder")
+	case errors.Is(err, folder.ErrNotEmpty):
+		writeError(w, http.StatusConflict, "not_empty", "folder is not empty; pass ?recursive=true to delete its contents")
+	case errors.Is(err, folder.ErrCycle):
+		writeError(w, http.StatusBadRequest, "cycle", "cannot move folder into itself or a descendant")
+	case errors.Is(err, folder.ErrConflict):
+		writeError(w, http.StatusConflict, "conflict", "a folder with that path already exists")
+	case errors.Is(err, folder.ErrRootOp):
+		writeError(w, http.StatusBadRequest, "root_op", "this operation is not allowed on the root folder")
+	default:
+		writeError(w, http.StatusBadRequest, "mutate_failed", err.Error())
+	}
 }

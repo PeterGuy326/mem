@@ -231,12 +231,27 @@ users (id, email, password_hash, created_at)
 tokens (id, user_id, name, hash, scopes[], quota_jsonb,
         paths[], expires_at, redact_pii, created_at)
 
+-- 文件夹（一等公民，允许空文件夹存在）
+folders (
+  id              uuid pk,
+  user_id         uuid,
+  parent_id       uuid null,               -- null = 根目录的直接子
+  path            text not null,           -- 规范化绝对路径，如 "/Photos/2012"
+  name            text not null,           -- 末段，如 "2012"
+  created_at      timestamptz,
+  updated_at      timestamptz,
+  unique (user_id, path)                   -- 同一用户路径唯一
+);
+-- 根目录"/"对每个用户隐式存在，可不入表（path='/'）；也可作为单条 user_id, parent_id=null, path='/' 入表，二选一。
+-- 实现选择：不存根，仅靠 path 派生。
+
 -- 文件主表（AI-Native 数据模型）
 files (
   id              uuid pk,
   user_id         uuid,
   name            text,
-  path            text,                    -- 虚拟路径
+  path            text,                    -- 虚拟路径（冗余存储父目录绝对路径，方便检索）
+  folder_id       uuid null,               -- 指向 folders.id；根目录文件为 null
   size            bigint,
   sha256          text,                    -- 秒传 key
   mime            text,
@@ -304,8 +319,44 @@ embeddings_face (
 
 - `files (user_id, timeline_at)` — 时间过滤
 - `files (sha256)` — 秒传查重
+- `files (user_id, folder_id)` — 列文件夹内容（最高频）
+- `files (user_id, path text_pattern_ops)` — 子树查询 `path LIKE '/Photos/2012%'`
+- `folders (user_id, parent_id)` — 列子文件夹
+- `folders (user_id, path)` UNIQUE — 路径唯一性约束
 - `embeddings_* (embedding)` — pgvector HNSW
 - `file_entities (entity_id)` — 反查"和某人有关的所有文件"
+
+### 6.3 文件夹一致性规则（重要）
+
+| 操作 | 必须保证 |
+|------|---------|
+| **创建文件夹** | 自动创建所有缺失的父级（mkdir -p 语义） |
+| **上传文件到 /a/b/c.jpg** | 确保 /a 和 /a/b 文件夹存在（自动 mkdir -p） |
+| **重命名文件夹 /a → /A** | 批量更新所有子文件夹和文件的 path 前缀，一个事务内完成 |
+| **移动文件夹 /a → /b/a** | 同上，前缀替换 + 父级 id 改 |
+| **删除文件夹** | 软策略：必须先空才能删；硬策略：递归删除子文件夹和文件（含 S3 异步清理）。默认软策略 |
+| **不允许** | 把文件夹移动到自己或自己的子孙下 |
+
+**路径规范**：
+- 始终绝对路径，以 `/` 开头
+- 不带尾部 `/`（根除外）
+- 段不能包含 `/`、`\0`、纯 `.` 或 `..`
+- 大小写敏感（避免跨 OS 歧义）
+
+---
+
+## 6bis. 路径模型决策记录
+
+> 这是 v0.3 锁定的核心决策，后续所有改动必须沿着这条线。
+
+**决策**：文件夹是一等公民。
+- ✅ 用 `folders` 表持久化（支持空文件夹）
+- ✅ `files.path` 冗余存父目录绝对路径（高频查询不 join）
+- ✅ `files.folder_id` 是真正的外键，重命名/移动靠改 folder 即可批量传导
+- ❌ 不用纯派生方案（A），因为空文件夹存不下来不符合网盘用户预期
+- ❌ 不用 `.mem_keep` 占位（C），hack 味重
+
+**物理存储不变**：S3 key 仍是 `users/<user_id>/<file_id>/<name>`，与虚拟路径完全解耦。移动/重命名零 S3 IO。
 
 ---
 

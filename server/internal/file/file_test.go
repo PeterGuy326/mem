@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/PeterGuy326/mem/server/internal/pathx"
 )
 
 // TestSHA256Streaming verifies that the spillBuffer + TeeReader pattern used
@@ -96,5 +98,54 @@ func TestDedupContract(t *testing.T) {
 	}
 	if hashA == hashC {
 		t.Fatal("different bytes must hash differently")
+	}
+}
+
+// TestPutTargetPathNormalization documents the contract for the
+// `targetPath` argument plumbed through `Service.Put`: it must normalize
+// before being stored on `files.path`, and "" / "/" both map to root.
+//
+// We don't run a live PG here; this just locks the pathx contract that the
+// upload handler relies on so future refactors don't silently regress to
+// storing "Photos/" instead of "/Photos".
+func TestPutTargetPathNormalization(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in   string
+		want string
+		err  bool
+	}{
+		{"", "/", false},
+		{"/", "/", false},
+		{"/Photos/2012", "/Photos/2012", false},
+		{"/Photos/2012/", "/Photos/2012", false},
+		{"Photos", "", true},
+	}
+	for _, tc := range cases {
+		got, err := pathx.Normalize(tc.in)
+		if tc.err {
+			if err == nil {
+				t.Fatalf("expected error for %q", tc.in)
+			}
+			continue
+		}
+		if err != nil || got != tc.want {
+			t.Fatalf("Normalize(%q) = (%q, %v); want %q", tc.in, got, err, tc.want)
+		}
+	}
+}
+
+// TestFileRenameValidation makes sure new filenames are validated before they
+// can be persisted (no slashes, no "." / "..", no NUL).
+func TestFileRenameValidation(t *testing.T) {
+	t.Parallel()
+	bad := []string{"", ".", "..", "with/slash", "with\x00nul"}
+	for _, n := range bad {
+		if err := pathx.ValidateName(n); err == nil {
+			t.Fatalf("rename should reject %q", n)
+		}
+	}
+	if err := pathx.ValidateName("perfectly fine.jpg"); err != nil {
+		t.Fatalf("unexpected rejection: %v", err)
 	}
 }

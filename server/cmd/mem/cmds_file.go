@@ -21,6 +21,7 @@ func newPutCmd() *cobra.Command {
 		name      string
 		mimeFlag  string
 		format    string
+		toFolder  string
 	)
 	cmd := &cobra.Command{
 		Use:   "put <path|-|--url=URL>",
@@ -49,7 +50,7 @@ func newPutCmd() *cobra.Command {
 				if name == "" {
 					return errors.New("--name required when reading from stdin")
 				}
-				return uploadStream(c, name, mimeFlag, -1, tag, os.Stdin, format)
+				return uploadStream(c, name, mimeFlag, toFolder, -1, tag, os.Stdin, format)
 			}
 
 			st, err := os.Stat(target)
@@ -60,21 +61,22 @@ func newPutCmd() *cobra.Command {
 				if !recursive {
 					return errors.New("path is a directory; pass --recursive to upload its contents")
 				}
-				return uploadDir(c, target, tag, format)
+				return uploadDir(c, target, toFolder, tag, format)
 			}
-			return uploadFile(c, target, name, mimeFlag, tag, format)
+			return uploadFile(c, target, name, mimeFlag, toFolder, tag, format)
 		},
 	}
 	cmd.Flags().BoolVarP(&recursive, "recursive", "r", false, "recurse into directories")
 	cmd.Flags().StringArrayVar(&tag, "tag", nil, "tag(s) to attach (repeatable)")
 	cmd.Flags().StringVar(&name, "name", "", "override file name (required for stdin)")
 	cmd.Flags().StringVar(&mimeFlag, "mime", "", "override MIME type")
+	cmd.Flags().StringVar(&toFolder, "to", "/", "destination folder (mkdir -p; e.g. /Photos/2012)")
 	cmd.Flags().String("url", "", "remote URL to fetch (W2)")
 	cmd.Flags().StringVar(&format, "format", "text", "text|json")
 	return cmd
 }
 
-func uploadFile(c *httpClient, path, nameOverride, mimeOverride string, tags []string, format string) error {
+func uploadFile(c *httpClient, path, nameOverride, mimeOverride, targetFolder string, tags []string, format string) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -89,31 +91,46 @@ func uploadFile(c *httpClient, path, nameOverride, mimeOverride string, tags []s
 		mimeType = mime.TypeByExtension(filepath.Ext(name))
 	}
 	var resp map[string]any
-	if err := c.doMultipartUpload("/v1/files", "file", name, mimeType, f, tags, &resp); err != nil {
+	if err := c.doMultipartUpload("/v1/files", "file", name, mimeType, targetFolder, f, tags, &resp); err != nil {
 		return err
 	}
 	return printPutResp(resp, format)
 }
 
-func uploadStream(c *httpClient, name, mimeType string, size int64, tags []string, r io.Reader, format string) error {
+func uploadStream(c *httpClient, name, mimeType, targetFolder string, size int64, tags []string, r io.Reader, format string) error {
 	var resp map[string]any
-	if err := c.doStreamUpload(name, mimeType, size, tags, r, &resp); err != nil {
+	if err := c.doStreamUpload(name, mimeType, targetFolder, size, tags, r, &resp); err != nil {
 		return err
 	}
 	return printPutResp(resp, format)
 }
 
-func uploadDir(c *httpClient, dir string, tags []string, format string) error {
+// uploadDir walks `dir` recursively and uploads every regular file, mapping
+// the on-disk hierarchy onto the mem virtual tree under targetFolder.
+//
+// Local: /home/me/Photos/2012/IMG.jpg, --to /Albums  →
+// Remote: /Albums/2012/IMG.jpg (when called with dir=/home/me/Photos).
+func uploadDir(c *httpClient, dir, targetFolder string, tags []string, format string) error {
 	count := 0
-	err := filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
+	root, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	err = filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 		if info.IsDir() {
 			return nil
 		}
-		fmt.Fprintf(os.Stderr, "  put %s\n", p)
-		if e := uploadFile(c, p, "", "", tags, "text"); e != nil {
+		abs, _ := filepath.Abs(p)
+		rel, _ := filepath.Rel(root, abs)
+		subFolder := targetFolder
+		if d := filepath.Dir(rel); d != "" && d != "." {
+			subFolder = joinFolder(targetFolder, filepath.ToSlash(d))
+		}
+		fmt.Fprintf(os.Stderr, "  put %s -> %s\n", p, subFolder)
+		if e := uploadFile(c, p, "", "", subFolder, tags, "text"); e != nil {
 			fmt.Fprintf(os.Stderr, "  ! %s: %v\n", p, e)
 		} else {
 			count++
@@ -122,6 +139,29 @@ func uploadDir(c *httpClient, dir string, tags []string, format string) error {
 	})
 	fmt.Printf("uploaded %d files from %s\n", count, dir)
 	return err
+}
+
+// joinFolder concatenates a base folder absolute path with a relative
+// sub-path. Both inputs are already in slash form.
+func joinFolder(base, sub string) string {
+	if base == "" {
+		base = "/"
+	}
+	if !strings.HasPrefix(base, "/") {
+		base = "/" + base
+	}
+	base = strings.TrimRight(base, "/")
+	sub = strings.Trim(sub, "/")
+	if sub == "" {
+		if base == "" {
+			return "/"
+		}
+		return base
+	}
+	if base == "" {
+		return "/" + sub
+	}
+	return base + "/" + sub
 }
 
 func printPutResp(resp map[string]any, format string) error {
@@ -244,16 +284,59 @@ func newLsCmd() *cobra.Command {
 		limit  int
 		page   int
 		format string
+		prefix string
 	)
 	cmd := &cobra.Command{
-		Use:   "ls",
-		Short: "List files",
+		Use:   "ls [folder_path]",
+		Short: "List subfolders + files under a folder (default: root)",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := resolveConfig("")
 			if err != nil {
 				return err
 			}
 			c := newHTTPClient(cfg)
+
+			// If neither --tag nor positional folder path is given, default to
+			// listing the root folder (folders + files mixed). If filters are
+			// supplied (--tag, --type, --since, ...) we fall back to the flat
+			// file list endpoint.
+			folderPath := ""
+			if len(args) == 1 {
+				folderPath = args[0]
+			}
+			filterMode := tag != "" || typ != "" || since != "" || until != "" || prefix != ""
+
+			if !filterMode {
+				if folderPath == "" {
+					folderPath = "/"
+				}
+				q := url.Values{}
+				q.Set("parent", folderPath)
+				var resp struct {
+					Parent  string           `json:"parent"`
+					Folders []map[string]any `json:"folders"`
+					Files   []map[string]any `json:"files"`
+				}
+				if err := c.doJSON(http.MethodGet, "/v1/folders?"+q.Encode(), nil, &resp); err != nil {
+					return err
+				}
+				if format == "json" {
+					return jsonOut(resp)
+				}
+				fmt.Printf("%s\n", resp.Parent)
+				for _, d := range resp.Folders {
+					fmt.Printf("  📁 %v\n", d["name"])
+				}
+				fmt.Printf("%-36s  %8s  %-24s  %-10s  %s\n", "ID", "SIZE", "MIME", "STATUS", "NAME")
+				for _, f := range resp.Files {
+					fmt.Printf("%-36v  %8v  %-24v  %-10v  %v\n",
+						f["id"], f["size"], f["mime"], f["index_status"], f["name"])
+				}
+				return nil
+			}
+
+			// Flat-file listing path (filters applied).
 			q := url.Values{}
 			if tag != "" {
 				q.Set("tag", tag)
@@ -266,6 +349,11 @@ func newLsCmd() *cobra.Command {
 			}
 			if until != "" {
 				q.Set("until", until)
+			}
+			if prefix != "" {
+				q.Set("prefix", prefix)
+			} else if folderPath != "" {
+				q.Set("path", folderPath)
 			}
 			if limit > 0 {
 				q.Set("limit", fmt.Sprint(limit))
@@ -298,6 +386,7 @@ func newLsCmd() *cobra.Command {
 	cmd.Flags().StringVar(&typ, "type", "", "filter by mime prefix (image|text|...)")
 	cmd.Flags().StringVar(&since, "since", "", "RFC3339 timestamp")
 	cmd.Flags().StringVar(&until, "until", "", "RFC3339 timestamp")
+	cmd.Flags().StringVar(&prefix, "prefix", "", "subtree-prefix filter (e.g. /Photos)")
 	cmd.Flags().IntVar(&limit, "limit", 50, "page size")
 	cmd.Flags().IntVar(&page, "page", 1, "page number")
 	cmd.Flags().StringVar(&format, "format", "text", "text|json")

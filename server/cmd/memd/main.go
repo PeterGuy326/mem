@@ -18,6 +18,7 @@ import (
 	"github.com/PeterGuy326/mem/server/internal/config"
 	"github.com/PeterGuy326/mem/server/internal/db"
 	"github.com/PeterGuy326/mem/server/internal/file"
+	"github.com/PeterGuy326/mem/server/internal/folder"
 	"github.com/PeterGuy326/mem/server/internal/storage"
 )
 
@@ -69,9 +70,10 @@ func run() error {
 	logger.Info("storage ready", "bucket", store.Bucket())
 
 	authSvc := auth.New(database.Pool)
-	fileSvc := file.New(database.Pool, store)
+	folderSvc := folder.New(database.Pool)
+	fileSvc := file.New(database.Pool, store, folderSvc)
 
-	srv := &api.Server{Auth: authSvc, File: fileSvc, Log: logger}
+	srv := &api.Server{Auth: authSvc, File: fileSvc, Folder: folderSvc, Log: logger}
 	httpSrv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           srv.Router(),

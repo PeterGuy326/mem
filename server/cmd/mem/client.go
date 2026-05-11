@@ -69,7 +69,7 @@ func (c *httpClient) doJSON(method, path string, body any, out any) error {
 	return c.decode(resp, out)
 }
 
-func (c *httpClient) doMultipartUpload(path, fieldName, fileName, mimeType string, file io.Reader, tags []string, out any) error {
+func (c *httpClient) doMultipartUpload(path, fieldName, fileName, mimeType, targetFolder string, file io.Reader, tags []string, out any) error {
 	pr, pw := io.Pipe()
 	mw := multipart.NewWriter(pw)
 	errCh := make(chan error, 1)
@@ -79,6 +79,12 @@ func (c *httpClient) doMultipartUpload(path, fieldName, fileName, mimeType strin
 		defer mw.Close()
 		if len(tags) > 0 {
 			if err := mw.WriteField("tags", strings.Join(tags, ",")); err != nil {
+				errCh <- err
+				return
+			}
+		}
+		if targetFolder != "" {
+			if err := mw.WriteField("path", targetFolder); err != nil {
 				errCh <- err
 				return
 			}
@@ -118,7 +124,7 @@ func (c *httpClient) doMultipartUpload(path, fieldName, fileName, mimeType strin
 }
 
 // doStreamUpload uses POST /v1/files?stream=1 with the raw body.
-func (c *httpClient) doStreamUpload(name, mimeType string, size int64, tags []string, body io.Reader, out any) error {
+func (c *httpClient) doStreamUpload(name, mimeType, targetFolder string, size int64, tags []string, body io.Reader, out any) error {
 	q := url.Values{}
 	q.Set("stream", "1")
 	q.Set("name", name)
@@ -130,6 +136,9 @@ func (c *httpClient) doStreamUpload(name, mimeType string, size int64, tags []st
 	}
 	if len(tags) > 0 {
 		q.Set("tags", strings.Join(tags, ","))
+	}
+	if targetFolder != "" {
+		q.Set("path", targetFolder)
 	}
 	req, err := http.NewRequest(http.MethodPost, c.server+"/v1/files?"+q.Encode(), body)
 	if err != nil {
