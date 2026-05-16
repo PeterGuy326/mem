@@ -88,35 +88,40 @@ class ProcessorServicer:
     def _pick_processor(self, mime: str, options: dict):
         """Resolve a Processor for ``mime``, honoring options provider overrides.
 
-        Override keys (all optional):
-            embedding_provider: "<vendor>:<model>"
-            llm_provider:       "<vendor>:<model>"
-            vlm_provider:       "<vendor>:<model>"
-        Empty / missing keys fall back to the registry's default singleton.
+        Override keys (all optional, ``"<vendor>:<model>"`` form):
+            embedding_provider        — TEXT embedder (for TextProcessor only)
+            visual_embedding_provider — VISUAL embedder (for ImageProcessor only)
+            llm_provider              — chat / summary LLM
+            vlm_provider              — image captioner
+
+        Note: the text and visual embedder kinds are intentionally separate.
+        A user who has ``embedding=ollama:mxbai-embed-large`` (1024-d) MUST
+        still index images with CLIP (512-d) to keep ``embeddings_visual``
+        column type consistent — these two latent spaces never share storage.
         """
         base = self._registry.find(mime)
         if base is None:
             return None
         emb_spec = options.get("embedding_provider") or ""
+        v_emb_spec = options.get("visual_embedding_provider") or ""
         llm_spec = options.get("llm_provider") or ""
         vlm_spec = options.get("vlm_provider") or ""
-        if not (emb_spec or llm_spec or vlm_spec):
+        if not (emb_spec or v_emb_spec or llm_spec or vlm_spec):
             return base
         # Lazy import to avoid cycle when default_registry() pulls in this file.
         from .providers import get_embedding_provider, get_llm_provider, get_vlm_provider
         from .processors.image import ImageProcessor
         from .processors.text import TextProcessor
 
-        emb = get_embedding_provider(emb_spec) if emb_spec else None
         llm = get_llm_provider(llm_spec) if llm_spec else None
         vlm = get_vlm_provider(vlm_spec) if vlm_spec else None
 
         if isinstance(base, TextProcessor):
+            emb = get_embedding_provider(emb_spec) if emb_spec else None
             return TextProcessor(embedder=emb, llm=llm)
         if isinstance(base, ImageProcessor):
-            # Image processors accept caption/visual providers; pass through
-            # what makes sense.
-            return ImageProcessor(embedder=emb, vlm=vlm)
+            v_emb = get_embedding_provider(v_emb_spec) if v_emb_spec else None
+            return ImageProcessor(embedder=v_emb, vlm=vlm)
         # PDF / Audio stubs etc. — fall back to base.
         return base
 

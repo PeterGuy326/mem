@@ -515,6 +515,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Query string  `json:"query"`
 		Type  string  `json:"type,omitempty"`
+		Route string  `json:"route,omitempty"`
 		Since *string `json:"since,omitempty"`
 		Until *string `json:"until,omitempty"`
 		Limit int     `json:"limit,omitempty"`
@@ -526,6 +527,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	q := search.Query{
 		UserID: u.ID,
 		Text:   req.Query,
+		Route:  req.Route,
 		Type:   req.Type,
 		Limit:  req.Limit,
 	}

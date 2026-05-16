@@ -123,28 +123,41 @@ class ImageProcessor:
             result.metadata["vlm_error"] = str(exc)
         result.caption = caption or None
 
-        # 3. Embed the caption as a *text* embedding (W2 will add a real
-        #    CLIP visual embedding alongside).
-        if caption:
-            try:
-                embedder = self._resolve_embedder()
-                vectors = embedder.embed_text([caption])
-                if vectors:
-                    result.embeddings["visual"] = EmbeddingSet(
-                        provider=embedder.name,
-                        dim=len(vectors[0]),
-                        rows=[
-                            EmbeddingRow(
-                                values=vectors[0],
-                                index=0,
-                                chunk_text=caption,
-                                metadata={"source": "vlm_caption"},
-                            )
-                        ],
-                    )
-            except (ProviderError, NotImplementedError) as exc:
-                log.warning("image.embed_failed", file_id=file.file_id, error=str(exc))
-                result.metadata["embed_error"] = str(exc)
+        # 3. Visual embedding via the configured visual embedder.
+        # If it has an embed_image() method (CLIP), use that for true visual
+        # encoding; otherwise fall back to caption-text-embedding (W1 path).
+        try:
+            embedder = self._resolve_embedder()
+            vec: Optional[list[float]] = None
+            src = "image"
+            embed_image = getattr(embedder, "embed_image", None)
+            if callable(embed_image):
+                rows = embed_image([file.data])
+                if rows:
+                    vec = rows[0]
+            elif caption:
+                # Fallback: caption-text-embed (degraded "visual" search).
+                rows = embedder.embed_text([caption])
+                if rows:
+                    vec = rows[0]
+                    src = "vlm_caption"
+
+            if vec:
+                result.embeddings["visual"] = EmbeddingSet(
+                    provider=embedder.name,
+                    dim=len(vec),
+                    rows=[
+                        EmbeddingRow(
+                            values=vec,
+                            index=0,
+                            chunk_text=caption or "",
+                            metadata={"source": src},
+                        )
+                    ],
+                )
+        except (ProviderError, NotImplementedError) as exc:
+            log.warning("image.embed_failed", file_id=file.file_id, error=str(exc))
+            result.metadata["embed_error"] = str(exc)
 
         return result
 

@@ -327,6 +327,7 @@ func registerSearch(reg *tools.Registry, c *apiclient.Client) error {
 			Properties: map[string]tools.Property{
 				"query": {Type: "string", Description: "Free-form natural-language query, e.g. \"2012 photos with Xiao Ming\""},
 				"type":  {Type: "string", Description: "MIME prefix filter: image|text|application|audio|video"},
+				"route": {Type: "string", Description: "Search route: text|visual|auto (default auto fuses both)", Enum: []string{"text", "visual", "auto"}},
 				"since": {Type: "string", Description: "YYYY-MM-DD lower bound on timeline_at"},
 				"until": {Type: "string", Description: "YYYY-MM-DD upper bound on timeline_at"},
 				"limit": {Type: "integer", Description: "Max results (default 10, max 100)", Default: 10},
@@ -340,6 +341,9 @@ func registerSearch(reg *tools.Registry, c *apiclient.Client) error {
 			body := map[string]any{"query": q}
 			if v, _ := args["type"].(string); v != "" {
 				body["type"] = v
+			}
+			if v, _ := args["route"].(string); v != "" {
+				body["route"] = v
 			}
 			if v, _ := args["since"].(string); v != "" {
 				body["since"] = v

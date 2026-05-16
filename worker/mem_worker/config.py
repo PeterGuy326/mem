@@ -68,7 +68,7 @@ class Settings(BaseSettings):
         default="ollama:nomic-embed-text", alias="MEM_DEFAULT_EMBEDDING"
     )
     default_visual_embedding: str = Field(
-        default="ollama:nomic-embed-text",  # W2 → "clip:ViT-B/32"
+        default="clip:ViT-B-32",  # 512-d shared image+text space (Phase 2)
         alias="MEM_DEFAULT_VISUAL_EMBEDDING",
     )
     default_llm: str = Field(default="ollama:qwen2.5:7b", alias="MEM_DEFAULT_LLM")

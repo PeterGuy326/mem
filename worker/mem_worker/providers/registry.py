@@ -49,6 +49,16 @@ def get_embedding_provider(spec: str) -> EmbeddingProvider:
         return ollama_mod.OllamaEmbeddingProvider(model=model)
     if vendor == "openai":
         return openai_mod.OpenAIEmbeddingProvider(model=model)
+    if vendor == "clip":
+        # CLIP spec is "clip:<model>[:<pretrained>]". Pretrained defaults to
+        # OpenAI's checkpoint, which matches SPEC §9.4.
+        from . import clip as clip_mod  # lazy import: heavy torch deps
+
+        if ":" in model:
+            arch, pretrained = model.split(":", 1)
+        else:
+            arch, pretrained = model, "openai"
+        return clip_mod.CLIPEmbeddingProvider(model=arch, pretrained=pretrained)
     raise ProviderError(f"no EmbeddingProvider for vendor {vendor!r}")
 
 

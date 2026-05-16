@@ -20,6 +20,7 @@ type SearchHit struct {
 	MIME       string     `json:"mime"`
 	Score      float64    `json:"score"`
 	Snippet    string     `json:"snippet"`
+	Source     string     `json:"source"`
 	Summary    *string    `json:"summary,omitempty"`
 	TimelineAt *time.Time `json:"timeline_at,omitempty"`
 	CreatedAt  time.Time  `json:"created_at"`
@@ -33,6 +34,7 @@ type searchResponse struct {
 func newSearchCmd() *cobra.Command {
 	var (
 		typ    string
+		route  string
 		since  string
 		until  string
 		limit  int
@@ -61,6 +63,9 @@ func newSearchCmd() *cobra.Command {
 			if typ != "" {
 				body["type"] = typ
 			}
+			if route != "" {
+				body["route"] = route
+			}
 			if since != "" {
 				body["since"] = since
 			}
@@ -85,6 +90,7 @@ func newSearchCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&typ, "type", "", "mime prefix filter: image|text|application|audio|video")
+	cmd.Flags().StringVar(&route, "route", "", "search route: text|visual|auto (default auto)")
 	cmd.Flags().StringVar(&since, "since", "", "YYYY-MM-DD inclusive lower bound on timeline_at")
 	cmd.Flags().StringVar(&until, "until", "", "YYYY-MM-DD inclusive upper bound on timeline_at")
 	cmd.Flags().IntVar(&limit, "limit", 0, "max results (default 10, max 100)")
@@ -101,7 +107,11 @@ func printSearchText(resp searchResponse) error {
 		return nil
 	}
 	for i, h := range resp.Results {
-		fmt.Printf("%2d. [%.3f] %s\n", i+1, h.Score, h.Name)
+		tag := h.Source
+		if tag == "" {
+			tag = "text"
+		}
+		fmt.Printf("%2d. [%.3f / %s] %s\n", i+1, h.Score, tag, h.Name)
 		fmt.Printf("    %s  (%s, %s)\n", h.FileID, h.MIME, h.Path)
 		if h.Snippet != "" {
 			fmt.Printf("    > %s\n", strings.ReplaceAll(h.Snippet, "\n", " "))
