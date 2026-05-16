@@ -54,6 +54,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newMvCmd())
 	root.AddCommand(newRenameCmd())
 	root.AddCommand(newFolderCmd())
+	root.AddCommand(newSearchCmd())
 	root.AddCommand(newVersionCmd())
 	return root
 }

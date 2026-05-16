@@ -30,6 +30,8 @@ import (
 	"github.com/PeterGuy326/mem/server/internal/auth"
 	"github.com/PeterGuy326/mem/server/internal/file"
 	"github.com/PeterGuy326/mem/server/internal/folder"
+	"github.com/PeterGuy326/mem/server/internal/indexer"
+	"github.com/PeterGuy326/mem/server/internal/search"
 )
 
 // Version is overridden by ldflags at release-build time.
@@ -37,10 +39,12 @@ var Version = "dev"
 
 // Server bundles the dependencies a handler needs.
 type Server struct {
-	Auth   *auth.Service
-	File   *file.Service
-	Folder *folder.Service
-	Log    *slog.Logger
+	Auth    *auth.Service
+	File    *file.Service
+	Folder  *folder.Service
+	Indexer *indexer.Service // optional; nil means uploads stay in 'pending'
+	Search  *search.Service  // optional; nil disables /v1/search
+	Log     *slog.Logger
 }
 
 // Router returns a chi.Router with all v1 routes wired.
@@ -76,6 +80,9 @@ func (s *Server) Router() http.Handler {
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/files/{id}/content", s.handleGetContent)
 		r.With(s.requireScope(auth.ScopeWrite)).Patch("/v1/files/{id}", s.handlePatchFile)
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/files/{id}/related", s.handleFileRelated)
+
+		// Search (SPEC §F3)
+		r.With(s.requireScope(auth.ScopeSearch)).Post("/v1/search", s.handleSearch)
 
 		// Folders (SPEC §6.3)
 		r.With(s.requireScope(auth.ScopeWrite)).Post("/v1/folders", s.handleCreateFolder)
@@ -321,6 +328,12 @@ func (s *Server) handlePutFile(w http.ResponseWriter, r *http.Request) {
 	if res.Deduped {
 		status = http.StatusOK
 	}
+	// Fire-and-forget AI indexing. Skip on dedup — that file is already indexed
+	// (or queued) under the original upload.
+	if !res.Deduped && s.Indexer != nil {
+		f := res.File // capture: handler returns, request ctx will be cancelled
+		go s.Indexer.IndexFile(context.Background(), f)
+	}
 	writeJSON(w, status, map[string]any{
 		"file":    res.File,
 		"deduped": res.Deduped,
@@ -465,6 +478,65 @@ func (s *Server) handlePatchFile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// handleSearch implements POST /v1/search.
+// Body: { "query": "...", "type": "image|doc|...", "since": "2012-01-01",
+//         "until": "2012-12-31", "limit": 10 }
+// Returns: { "results": [Hit, ...], "_meta": { "latency_ms": N } }
+func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
+	u := r.Context().Value(ctxUser).(*auth.User)
+	if s.Search == nil {
+		writeError(w, http.StatusServiceUnavailable, "search_disabled",
+			"search service not configured (MEM_WORKER_GRPC missing?)")
+		return
+	}
+	var req struct {
+		Query string  `json:"query"`
+		Type  string  `json:"type,omitempty"`
+		Since *string `json:"since,omitempty"`
+		Until *string `json:"until,omitempty"`
+		Limit int     `json:"limit,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_body", err.Error())
+		return
+	}
+	q := search.Query{
+		UserID: u.ID,
+		Text:   req.Query,
+		Type:   req.Type,
+		Limit:  req.Limit,
+	}
+	if req.Since != nil {
+		t, err := time.Parse("2006-01-02", *req.Since)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_since", err.Error())
+			return
+		}
+		q.Since = &t
+	}
+	if req.Until != nil {
+		t, err := time.Parse("2006-01-02", *req.Until)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_until", err.Error())
+			return
+		}
+		// Inclusive end-of-day.
+		t = t.Add(24*time.Hour - time.Nanosecond)
+		q.Until = &t
+	}
+
+	start := time.Now()
+	hits, err := s.Search.Search(r.Context(), q)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "search_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"results": hits,
+		"_meta":   map[string]any{"latency_ms": time.Since(start).Milliseconds()},
+	})
 }
 
 // handleFileRelated is a W3 stub — returns an empty array so the API surface

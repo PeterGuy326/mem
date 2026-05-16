@@ -10,7 +10,7 @@ syntax = "proto3";
 
 package mem.worker.v1;
 
-option go_package = "github.com/mem/mem/server/internal/workerpb;workerpb";
+option go_package = "github.com/PeterGuy326/mem/server/internal/workerpb;workerpb";
 
 // ============================================================================
 // Service

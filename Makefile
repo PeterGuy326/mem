@@ -35,7 +35,16 @@ reset:
 	docker compose up -d
 
 proto:
-	@echo "TODO: 在 W1 配置 buf / protoc 编译规则"
+	@echo "[proto] generating Go stubs -> server/internal/workerpb/"
+	@protoc -I worker/proto \
+		--go_out=. --go_opt=paths=import \
+		--go-grpc_out=. --go-grpc_opt=paths=import \
+		worker/proto/processor.proto
+	@# protoc writes under the go_package import path; move them into place.
+	@mv -f github.com/PeterGuy326/mem/server/internal/workerpb/*.pb.go server/internal/workerpb/
+	@rm -rf github.com
+	@echo "[proto] generating Python stubs -> worker/mem_worker/proto/"
+	@cd worker && $(MAKE) proto
 
 server:
 	cd server && go run ./cmd/memd

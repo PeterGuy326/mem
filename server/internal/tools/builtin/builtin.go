@@ -35,6 +35,7 @@ func RegisterAll(reg *tools.Registry, client *apiclient.Client) error {
 		registerMkdir,
 		registerMv,
 		registerFolderTree,
+		registerSearch,
 	} {
 		if err := fn(reg, client); err != nil {
 			return err
@@ -306,6 +307,51 @@ func registerFolderTree(reg *tools.Registry, c *apiclient.Client) error {
 		Run: func(ctx context.Context, _ map[string]any) (any, error) {
 			var out map[string]any
 			if err := c.DoJSON(ctx, http.MethodGet, "/v1/folders/tree", nil, &out); err != nil {
+				return nil, err
+			}
+			return out, nil
+		},
+	})
+}
+
+// --- search tool ---
+
+func registerSearch(reg *tools.Registry, c *apiclient.Client) error {
+	return reg.Register(tools.Tool{
+		Name: "mem_search",
+		Description: "Natural-language search across the mem AI drive. Returns ranked files with " +
+			"matching text snippets. Use this BEFORE mem_get when you don't already know the file_id. SPEC §8.1.",
+		InputSchema: tools.Schema{
+			Type:     "object",
+			Required: []string{"query"},
+			Properties: map[string]tools.Property{
+				"query": {Type: "string", Description: "Free-form natural-language query, e.g. \"2012 photos with Xiao Ming\""},
+				"type":  {Type: "string", Description: "MIME prefix filter: image|text|application|audio|video"},
+				"since": {Type: "string", Description: "YYYY-MM-DD lower bound on timeline_at"},
+				"until": {Type: "string", Description: "YYYY-MM-DD upper bound on timeline_at"},
+				"limit": {Type: "integer", Description: "Max results (default 10, max 100)", Default: 10},
+			},
+		},
+		Run: func(ctx context.Context, args map[string]any) (any, error) {
+			q, _ := args["query"].(string)
+			if q == "" {
+				return nil, fmt.Errorf("mem_search: query is required")
+			}
+			body := map[string]any{"query": q}
+			if v, _ := args["type"].(string); v != "" {
+				body["type"] = v
+			}
+			if v, _ := args["since"].(string); v != "" {
+				body["since"] = v
+			}
+			if v, _ := args["until"].(string); v != "" {
+				body["until"] = v
+			}
+			if v := args["limit"]; v != nil {
+				body["limit"] = v
+			}
+			var out map[string]any
+			if err := c.DoJSON(ctx, http.MethodPost, "/v1/search", body, &out); err != nil {
 				return nil, err
 			}
 			return out, nil

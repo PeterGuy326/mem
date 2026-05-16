@@ -27,8 +27,10 @@ services:
     image: redis:7-alpine
     container_name: mem-redis
     restart: unless-stopped
+    # Host port shifted to 6479 to coexist with other local Redis instances.
+    # Internal port stays 6379 so service-to-service traffic uses the default.
     ports:
-      - "6379:6379"
+      - "6479:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -46,8 +48,8 @@ services:
       MINIO_ROOT_USER: mem
       MINIO_ROOT_PASSWORD: mem-minio-password
     ports:
-      - "9000:9000"  # S3 API
-      - "9001:9001"  # Console
+      - "9100:9000"  # S3 API (host port shifted to coexist with other MinIO instances)
+      - "9101:9001"  # Console
     volumes:
       - minio_data:/data
     healthcheck:

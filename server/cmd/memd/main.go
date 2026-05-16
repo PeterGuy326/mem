@@ -19,7 +19,10 @@ import (
 	"github.com/PeterGuy326/mem/server/internal/db"
 	"github.com/PeterGuy326/mem/server/internal/file"
 	"github.com/PeterGuy326/mem/server/internal/folder"
+	"github.com/PeterGuy326/mem/server/internal/indexer"
+	"github.com/PeterGuy326/mem/server/internal/search"
 	"github.com/PeterGuy326/mem/server/internal/storage"
+	"github.com/PeterGuy326/mem/server/internal/workerclient"
 )
 
 func main() {
@@ -73,7 +76,26 @@ func run() error {
 	folderSvc := folder.New(database.Pool)
 	fileSvc := file.New(database.Pool, store, folderSvc)
 
-	srv := &api.Server{Auth: authSvc, File: fileSvc, Folder: folderSvc, Log: logger}
+	// AI worker client. Empty MEM_WORKER_GRPC disables AI indexing entirely
+	// (upload still works, files stay in index_status='pending').
+	workerCli := workerclient.New(cfg.WorkerGRPC, cfg.S3Bucket)
+	defer workerCli.Close()
+	if cfg.WorkerGRPC == "" {
+		logger.Warn("worker disabled — MEM_WORKER_GRPC unset; AI indexing skipped")
+	} else {
+		logger.Info("worker client ready", "addr", cfg.WorkerGRPC)
+	}
+	idxSvc := indexer.New(database.Pool, workerCli, logger)
+	searchSvc := search.New(database.Pool, workerCli)
+
+	srv := &api.Server{
+		Auth:    authSvc,
+		File:    fileSvc,
+		Folder:  folderSvc,
+		Indexer: idxSvc,
+		Search:  searchSvc,
+		Log:     logger,
+	}
 	httpSrv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           srv.Router(),

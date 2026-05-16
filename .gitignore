@@ -18,7 +18,8 @@ Thumbs.db
 secrets/
 
 # === Go (server/) ===
-/bin/                     # repo-root build output from `make build`
+# repo-root build output from `make build`
+/bin/
 server/bin/
 server/dist/
 server/coverage.out
@@ -58,8 +59,9 @@ worker/mem_worker/proto/*_pb2_grpc.py
 worker/mem_worker/proto/*_pb2.pyi
 
 # === Local data / scratch ===
-data/
-storage/
+# Root-anchored so we don't accidentally swallow Go packages named "storage".
+/data/
+/storage/
 .scratch/
 *.log
 
