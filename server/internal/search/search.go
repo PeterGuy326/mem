@@ -76,9 +76,13 @@ func (s *Service) Search(ctx context.Context, q Query) ([]Hit, error) {
 		return nil, fmt.Errorf("search disabled: worker not configured")
 	}
 
+	// Use the user's chosen embedding provider if set, otherwise worker default.
+	// Critical: search must match the dim of stored vectors, so we MUST honor
+	// the user's setting here.
+	embSpec := s.userEmbeddingSpec(ctx, q.UserID)
 	embCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	vec, err := s.worker.EmbedText(embCtx, text)
+	vec, err := s.worker.EmbedTextWith(embCtx, text, embSpec)
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
@@ -154,6 +158,21 @@ func (s *Service) Search(ctx context.Context, q Query) ([]Hit, error) {
 		return nil, fmt.Errorf("rows err: %w", err)
 	}
 	return out, nil
+}
+
+// userEmbeddingSpec reads the user's saved embedding provider. Empty string
+// means "fall back to worker default" (which then matches the original
+// indexing run).
+func (s *Service) userEmbeddingSpec(ctx context.Context, userID uuid.UUID) string {
+	var spec string
+	err := s.pool.QueryRow(ctx,
+		`SELECT spec FROM provider_settings WHERE user_id = $1 AND kind = 'embedding'`,
+		userID,
+	).Scan(&spec)
+	if err != nil {
+		return ""
+	}
+	return spec
 }
 
 // vectorLiteral matches indexer.vectorLiteral — kept private here to avoid an

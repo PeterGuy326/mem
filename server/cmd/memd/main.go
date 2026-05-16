@@ -20,6 +20,8 @@ import (
 	"github.com/PeterGuy326/mem/server/internal/file"
 	"github.com/PeterGuy326/mem/server/internal/folder"
 	"github.com/PeterGuy326/mem/server/internal/indexer"
+	"github.com/PeterGuy326/mem/server/internal/provider"
+	"github.com/PeterGuy326/mem/server/internal/queue"
 	"github.com/PeterGuy326/mem/server/internal/search"
 	"github.com/PeterGuy326/mem/server/internal/storage"
 	"github.com/PeterGuy326/mem/server/internal/workerclient"
@@ -88,13 +90,46 @@ func run() error {
 	idxSvc := indexer.New(database.Pool, workerCli, logger)
 	searchSvc := search.New(database.Pool, workerCli)
 
+	// Async indexing queue (Asynq + Redis). Falls back to inline goroutine if
+	// MEM_REDIS_URL is unset — dev affordance only; production must set it.
+	queueCli, err := queue.NewClient(cfg.RedisURL, logger)
+	if err != nil {
+		return fmt.Errorf("queue client: %w", err)
+	}
+	defer queueCli.Close()
+	if !queueCli.Enabled() {
+		logger.Warn("queue disabled — MEM_REDIS_URL unset; uploads will use inline goroutine fallback (NOT crash-safe)")
+	} else {
+		logger.Info("queue client ready", "redis", cfg.RedisURL)
+	}
+
+	providerSvc := provider.New(database.Pool, workerCli, queueCli, logger)
+
 	srv := &api.Server{
-		Auth:    authSvc,
-		File:    fileSvc,
-		Folder:  folderSvc,
-		Indexer: idxSvc,
-		Search:  searchSvc,
-		Log:     logger,
+		Auth:     authSvc,
+		File:     fileSvc,
+		Folder:   folderSvc,
+		Indexer:  idxSvc,
+		Queue:    queueCli,
+		Search:   searchSvc,
+		Provider: providerSvc,
+		Log:      logger,
+	}
+
+	// Boot the queue consumer in-process. Promotion to a separate binary is a
+	// one-line refactor (move this block into cmd/memworker).
+	var queueSrv *queue.Server
+	if queueCli.Enabled() {
+		queueSrv, err = queue.NewServer(cfg.RedisURL, 4, idxSvc, logger)
+		if err != nil {
+			return fmt.Errorf("queue server: %w", err)
+		}
+		go func() {
+			if err := queueSrv.Run(ctx); err != nil {
+				logger.Error("queue server stopped", "err", err)
+			}
+		}()
+		logger.Info("queue consumer running", "concurrency", 4)
 	}
 	httpSrv := &http.Server{
 		Addr:              cfg.HTTPAddr,

@@ -31,6 +31,8 @@ import (
 	"github.com/PeterGuy326/mem/server/internal/file"
 	"github.com/PeterGuy326/mem/server/internal/folder"
 	"github.com/PeterGuy326/mem/server/internal/indexer"
+	"github.com/PeterGuy326/mem/server/internal/provider"
+	"github.com/PeterGuy326/mem/server/internal/queue"
 	"github.com/PeterGuy326/mem/server/internal/search"
 )
 
@@ -39,12 +41,14 @@ var Version = "dev"
 
 // Server bundles the dependencies a handler needs.
 type Server struct {
-	Auth    *auth.Service
-	File    *file.Service
-	Folder  *folder.Service
-	Indexer *indexer.Service // optional; nil means uploads stay in 'pending'
-	Search  *search.Service  // optional; nil disables /v1/search
-	Log     *slog.Logger
+	Auth     *auth.Service
+	File     *file.Service
+	Folder   *folder.Service
+	Indexer  *indexer.Service  // legacy inline path (only used if Queue is nil)
+	Queue    *queue.Client     // preferred: async indexing via Asynq
+	Search   *search.Service   // optional; nil disables /v1/search
+	Provider *provider.Service // optional; nil disables /v1/providers
+	Log      *slog.Logger
 }
 
 // Router returns a chi.Router with all v1 routes wired.
@@ -83,6 +87,11 @@ func (s *Server) Router() http.Handler {
 
 		// Search (SPEC §F3)
 		r.With(s.requireScope(auth.ScopeSearch)).Post("/v1/search", s.handleSearch)
+
+		// Providers (SPEC §F8)
+		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/providers", s.handleListProviders)
+		r.With(s.requireScope(auth.ScopeAdmin)).Put("/v1/providers/{kind}", s.handleSetProvider)
+		r.With(s.requireScope(auth.ScopeAdmin)).Post("/v1/providers/{kind}/test", s.handleTestProvider)
 
 		// Folders (SPEC §6.3)
 		r.With(s.requireScope(auth.ScopeWrite)).Post("/v1/folders", s.handleCreateFolder)
@@ -328,11 +337,23 @@ func (s *Server) handlePutFile(w http.ResponseWriter, r *http.Request) {
 	if res.Deduped {
 		status = http.StatusOK
 	}
-	// Fire-and-forget AI indexing. Skip on dedup — that file is already indexed
-	// (or queued) under the original upload.
-	if !res.Deduped && s.Indexer != nil {
-		f := res.File // capture: handler returns, request ctx will be cancelled
-		go s.Indexer.IndexFile(context.Background(), f)
+	// AI indexing. Skip on dedup — that file is already indexed (or queued)
+	// under the original upload.
+	if !res.Deduped {
+		f := res.File
+		switch {
+		case s.Queue != nil && s.Queue.Enabled():
+			// Preferred: durable Redis-backed queue (retry + crash-safe).
+			if err := s.Queue.EnqueueIndexFile(r.Context(), queue.IndexFilePayload{
+				FileID: f.ID, UserID: f.UserID,
+			}); err != nil {
+				s.Log.Error("enqueue.failed", "file_id", f.ID, "err", err)
+			}
+		case s.Indexer != nil:
+			// Fallback: in-process goroutine. Dev-mode only — work lost on
+			// crash. Kept so memd starts even when redis is down.
+			go s.Indexer.IndexFile(context.Background(), f)
+		}
 	}
 	writeJSON(w, status, map[string]any{
 		"file":    res.File,

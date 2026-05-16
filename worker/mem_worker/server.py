@@ -83,6 +83,43 @@ class ProcessorServicer:
             version=__version__,
         )
 
+    # ---- helpers ----
+
+    def _pick_processor(self, mime: str, options: dict):
+        """Resolve a Processor for ``mime``, honoring options provider overrides.
+
+        Override keys (all optional):
+            embedding_provider: "<vendor>:<model>"
+            llm_provider:       "<vendor>:<model>"
+            vlm_provider:       "<vendor>:<model>"
+        Empty / missing keys fall back to the registry's default singleton.
+        """
+        base = self._registry.find(mime)
+        if base is None:
+            return None
+        emb_spec = options.get("embedding_provider") or ""
+        llm_spec = options.get("llm_provider") or ""
+        vlm_spec = options.get("vlm_provider") or ""
+        if not (emb_spec or llm_spec or vlm_spec):
+            return base
+        # Lazy import to avoid cycle when default_registry() pulls in this file.
+        from .providers import get_embedding_provider, get_llm_provider, get_vlm_provider
+        from .processors.image import ImageProcessor
+        from .processors.text import TextProcessor
+
+        emb = get_embedding_provider(emb_spec) if emb_spec else None
+        llm = get_llm_provider(llm_spec) if llm_spec else None
+        vlm = get_vlm_provider(vlm_spec) if vlm_spec else None
+
+        if isinstance(base, TextProcessor):
+            return TextProcessor(embedder=emb, llm=llm)
+        if isinstance(base, ImageProcessor):
+            # Image processors accept caption/visual providers; pass through
+            # what makes sense.
+            return ImageProcessor(embedder=emb, vlm=vlm)
+        # PDF / Audio stubs etc. — fall back to base.
+        return base
+
     # ---- Process ----
 
     def Process(self, request, context):
@@ -101,8 +138,10 @@ class ProcessorServicer:
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                 log.warning("process.bad_options_json", error=str(exc))
 
-        # 1. Pick processor
-        proc = self._registry.find(request.mime)
+        # 1. Pick processor. If the caller supplied provider overrides via
+        # options_json, build a per-request processor instance so we don't
+        # mutate the singleton in the registry (concurrency-safe).
+        proc = self._pick_processor(request.mime, options)
         if proc is None:
             log.info("process.skipped", file_id=request.file_id, mime=request.mime)
             return pb.ProcessResponse(

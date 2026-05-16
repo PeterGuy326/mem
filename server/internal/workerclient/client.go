@@ -16,6 +16,7 @@ package workerclient
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -108,6 +109,10 @@ type FileMeta struct {
 	MIME       string
 	SHA256     string
 	StorageKey string // bucket-relative S3 key
+	// Provider overrides (optional). Empty values fall back to worker defaults.
+	EmbeddingProvider string
+	LLMProvider       string
+	VLMProvider       string
 }
 
 // Index runs Process synchronously and returns the response. Callers wanting
@@ -124,15 +129,43 @@ func (c *Client) Index(ctx context.Context, m FileMeta) (*workerpb.ProcessRespon
 	}
 	uri := fmt.Sprintf("s3://%s/%s", c.bucket, m.StorageKey)
 	req := &workerpb.ProcessRequest{
-		FileId:      m.FileID,
-		StorageUri:  uri,
-		Mime:        m.MIME,
-		Sha256:      m.SHA256,
-		UserId:      m.UserID,
-		Name:        m.Name,
-		OptionsJson: nil,
+		FileId:     m.FileID,
+		StorageUri: uri,
+		Mime:       m.MIME,
+		Sha256:     m.SHA256,
+		UserId:     m.UserID,
+		Name:       m.Name,
+	}
+	if opts := buildOptionsJSON(m); opts != nil {
+		req.OptionsJson = opts
 	}
 	return c.stub.Process(ctx, req)
+}
+
+// buildOptionsJSON encodes per-request provider overrides into a JSON blob
+// the worker understands. Returns nil when no overrides are set.
+func buildOptionsJSON(m FileMeta) []byte {
+	if m.EmbeddingProvider == "" && m.LLMProvider == "" && m.VLMProvider == "" {
+		return nil
+	}
+	out := map[string]string{}
+	if m.EmbeddingProvider != "" {
+		out["embedding_provider"] = m.EmbeddingProvider
+	}
+	if m.LLMProvider != "" {
+		out["llm_provider"] = m.LLMProvider
+	}
+	if m.VLMProvider != "" {
+		out["vlm_provider"] = m.VLMProvider
+	}
+	b, _ := json.Marshal(out)
+	return b
+}
+
+// EmbedTextWith embeds q using a specific provider spec override (e.g.
+// "openai:text-embedding-3-small"). Empty spec means worker default.
+func (c *Client) EmbedTextWith(ctx context.Context, q, providerSpec string) ([]float32, error) {
+	return c.embedText(ctx, q, providerSpec)
 }
 
 // EmbedText returns an embedding vector for ``q`` by reusing the Process
@@ -142,6 +175,10 @@ func (c *Client) Index(ctx context.Context, m FileMeta) (*workerpb.ProcessRespon
 // is one extra HTTP roundtrip (worker→Ollama) which is the dominant latency
 // anyway.
 func (c *Client) EmbedText(ctx context.Context, q string) ([]float32, error) {
+	return c.embedText(ctx, q, "")
+}
+
+func (c *Client) embedText(ctx context.Context, q, providerSpec string) ([]float32, error) {
 	if !c.Enabled() {
 		return nil, errors.New("workerclient: disabled")
 	}
@@ -161,6 +198,9 @@ func (c *Client) EmbedText(ctx context.Context, q string) ([]float32, error) {
 		Mime:       "text/plain",
 		UserId:     "",
 		Name:       "query.txt",
+	}
+	if providerSpec != "" {
+		req.OptionsJson = []byte(fmt.Sprintf(`{"embedding_provider":%q}`, providerSpec))
 	}
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
