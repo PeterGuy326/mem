@@ -18,6 +18,7 @@ import (
 	"github.com/PeterGuy326/mem/server/internal/auth"
 	"github.com/PeterGuy326/mem/server/internal/config"
 	"github.com/PeterGuy326/mem/server/internal/db"
+	"github.com/PeterGuy326/mem/server/internal/face"
 	"github.com/PeterGuy326/mem/server/internal/file"
 	"github.com/PeterGuy326/mem/server/internal/folder"
 	"github.com/PeterGuy326/mem/server/internal/indexer"
@@ -90,7 +91,8 @@ func run() error {
 		logger.Info("worker client ready", "addr", cfg.WorkerGRPC)
 	}
 	relatorSvc := relator.New(database.Pool, logger)
-	idxSvc := indexer.New(database.Pool, workerCli, relatorSvc, logger)
+	faceSvc := face.New(database.Pool, logger)
+	idxSvc := indexer.New(database.Pool, workerCli, relatorSvc, faceSvc, logger)
 	searchSvc := search.New(database.Pool, workerCli)
 
 	// Async indexing queue (Asynq + Redis). Falls back to inline goroutine if
@@ -119,6 +121,7 @@ func run() error {
 		Ask:      askSvc,
 		Provider: providerSvc,
 		Relator:  relatorSvc,
+		Face:     faceSvc,
 		Log:      logger,
 	}
 

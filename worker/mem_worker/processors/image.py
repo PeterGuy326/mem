@@ -132,10 +132,17 @@ class ImageProcessor:
             src = "image"
             embed_image = getattr(embedder, "embed_image", None)
             if callable(embed_image):
-                rows = embed_image([file.data])
-                if rows:
-                    vec = rows[0]
-            elif caption:
+                # The method may exist on the interface but raise
+                # NotImplementedError if the concrete provider only handles text
+                # (e.g. ollama/openai/anthropic text-embedding models). In that
+                # case we fall back to embedding the VLM caption.
+                try:
+                    rows = embed_image([file.data])
+                    if rows:
+                        vec = rows[0]
+                except NotImplementedError:
+                    embed_image = None
+            if vec is None and caption:
                 # Fallback: caption-text-embed (degraded "visual" search).
                 rows = embedder.embed_text([caption])
                 if rows:
@@ -158,6 +165,46 @@ class ImageProcessor:
         except (ProviderError, NotImplementedError) as exc:
             log.warning("image.embed_failed", file_id=file.file_id, error=str(exc))
             result.metadata["embed_error"] = str(exc)
+
+        # 4. Face detection (opt-in via `face` extra). Each detected face
+        # becomes one row in result.embeddings["face"], with bbox in the row
+        # metadata; the indexer turns those into entities + embeddings_face.
+        try:
+            from ..providers.face import default_analyzer
+
+            detections = default_analyzer().detect(file.data)
+            if detections:
+                result.embeddings["face"] = EmbeddingSet(
+                    provider="insightface:buffalo_l",
+                    dim=len(detections[0].embedding),
+                    rows=[
+                        EmbeddingRow(
+                            values=d.embedding,
+                            index=i,
+                            chunk_text="",
+                            metadata={
+                                "bbox": d.bbox,
+                                "confidence": d.confidence,
+                            },
+                        )
+                        for i, d in enumerate(detections)
+                    ],
+                )
+                # Add one person entity per face — the indexer-side clusterer
+                # will reduce these to canonical clusters.
+                for d in detections:
+                    result.entities.append(Entity(
+                        type="person",
+                        name="",
+                        metadata={"bbox": d.bbox, "source": "insightface"},
+                        confidence=d.confidence,
+                    ))
+        except RuntimeError as exc:
+            # insightface missing or model load failed — log and continue.
+            log.warning("image.face_skipped", file_id=file.file_id, error=str(exc))
+        except Exception as exc:  # noqa: BLE001 — last-line defense
+            log.exception("image.face_unexpected", file_id=file.file_id)
+            result.metadata["face_error"] = str(exc)
 
         return result
 

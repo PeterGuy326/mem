@@ -24,6 +24,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/PeterGuy326/mem/server/internal/face"
 	"github.com/PeterGuy326/mem/server/internal/file"
 	"github.com/PeterGuy326/mem/server/internal/workerclient"
 	"github.com/PeterGuy326/mem/server/internal/workerpb"
@@ -40,17 +41,18 @@ type Service struct {
 	pool    *pgxpool.Pool
 	client  *workerclient.Client
 	relator RelatorIface
+	face    *face.Service
 	log     *slog.Logger
 }
 
 // New constructs an indexer Service. If client is nil or disabled, IndexFile
-// becomes a no-op that just leaves index_status='pending'. The relator is
-// optional — leave nil to skip relation computation.
-func New(pool *pgxpool.Pool, client *workerclient.Client, relator RelatorIface, log *slog.Logger) *Service {
+// becomes a no-op that just leaves index_status='pending'. The relator and
+// face services are optional — leave nil to skip those steps.
+func New(pool *pgxpool.Pool, client *workerclient.Client, relator RelatorIface, faceSvc *face.Service, log *slog.Logger) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Service{pool: pool, client: client, relator: relator, log: log}
+	return &Service{pool: pool, client: client, relator: relator, face: faceSvc, log: log}
 }
 
 // IndexFileByID resolves the file row by id and dispatches to IndexFile.
@@ -242,7 +244,36 @@ func (s *Service) persist(ctx context.Context, fileID uuid.UUID, resp *workerpb.
 		}
 	}
 
+	// Face embeddings (SPEC §F6.1).
+	if faces := resp.Embeddings["face"]; faces != nil && len(faces.Rows) > 0 && s.face != nil {
+		userID, err := s.fileUserID(ctx, tx, fileID)
+		if err != nil {
+			return fmt.Errorf("file owner for faces: %w", err)
+		}
+		rows := make([]face.FaceRow, 0, len(faces.Rows))
+		for _, r := range faces.Rows {
+			fr := face.FaceRow{Embedding: r.Values}
+			if len(r.MetadataJson) > 0 {
+				var meta struct {
+					BBox []float64 `json:"bbox"`
+				}
+				_ = json.Unmarshal(r.MetadataJson, &meta)
+				fr.BBox = meta.BBox
+			}
+			rows = append(rows, fr)
+		}
+		if err := s.face.Persist(ctx, tx, fileID, userID, rows); err != nil {
+			return fmt.Errorf("persist faces: %w", err)
+		}
+	}
+
 	return tx.Commit(ctx)
+}
+
+func (s *Service) fileUserID(ctx context.Context, tx pgx.Tx, fileID uuid.UUID) (uuid.UUID, error) {
+	var uid uuid.UUID
+	err := tx.QueryRow(ctx, `SELECT user_id FROM files WHERE id = $1`, fileID).Scan(&uid)
+	return uid, err
 }
 
 // providerOverrides reads the user's saved provider_settings rows so the

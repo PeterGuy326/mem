@@ -29,6 +29,7 @@ import (
 
 	"github.com/PeterGuy326/mem/server/internal/ask"
 	"github.com/PeterGuy326/mem/server/internal/auth"
+	"github.com/PeterGuy326/mem/server/internal/face"
 	"github.com/PeterGuy326/mem/server/internal/file"
 	"github.com/PeterGuy326/mem/server/internal/folder"
 	"github.com/PeterGuy326/mem/server/internal/indexer"
@@ -52,6 +53,7 @@ type Server struct {
 	Ask      *ask.Service      // optional; nil disables /v1/ask
 	Provider *provider.Service // optional; nil disables /v1/providers
 	Relator  *relator.Service  // optional; nil falls back to stub response
+	Face     *face.Service     // optional; nil disables /v1/faces
 	Log      *slog.Logger
 }
 
@@ -102,6 +104,11 @@ func (s *Server) Router() http.Handler {
 
 		// Timeline (SPEC §F6.3)
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/timeline", s.handleTimeline)
+
+		// Faces (SPEC §F6.1, F6.2)
+		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/faces", s.handleFaceList)
+		r.With(s.requireScope(auth.ScopeWrite)).Post("/v1/faces/{id}/name", s.handleFaceName)
+		r.With(s.requireScope(auth.ScopeWrite)).Post("/v1/faces/{id}/merge", s.handleFaceMerge)
 
 		// Folders (SPEC §6.3)
 		r.With(s.requireScope(auth.ScopeWrite)).Post("/v1/folders", s.handleCreateFolder)

@@ -1,21 +1,49 @@
 /**
- * Placeholder kept around. Search input + settings link removed per product
- * direction (we only ship the file-explorer for now). The Explorer page
- * inlines its own top bar with Logo + breadcrumb + Avatar.
+ * Top nav: drive / ask / faces / providers links + account menu.
  */
-import { useNavigate } from 'react-router-dom';
-import { LogOut } from 'lucide-react';
+import { useNavigate, Link, useLocation } from 'react-router-dom';
+import { LogOut, FolderOpen, Sparkles, Users, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { useAuth } from '@/hooks/useAuth';
+import { cn } from '@/lib/cn';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 
 export function TopBar() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user, logout } = useAuth();
+
+  const isActive = (prefix: string) => location.pathname.startsWith(prefix);
+  const navItems = [
+    { to: '/drive', label: 'Drive', icon: FolderOpen, match: '/drive' },
+    { to: '/ask', label: 'Ask', icon: Sparkles, match: '/ask' },
+    { to: '/faces', label: 'Faces', icon: Users, match: '/faces' },
+    { to: '/providers', label: 'Providers', icon: Settings, match: '/providers' },
+  ];
 
   return (
     <header className="sticky top-0 z-30 h-12 border-b border-border bg-bg/85 backdrop-blur-md">
       <div className="h-full px-4 flex items-center gap-3">
+        <nav className="flex items-center gap-1">
+          {navItems.map((it) => {
+            const Icon = it.icon;
+            return (
+              <Link
+                key={it.to}
+                to={it.to}
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-md px-2.5 h-8 text-sm transition-colors',
+                  isActive(it.match)
+                    ? 'bg-bg-inset text-fg'
+                    : 'text-fg-muted hover:text-fg hover:bg-bg-inset/60',
+                )}
+              >
+                <Icon className="h-3.5 w-3.5" />
+                {it.label}
+              </Link>
+            );
+          })}
+        </nav>
         <div className="ml-auto flex items-center gap-2">
           <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild>

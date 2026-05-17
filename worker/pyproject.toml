@@ -61,6 +61,10 @@ dev = [
     "mypy>=1.9",
     "types-requests",
 ]
+face = [
+    "insightface>=0.7.3",
+    "onnxruntime>=1.26.0",
+]
 
 [project.scripts]
 mem-worker = "mem_worker.server:main"

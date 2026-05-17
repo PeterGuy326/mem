@@ -57,6 +57,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newSearchCmd())
 	root.AddCommand(newAskCmd())
 	root.AddCommand(newRelatedCmd())
+	root.AddCommand(newFaceCmd())
 	root.AddCommand(newProviderCmd())
 	root.AddCommand(newTimelineCmd())
 	root.AddCommand(newVersionCmd())

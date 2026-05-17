@@ -4,17 +4,15 @@ import { LoginPage } from '@/pages/LoginPage';
 import { ExplorerPage } from '@/pages/ExplorerPage';
 import { FileDetailPage } from '@/pages/FileDetailPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
-
-// Phase 2 — kept around but not routed.
-// import { SearchPage } from '@/pages/SearchPage';
-// import { SettingsPage } from '@/pages/SettingsPage';
+import { AskPage } from '@/pages/AskPage';
+import { FacesPage } from '@/pages/FacesPage';
+import { ProvidersPage } from '@/pages/ProvidersPage';
 
 export const router = createBrowserRouter([
   { path: '/login', element: <LoginPage /> },
-  // Index → /drive
   { path: '/', element: <Navigate to="/drive" replace /> },
 
-  // Explorer: catch-all under /drive so /drive/Photos/2012 etc all hit the same page.
+  // Explorer: catch-all under /drive.
   {
     path: '/drive/*',
     element: (
@@ -24,15 +22,10 @@ export const router = createBrowserRouter([
     ),
   },
 
-  // File detail — kept minimal.
-  {
-    path: '/files/:id',
-    element: (
-      <LoginGate>
-        <FileDetailPage />
-      </LoginGate>
-    ),
-  },
+  { path: '/files/:id', element: (<LoginGate><FileDetailPage /></LoginGate>) },
+  { path: '/ask', element: (<LoginGate><AskPage /></LoginGate>) },
+  { path: '/faces', element: (<LoginGate><FacesPage /></LoginGate>) },
+  { path: '/providers', element: (<LoginGate><ProvidersPage /></LoginGate>) },
 
   { path: '*', element: <NotFoundPage /> },
 ]);
