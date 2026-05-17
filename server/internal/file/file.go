@@ -81,6 +81,11 @@ func New(pool *pgxpool.Pool, store *storage.Store, folders *folder.Service) *Ser
 	return &Service{pool: pool, store: store, folders: folders}
 }
 
+// Pool exposes the underlying connection pool for sibling packages that need
+// to run their own queries against the files table (timeline, related, …).
+// Kept narrow to one accessor so callers don't grow ad-hoc dependencies.
+func (s *Service) Pool() *pgxpool.Pool { return s.pool }
+
 // ErrNotFound is returned when a file id is unknown to the user.
 var ErrNotFound = errors.New("file not found")
 

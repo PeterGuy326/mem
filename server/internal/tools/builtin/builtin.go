@@ -36,6 +36,7 @@ func RegisterAll(reg *tools.Registry, client *apiclient.Client) error {
 		registerMv,
 		registerFolderTree,
 		registerSearch,
+		registerAsk,
 	} {
 		if err := fn(reg, client); err != nil {
 			return err
@@ -356,6 +357,45 @@ func registerSearch(reg *tools.Registry, c *apiclient.Client) error {
 			}
 			var out map[string]any
 			if err := c.DoJSON(ctx, http.MethodPost, "/v1/search", body, &out); err != nil {
+				return nil, err
+			}
+			return out, nil
+		},
+	})
+}
+
+// --- ask tool ---
+
+func registerAsk(reg *tools.Registry, c *apiclient.Client) error {
+	return reg.Register(tools.Tool{
+		Name: "mem_ask",
+		Description: "Cross-file question answering: retrieve the top relevant snippets " +
+			"from the user's drive then synthesize an answer with citations. " +
+			"Returns {answer, sources[]}. Prefer this over mem_search+mem_get when " +
+			"the user wants a synthesized answer, not raw files. SPEC §8.1.",
+		InputSchema: tools.Schema{
+			Type:     "object",
+			Required: []string{"question"},
+			Properties: map[string]tools.Property{
+				"question": {Type: "string", Description: "Natural-language question, e.g. \"what's in my rental contract?\""},
+				"scope":    {Type: "string", Description: "Path prefix filter (e.g. /Photos) — not yet implemented server-side"},
+				"top_k":    {Type: "integer", Description: "Number of context snippets (default 5, max 20)", Default: 5},
+			},
+		},
+		Run: func(ctx context.Context, args map[string]any) (any, error) {
+			q, _ := args["question"].(string)
+			if q == "" {
+				return nil, fmt.Errorf("mem_ask: question is required")
+			}
+			body := map[string]any{"question": q}
+			if v, _ := args["scope"].(string); v != "" {
+				body["scope"] = v
+			}
+			if v := args["top_k"]; v != nil {
+				body["top_k"] = v
+			}
+			var out map[string]any
+			if err := c.DoJSON(ctx, http.MethodPost, "/v1/ask", body, &out); err != nil {
 				return nil, err
 			}
 			return out, nil

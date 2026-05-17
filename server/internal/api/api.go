@@ -27,12 +27,14 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
+	"github.com/PeterGuy326/mem/server/internal/ask"
 	"github.com/PeterGuy326/mem/server/internal/auth"
 	"github.com/PeterGuy326/mem/server/internal/file"
 	"github.com/PeterGuy326/mem/server/internal/folder"
 	"github.com/PeterGuy326/mem/server/internal/indexer"
 	"github.com/PeterGuy326/mem/server/internal/provider"
 	"github.com/PeterGuy326/mem/server/internal/queue"
+	"github.com/PeterGuy326/mem/server/internal/relator"
 	"github.com/PeterGuy326/mem/server/internal/search"
 )
 
@@ -47,7 +49,9 @@ type Server struct {
 	Indexer  *indexer.Service  // legacy inline path (only used if Queue is nil)
 	Queue    *queue.Client     // preferred: async indexing via Asynq
 	Search   *search.Service   // optional; nil disables /v1/search
+	Ask      *ask.Service      // optional; nil disables /v1/ask
 	Provider *provider.Service // optional; nil disables /v1/providers
+	Relator  *relator.Service  // optional; nil falls back to stub response
 	Log      *slog.Logger
 }
 
@@ -88,10 +92,16 @@ func (s *Server) Router() http.Handler {
 		// Search (SPEC §F3)
 		r.With(s.requireScope(auth.ScopeSearch)).Post("/v1/search", s.handleSearch)
 
+		// Ask — RAG cross-file QA (SPEC §F5)
+		r.With(s.requireScope(auth.ScopeSearch)).Post("/v1/ask", s.handleAsk)
+
 		// Providers (SPEC §F8)
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/providers", s.handleListProviders)
 		r.With(s.requireScope(auth.ScopeAdmin)).Put("/v1/providers/{kind}", s.handleSetProvider)
 		r.With(s.requireScope(auth.ScopeAdmin)).Post("/v1/providers/{kind}/test", s.handleTestProvider)
+
+		// Timeline (SPEC §F6.3)
+		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/timeline", s.handleTimeline)
 
 		// Folders (SPEC §6.3)
 		r.With(s.requireScope(auth.ScopeWrite)).Post("/v1/folders", s.handleCreateFolder)
@@ -562,8 +572,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleFileRelated is a W3 stub — returns an empty array so the API surface
-// is stable for the CLI / Web client to start integrating against.
+// handleFileRelated → GET /v1/files/{id}/related?type=<t>&limit=N
+// Returns the top-K related files by embedding similarity.
 func (s *Server) handleFileRelated(w http.ResponseWriter, r *http.Request) {
 	u := r.Context().Value(ctxUser).(*auth.User)
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -581,10 +591,30 @@ func (s *Server) handleFileRelated(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
+	if s.Relator == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"file_id": id, "related": []any{}, "note": "relator not configured",
+		})
+		return
+	}
+	typ := r.URL.Query().Get("type")
+	limit := 10
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	hits, err := s.Relator.Get(r.Context(), u.ID, id, typ, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	if hits == nil {
+		hits = []relator.Hit{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"file_id": id,
-		"related": []any{},
-		"note":    "W3 stub — real relation engine arrives with the file_relations table populated",
+		"related": hits,
 	})
 }
 

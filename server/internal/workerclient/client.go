@@ -162,6 +162,43 @@ func buildOptionsJSON(m FileMeta) []byte {
 	return b
 }
 
+// ChatMessage is one role+content pair (mirrors workerpb.ChatMessage).
+type ChatMessage struct {
+	Role    string
+	Content string
+}
+
+// Chat forwards messages to the worker's LLM. providerSpec is optional —
+// empty means "use the user's configured llm provider on the worker side".
+// Returns the assistant reply.
+func (c *Client) Chat(ctx context.Context, userID string, msgs []ChatMessage, providerSpec string) (string, error) {
+	if !c.Enabled() {
+		return "", errors.New("workerclient: disabled")
+	}
+	if err := c.ensureDialed(); err != nil {
+		return "", err
+	}
+	pbMsgs := make([]*workerpb.ChatMessage, 0, len(msgs))
+	for _, m := range msgs {
+		pbMsgs = append(pbMsgs, &workerpb.ChatMessage{Role: m.Role, Content: m.Content})
+	}
+	req := &workerpb.ChatRequest{
+		UserId:      userID,
+		Messages:    pbMsgs,
+		LlmProvider: providerSpec,
+	}
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	resp, err := c.stub.Chat(cctx, req)
+	if err != nil {
+		return "", fmt.Errorf("worker chat: %w", err)
+	}
+	if resp.Status == workerpb.ProcessStatus_STATUS_FAILED {
+		return "", fmt.Errorf("worker chat failed: %s", resp.Error)
+	}
+	return resp.Content, nil
+}
+
 // EmbedTextWith embeds q using a specific provider spec override (e.g.
 // "openai:text-embedding-3-small"). Empty spec means worker default.
 func (c *Client) EmbedTextWith(ctx context.Context, q, providerSpec string) ([]float32, error) {

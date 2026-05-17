@@ -14,6 +14,7 @@ package indexer
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -28,20 +29,28 @@ import (
 	"github.com/PeterGuy326/mem/server/internal/workerpb"
 )
 
+// RelatorIface is what the indexer needs from the relator package. Kept as
+// an interface to break a potential import cycle.
+type RelatorIface interface {
+	ComputeForFile(ctx context.Context, fileID uuid.UUID) error
+}
+
 // Service is the indexer. Construct with New. Safe for concurrent use.
 type Service struct {
-	pool   *pgxpool.Pool
-	client *workerclient.Client
-	log    *slog.Logger
+	pool    *pgxpool.Pool
+	client  *workerclient.Client
+	relator RelatorIface
+	log     *slog.Logger
 }
 
 // New constructs an indexer Service. If client is nil or disabled, IndexFile
-// becomes a no-op that just leaves index_status='pending'.
-func New(pool *pgxpool.Pool, client *workerclient.Client, log *slog.Logger) *Service {
+// becomes a no-op that just leaves index_status='pending'. The relator is
+// optional — leave nil to skip relation computation.
+func New(pool *pgxpool.Pool, client *workerclient.Client, relator RelatorIface, log *slog.Logger) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Service{pool: pool, client: client, log: log}
+	return &Service{pool: pool, client: client, relator: relator, log: log}
 }
 
 // IndexFileByID resolves the file row by id and dispatches to IndexFile.
@@ -151,6 +160,14 @@ func (s *Service) IndexFile(ctx context.Context, f *file.File) {
 		"embeddings", embeddingKinds(resp),
 		"tags", len(resp.Tags),
 	)
+
+	// Compute relations after embeddings are committed. Failures here are
+	// soft — file_relations is a derived index that can be rebuilt later.
+	if s.relator != nil {
+		if err := s.relator.ComputeForFile(ctx, f.ID); err != nil {
+			s.log.Warn("indexer.relate_failed", "file_id", f.ID, "err", err)
+		}
+	}
 }
 
 // persist writes the worker output into PG in one transaction.
@@ -167,16 +184,20 @@ func (s *Service) persist(ctx context.Context, fileID uuid.UUID, resp *workerpb.
 	if tags == nil {
 		tags = []string{}
 	}
+	// timeline_at is opportunistically pulled from worker metadata_json
+	// (EXIF DateTimeOriginal for images, file mtime hint for others).
+	timeline := extractTimeline(resp.MetadataJson)
 
 	_, err = tx.Exec(ctx,
 		`UPDATE files
 		   SET summary = $1,
 		       caption = $2,
 		       tags = (CASE WHEN cardinality($3::text[]) = 0 THEN tags ELSE $3 END),
+		       timeline_at = COALESCE($4::timestamptz, timeline_at),
 		       index_status = 'done',
 		       updated_at = now()
-		 WHERE id = $4`,
-		summary, caption, tags, fileID,
+		 WHERE id = $5`,
+		summary, caption, tags, timeline, fileID,
 	)
 	if err != nil {
 		return fmt.Errorf("update files: %w", err)
@@ -289,6 +310,42 @@ func nullable(s string) any {
 		return nil
 	}
 	return s
+}
+
+// extractTimeline pulls a content-derived timestamp out of the processor's
+// metadata blob. Returns nil if absent or unparseable — caller treats nil as
+// "leave files.timeline_at unchanged".
+//
+// Supported keys (first match wins):
+//   - timeline_at: ISO 8601 string (preferred — produced by ImageProcessor EXIF)
+//   - taken_at:    legacy alias
+func extractTimeline(metaJSON []byte) any {
+	if len(metaJSON) == 0 {
+		return nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(metaJSON, &m); err != nil {
+		return nil
+	}
+	for _, k := range []string{"timeline_at", "taken_at"} {
+		if v, ok := m[k]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				if t, err := time.Parse(time.RFC3339, s); err == nil {
+					return t
+				}
+				// Image EXIF emits naive datetime (no zone) — accept that too.
+				for _, layout := range []string{
+					"2006-01-02T15:04:05",
+					"2006-01-02 15:04:05",
+				} {
+					if t, err := time.Parse(layout, s); err == nil {
+						return t.UTC()
+					}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func embeddingKinds(r *workerpb.ProcessResponse) []string {

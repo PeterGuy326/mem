@@ -74,6 +74,56 @@ class ProcessorServicer:
             processors=[p.name for p in self._registry.all()],
         )
 
+    # ---- Chat ----
+
+    def Chat(self, request, context):
+        """RAG bridge: forward messages to the configured LLM provider."""
+        pb = self._pb
+        log.info("chat.start",
+                 user_id=request.user_id,
+                 messages=len(request.messages),
+                 provider=request.llm_provider or "(default)")
+
+        # Resolve provider spec: explicit override → settings default.
+        spec = (request.llm_provider or "").strip()
+        if not spec:
+            spec = get_settings().default_llm
+
+        from .providers import Message, get_llm_provider, ProviderError
+
+        try:
+            llm = get_llm_provider(spec)
+        except ProviderError as exc:
+            return pb.ChatResponse(
+                error=f"resolve provider: {exc}",
+                status=pb.STATUS_FAILED,
+            )
+
+        msgs = [Message(role=m.role, content=m.content) for m in request.messages]
+        try:
+            content = llm.complete(msgs)
+        except (ProviderError, NotImplementedError) as exc:
+            log.error("chat.failed", error=str(exc))
+            return pb.ChatResponse(
+                provider=spec,
+                error=str(exc),
+                status=pb.STATUS_FAILED,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.exception("chat.unexpected")
+            return pb.ChatResponse(
+                provider=spec,
+                error=f"unexpected: {exc}",
+                status=pb.STATUS_FAILED,
+            )
+
+        log.info("chat.ok", provider=spec, reply_chars=len(content))
+        return pb.ChatResponse(
+            content=content or "",
+            provider=spec,
+            status=pb.STATUS_OK,
+        )
+
     # ---- HealthCheck ----
 
     def HealthCheck(self, request, context):

@@ -52,6 +52,7 @@ func TestRegisterAll_RegistersExpectedToolNames(t *testing.T) {
 		t.Fatalf("RegisterAll: %v", err)
 	}
 	want := []string{
+		"mem_ask",
 		"mem_folder_tree", "mem_get", "mem_info",
 		"mem_list", "mem_ls", "mem_mkdir", "mem_mv", "mem_put",
 		"mem_search",

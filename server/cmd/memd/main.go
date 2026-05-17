@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/PeterGuy326/mem/server/internal/api"
+	"github.com/PeterGuy326/mem/server/internal/ask"
 	"github.com/PeterGuy326/mem/server/internal/auth"
 	"github.com/PeterGuy326/mem/server/internal/config"
 	"github.com/PeterGuy326/mem/server/internal/db"
@@ -21,6 +22,7 @@ import (
 	"github.com/PeterGuy326/mem/server/internal/folder"
 	"github.com/PeterGuy326/mem/server/internal/indexer"
 	"github.com/PeterGuy326/mem/server/internal/provider"
+	"github.com/PeterGuy326/mem/server/internal/relator"
 	"github.com/PeterGuy326/mem/server/internal/queue"
 	"github.com/PeterGuy326/mem/server/internal/search"
 	"github.com/PeterGuy326/mem/server/internal/storage"
@@ -87,7 +89,8 @@ func run() error {
 	} else {
 		logger.Info("worker client ready", "addr", cfg.WorkerGRPC)
 	}
-	idxSvc := indexer.New(database.Pool, workerCli, logger)
+	relatorSvc := relator.New(database.Pool, logger)
+	idxSvc := indexer.New(database.Pool, workerCli, relatorSvc, logger)
 	searchSvc := search.New(database.Pool, workerCli)
 
 	// Async indexing queue (Asynq + Redis). Falls back to inline goroutine if
@@ -104,6 +107,7 @@ func run() error {
 	}
 
 	providerSvc := provider.New(database.Pool, workerCli, queueCli, logger)
+	askSvc := ask.New(database.Pool, searchSvc, workerCli, logger)
 
 	srv := &api.Server{
 		Auth:     authSvc,
@@ -112,7 +116,9 @@ func run() error {
 		Indexer:  idxSvc,
 		Queue:    queueCli,
 		Search:   searchSvc,
+		Ask:      askSvc,
 		Provider: providerSvc,
+		Relator:  relatorSvc,
 		Log:      logger,
 	}
 

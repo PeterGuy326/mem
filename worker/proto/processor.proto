@@ -24,6 +24,10 @@ service ProcessorService {
   //   4. Return a ProcessResponse with everything needed to persist
   rpc Process(ProcessRequest) returns (ProcessResponse) {}
 
+  // Chat is an LLM-completion bridge used by the server's RAG `Ask` flow.
+  // The worker forwards messages to the user's configured LLMProvider.
+  rpc Chat(ChatRequest) returns (ChatResponse) {}
+
   // Liveness / readiness probe. Always cheap. Does NOT require external
   // services (Ollama, S3) to be reachable.
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse) {}
@@ -120,6 +124,33 @@ message EmbeddingRow {
   string chunk_text = 3;
   // Free-form per-row metadata (e.g. face bbox). JSON.
   bytes metadata_json = 4;
+}
+
+// ============================================================================
+// Chat (RAG support)
+// ============================================================================
+
+message ChatRequest {
+  // Owning user — used for per-user provider lookup.
+  string user_id = 1;
+  // Ordered messages, OpenAI-style. First is typically "system", last "user".
+  repeated ChatMessage messages = 2;
+  // Optional provider override "<vendor>:<model>". Empty = user's configured llm spec.
+  string llm_provider = 3;
+  // Free-form options (max_tokens, temperature, …). JSON.
+  bytes options_json = 4;
+}
+
+message ChatMessage {
+  string role = 1;     // "system" | "user" | "assistant"
+  string content = 2;
+}
+
+message ChatResponse {
+  string content = 1;       // assistant reply
+  string provider = 2;      // which provider actually answered
+  string error = 3;         // non-empty when status != STATUS_OK
+  ProcessStatus status = 4; // reuse pipeline status enum
 }
 
 // ============================================================================
