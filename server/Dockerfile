@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.6
 
 # === build stage ===
-FROM golang:1.22-alpine AS build
+FROM golang:1.25-alpine AS build
 WORKDIR /src
 RUN apk add --no-cache git
 COPY go.mod go.sum ./

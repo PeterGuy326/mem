@@ -121,6 +121,12 @@ func (s *Service) CreateToken(ctx context.Context, userID uuid.UUID, name string
 			return "", nil, fmt.Errorf("invalid scope: %q", sc)
 		}
 	}
+	// `paths` column is text[] NOT NULL DEFAULT '{}'. pgx encodes a Go nil
+	// slice as SQL NULL — which violates the NOT NULL constraint. Normalize
+	// to an empty slice so the SQL value is '{}' instead of NULL.
+	if paths == nil {
+		paths = []string{}
+	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", nil, fmt.Errorf("rand: %w", err)

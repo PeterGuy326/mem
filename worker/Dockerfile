@@ -29,12 +29,16 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 WORKDIR /app
 
 # Copy lockfile-relevant inputs first for better layer caching.
-COPY pyproject.toml ./
+# README.md is referenced by pyproject.toml's project.readme field — must
+# be present at install time even though it's only metadata.
+COPY pyproject.toml README.md ./
 # Optional: uv.lock would go here once we generate one.
 
 # Resolve + install into a project-local venv at /app/.venv.
+# Runtime image does NOT need the [test] extra (and pyproject.toml has no
+# [test] group — uv would reject the flag).
 RUN uv venv /app/.venv \
- && uv pip install --python /app/.venv/bin/python -e . --extra test
+ && uv pip install --python /app/.venv/bin/python -e .
 
 # Now copy the actual source + proto.
 COPY proto/ ./proto/

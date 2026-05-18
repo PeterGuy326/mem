@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	stdmime "mime"
 	gopath "path"
 	"strings"
 	"time"
@@ -158,7 +159,14 @@ func (s *Service) Put(ctx context.Context, userID uuid.UUID, name, declaredMIME,
 	}
 	mime := declaredMIME
 	if mime == "" {
-		mime = "application/octet-stream"
+		// Try filename extension first (covers .md/.txt/.json/.pdf/...).
+		// stdlib mime.TypeByExtension doesn't ship a .md mapping by default
+		// — without this, markdown files arrive as application/octet-stream
+		// and the worker's TextProcessor skips them entirely.
+		mime = inferMIMEByExtension(name)
+		if mime == "" {
+			mime = "application/octet-stream"
+		}
 	}
 	if err := s.store.Put(ctx, key, tmp, written, mime); err != nil {
 		return nil, fmt.Errorf("s3 put: %w", err)
@@ -405,4 +413,32 @@ func storageKey(userID, fileID uuid.UUID, name string) string {
 		clean = fileID.String()
 	}
 	return fmt.Sprintf("users/%s/%s/%s", userID.String(), fileID.String(), clean)
+}
+
+// inferMIMEByExtension picks a content-type from a filename. Tries the
+// stdlib registry first (covers .json/.html/.png/...), then a small table
+// for ones Go doesn't ship a mapping for. .md is the canonical gotcha —
+// without this, markdown uploads default to application/octet-stream and
+// the worker's TextProcessor skips them entirely.
+func inferMIMEByExtension(name string) string {
+	ext := strings.ToLower(gopath.Ext(name))
+	if ext == "" {
+		return ""
+	}
+	if m := stdmime.TypeByExtension(ext); m != "" {
+		return strings.SplitN(m, ";", 2)[0]
+	}
+	switch ext {
+	case ".md", ".markdown":
+		return "text/markdown"
+	case ".yaml", ".yml":
+		return "application/yaml"
+	case ".toml":
+		return "application/x-toml"
+	case ".rst":
+		return "text/x-rst"
+	case ".log", ".txt":
+		return "text/plain"
+	}
+	return ""
 }

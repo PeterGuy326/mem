@@ -71,3 +71,9 @@ worker/mem_worker/proto/*_pb2.pyi
 # === Misc ===
 node_modules/
 *.tsbuildinfo
+
+# === Agent worktrees (Claude Code worktree isolation) ===
+.claude/
+
+# === Local dev overrides ===
+docker-compose.override.yml
