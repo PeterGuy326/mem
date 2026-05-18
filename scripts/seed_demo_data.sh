@@ -323,12 +323,20 @@ assert_search_hit() {
     return 1
   }
 
+  # Two response shapes in the wild:
+  #   (a) {hits: [...], mode: "vector"|"keyword"}              — early W2 design
+  #   (b) {results: [{..., source: "text"|"visual"|"keyword"}]} — current main
+  # Probe both and accept whichever the server returns.
   local mode top_name
-  mode=$(echo "$out" | jq -r '.mode // "?"')
-  top_name=$(echo "$out" | jq -r '.hits[0].name // .hits[0].file.name // "?"')
+  mode=$(echo "$out" | jq -r '.mode // .results[0].source // "?"')
+  top_name=$(echo "$out" | jq -r '.hits[0].name // .results[0].name // .hits[0].file.name // "?"')
 
-  if [[ "$mode" != "vector" ]]; then
-    err "  FAIL  mode=${mode}  (expected vector — keyword fallback means worker EmbedText didn't run)"
+  # "vector"/"text"/"visual" all mean a real semantic hit; only "keyword"
+  # (or missing) means the worker EmbedText path didn't run.
+  if [[ "$mode" == "keyword" || "$mode" == "?" ]]; then
+    err "  FAIL  mode=${mode}  (expected semantic match — keyword/unknown means worker EmbedText didn't run)"
+    err "  full response (first 500 bytes):"
+    echo "$out" | head -c 500 | sed 's/^/        /' >&2
     FAIL_COUNT=$((FAIL_COUNT + 1))
     return 1
   fi
@@ -339,7 +347,7 @@ assert_search_hit() {
     FAIL_COUNT=$((FAIL_COUNT + 1))
     return 1
   fi
-  ok "  PASS  mode=vector  hits[0]=${top_name}"
+  ok "  PASS  mode=${mode}  hits[0]=${top_name}"
   PASS_COUNT=$((PASS_COUNT + 1))
 }
 
