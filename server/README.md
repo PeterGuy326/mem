@@ -41,11 +41,12 @@ go run ./cmd/memd
 # logs: "db connected" -> "db migrations applied" -> "http listening :8787"
 ```
 
-Service URLs in the docker-compose dev stack:
+Service URLs in the docker-compose dev stack (host ports shifted for Redis/MinIO
+so the stack coexists with other local Redis/MinIO instances):
 - Postgres: `localhost:5432` (user/pass: `mem` / `mem`, db `mem`)
-- Redis: `localhost:6379`
-- MinIO API: `http://localhost:9000` (`mem` / `mem-minio-password`)
-- MinIO console: `http://localhost:9001`
+- Redis: `localhost:6479`
+- MinIO API: `http://localhost:9100` (`mem` / `mem-minio-password`)
+- MinIO console: `http://localhost:9101`
 
 ## Environment variables
 
@@ -53,14 +54,14 @@ Service URLs in the docker-compose dev stack:
 |---|---|---|
 | `MEM_HTTP_ADDR` | `:8787` | HTTP listen address |
 | `MEM_DB_URL` | `postgres://mem:mem@localhost:5432/mem?sslmode=disable` | PostgreSQL DSN (pgvector required) |
-| `MEM_REDIS_URL` | `redis://localhost:6379` | Redis URL (used in W2+) |
-| `MEM_S3_ENDPOINT` | `http://localhost:9000` | S3-compatible endpoint |
+| `MEM_REDIS_URL` | `redis://localhost:6479` | Redis URL (asynq queue) |
+| `MEM_S3_ENDPOINT` | `http://localhost:9100` | S3-compatible endpoint |
 | `MEM_S3_BUCKET` | `mem` | Bucket (auto-created on startup) |
 | `MEM_S3_ACCESS_KEY` | `mem` | Access key |
 | `MEM_S3_SECRET_KEY` | `mem-minio-password` | Secret key |
 | `MEM_S3_REGION` | `us-east-1` | Region tag |
 | `MEM_S3_USE_SSL` | derived from endpoint scheme | force TLS |
-| `MEM_WORKER_GRPC` | (empty) | Worker dial target (W2+) |
+| `MEM_WORKER_GRPC` | `localhost:50051` | Worker dial target (`make worker` listen addr) |
 | `MEM_SESSION_TTL` | `24h` | Login session token TTL |
 | `MEM_LOG_LEVEL` | `info` | `debug|info|warn|error` |
 

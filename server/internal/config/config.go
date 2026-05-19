@@ -46,15 +46,19 @@ type Config struct {
 // required values are missing or malformed.
 func Load() (*Config, error) {
 	cfg := &Config{
-		HTTPAddr:    getenv("MEM_HTTP_ADDR", ":8787"),
-		DBURL:       getenv("MEM_DB_URL", "postgres://mem:mem@localhost:5432/mem?sslmode=disable"),
-		RedisURL:    getenv("MEM_REDIS_URL", "redis://localhost:6379"),
-		S3Endpoint:  getenv("MEM_S3_ENDPOINT", "http://localhost:9000"),
+		HTTPAddr: getenv("MEM_HTTP_ADDR", ":8787"),
+		DBURL:    getenv("MEM_DB_URL", "postgres://mem:mem@localhost:5432/mem?sslmode=disable"),
+		// Redis/MinIO defaults match the host ports shipped in docker-compose.yml,
+		// which are shifted off the upstream defaults (6379, 9000) so the stack
+		// coexists with other local Redis/MinIO instances. Override with
+		// MEM_REDIS_URL / MEM_S3_ENDPOINT when running against a non-compose stack.
+		RedisURL:    getenv("MEM_REDIS_URL", "redis://localhost:6479"),
+		S3Endpoint:  getenv("MEM_S3_ENDPOINT", "http://localhost:9100"),
 		S3Bucket:    getenv("MEM_S3_BUCKET", "mem"),
 		S3AccessKey: getenv("MEM_S3_ACCESS_KEY", "mem"),
 		S3SecretKey: getenv("MEM_S3_SECRET_KEY", "mem-minio-password"),
 		S3Region:    getenv("MEM_S3_REGION", "us-east-1"),
-		WorkerGRPC:  getenv("MEM_WORKER_GRPC", ""),
+		WorkerGRPC:  getenv("MEM_WORKER_GRPC", "localhost:50051"),
 		LogLevel:    getenv("MEM_LOG_LEVEL", "info"),
 	}
 
