@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Upload, FolderOpen } from 'lucide-react';
+import { Upload, FolderOpen, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/cn';
 import {
@@ -66,7 +66,7 @@ function ExplorerLayout({ currentPath }: { currentPath: string }) {
   // We get direct children of currentPath from /files?path=...; sub-folder list
   // comes from the global tree.
   const { folders, files } = React.useMemo(() => {
-    const filesAll: MemFile[] = listData?.items ?? [];
+    const filesAll: MemFile[] = listData?.files ?? [];
     const tree = treeQ.data?.tree;
     if (!tree) return { folders: [] as FolderNode[], files: filesAll };
     const all = listChildren(tree, filesAll, currentPath);
@@ -93,6 +93,9 @@ function ExplorerLayout({ currentPath }: { currentPath: string }) {
   // pending new-folder slot + rename
   const [pendingNewFolder, setPendingNewFolder] = React.useState(false);
   const [renameKey, setRenameKey] = React.useState<string | null>(null);
+
+  // header search box
+  const [headerQ, setHeaderQ] = React.useState('');
 
   // uploading placeholders (one per in-flight file, by name)
   const [uploading, setUploading] = React.useState<{ name: string }[]>([]);
@@ -526,7 +529,25 @@ function ExplorerLayout({ currentPath }: { currentPath: string }) {
           <Logo />
           <div className="h-5 w-px bg-border" aria-hidden />
           <Breadcrumb path={currentPath} onInternalDropToFolder={handleInternalDropTo} />
-          <div className="flex items-center gap-2 ml-2">
+          <form
+            className="ml-auto relative"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const q = headerQ.trim();
+              navigate(q ? `/search?q=${encodeURIComponent(q)}` : '/search');
+            }}
+          >
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-fg-subtle" />
+            <input
+              value={headerQ}
+              onChange={(e) => setHeaderQ(e.target.value)}
+              placeholder="搜索你的网盘…"
+              aria-label="搜索"
+              className="h-8 w-56 rounded-md border border-border bg-bg-inset pl-8 pr-3 text-sm
+                         text-fg placeholder:text-fg-subtle outline-none focus:border-accent/60"
+            />
+          </form>
+          <div className="flex items-center gap-2">
             <DropdownMenu.Root>
               <DropdownMenu.Trigger asChild>
                 <button

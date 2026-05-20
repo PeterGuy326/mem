@@ -7,6 +7,7 @@ import { NotFoundPage } from '@/pages/NotFoundPage';
 import { AskPage } from '@/pages/AskPage';
 import { FacesPage } from '@/pages/FacesPage';
 import { ProvidersPage } from '@/pages/ProvidersPage';
+import { SearchPage } from '@/pages/SearchPage';
 
 export const router = createBrowserRouter([
   { path: '/login', element: <LoginPage /> },
@@ -23,6 +24,7 @@ export const router = createBrowserRouter([
   },
 
   { path: '/files/:id', element: (<LoginGate><FileDetailPage /></LoginGate>) },
+  { path: '/search', element: (<LoginGate><SearchPage /></LoginGate>) },
   { path: '/ask', element: (<LoginGate><AskPage /></LoginGate>) },
   { path: '/faces', element: (<LoginGate><FacesPage /></LoginGate>) },
   { path: '/providers', element: (<LoginGate><ProvidersPage /></LoginGate>) },

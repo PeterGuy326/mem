@@ -54,21 +54,17 @@ export const handlers = [
     const path = url.searchParams.get('path');
     const limit = Number(url.searchParams.get('limit') ?? 500);
     if (path !== null) {
-      const items = listByPath(path).slice(0, limit);
-      return HttpResponse.json({ items, next_cursor: null });
+      const files = listByPath(path).slice(0, limit);
+      return HttpResponse.json({ files });
     }
     // Default: latest N globally (unused in explorer, kept for compatibility).
-    return HttpResponse.json({
-      items: FILES.slice(0, limit),
-      next_cursor: FILES.length > limit ? 'cursor-2' : null,
-    });
+    return HttpResponse.json({ files: FILES.slice(0, limit) });
   }),
 
-  // ----- Files: folder tree -----
-  http.get(`${BASE}/files/tree`, async () => {
+  // ----- Folders: tree (memd returns a bare FolderNode) -----
+  http.get(`${BASE}/folders/tree`, async () => {
     await jitter(80, 200);
-    const tree = buildTree(FILES, Array.from(GHOST_FOLDERS));
-    return HttpResponse.json({ tree });
+    return HttpResponse.json(buildTree(FILES, Array.from(GHOST_FOLDERS)));
   }),
 
   // ----- Files: detail -----
@@ -84,10 +80,19 @@ export const handlers = [
     return HttpResponse.json(file);
   }),
 
-  // ----- Files: related -----
+  // ----- Files: related (memd: { related: [flat hit] }) -----
   http.get(`${BASE}/files/:id/related`, async ({ params }) => {
     await jitter();
-    return HttpResponse.json({ results: relatedFor(String(params.id)) });
+    const related = relatedFor(String(params.id)).map((r) => ({
+      file_id: r.file.id,
+      name: r.file.name,
+      path: r.file.path,
+      mime: r.file.mime,
+      type: r.relation,
+      score: r.score,
+      summary: r.file.summary,
+    }));
+    return HttpResponse.json({ related });
   }),
 
   // ----- Files: patch (move / rename) -----
@@ -283,25 +288,38 @@ export const handlers = [
     return HttpResponse.json({ ok: true });
   }),
 
-  // ----- Search (kept for compatibility) -----
-  http.get(`${BASE}/search`, async ({ request }) => {
+  // ----- Search (memd: POST with JSON body, flat hit shape) -----
+  http.post(`${BASE}/search`, async ({ request }) => {
     await jitter();
-    const url = new URL(request.url);
-    const q = url.searchParams.get('q') ?? '';
-    const type = url.searchParams.get('type') ?? undefined;
-    const since = url.searchParams.get('since') ?? undefined;
-    const until = url.searchParams.get('until') ?? undefined;
-    const face = url.searchParams.get('face') ?? undefined;
-    const limit = Number(url.searchParams.get('limit') ?? 30);
-    const { results, total } = searchFiles({ q, type, since, until, face, limit });
+    const body = (await request.json().catch(() => ({}))) as {
+      query?: string;
+      type?: string;
+      since?: string;
+      until?: string;
+      limit?: number;
+    };
+    const q = body.query ?? '';
+    const { results } = searchFiles({
+      q,
+      type: body.type,
+      since: body.since,
+      until: body.until,
+      limit: body.limit ?? 30,
+    });
     return HttpResponse.json({
-      results,
-      total,
-      query_plan: {
-        entities: ENTITIES.filter((e) => q.includes(e.name)).map((e) => e.name),
-        semantic_query: q,
-      },
-      _meta: { quota_remaining: 9999, latency_ms: Math.round(120 + Math.random() * 180) },
+      results: results.map((r) => ({
+        file_id: r.file.id,
+        name: r.file.name,
+        path: r.file.path,
+        mime: r.file.mime,
+        score: r.score,
+        snippet: r.snippet,
+        source: r.channel === 'visual' ? 'visual' : 'text',
+        summary: r.file.summary,
+        timeline_at: r.file.timeline_at,
+        created_at: r.file.created_at,
+      })),
+      _meta: { latency_ms: Math.round(120 + Math.random() * 180) },
     });
   }),
 

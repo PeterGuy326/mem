@@ -104,14 +104,15 @@ export interface SearchResponse {
 export interface RelatedResponse {
   results: Array<{
     file: MemFile;
-    relation: '同事件' | '同人' | '同主题' | '续作';
+    relation: string;
     score: number;
   }>;
 }
 
 export interface ListFilesResponse {
-  items: MemFile[];
-  next_cursor: string | null;
+  files: MemFile[];
+  limit?: number;
+  page?: number;
 }
 
 export interface AuthLoginResponse {

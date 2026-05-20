@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Search, Filter, Image as ImageIcon, FileText, Music, FileQuestion, Sparkles } from 'lucide-react';
+import { Search, Filter, Image as ImageIcon, FileText, Music, FileQuestion, Sparkles, ArrowLeft } from 'lucide-react';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
@@ -71,6 +71,12 @@ export function SearchPage() {
     <div className="mx-auto max-w-6xl px-8 py-10">
       {/* Hero search */}
       <section className="mb-6">
+        <Link
+          to="/drive"
+          className="inline-flex items-center gap-1.5 text-sm text-fg-muted hover:text-fg transition-colors mb-3"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" /> 返回云盘
+        </Link>
         <h1 className="text-2xl font-semibold tracking-tight">搜索</h1>
         <p className="mt-1.5 text-sm text-fg-muted">用自然语言找回任何东西。</p>
         <div className="mt-5 relative">
