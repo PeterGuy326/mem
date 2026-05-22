@@ -54,7 +54,8 @@ try {
     await searchBox.fill('rust ownership');
     await searchBox.press('Enter');
     await page.waitForURL((u) => u.pathname === '/search', { timeout: 8000 }).catch(() => {});
-    await page.waitForTimeout(7000); // 等真后端 search 返回
+    // 等真后端 search 返回（命中元素出现），而非死等固定秒数
+    await page.locator('text=rust_borrow_checker').first().waitFor({ timeout: 30000 }).catch(() => {});
     await page.screenshot({ path: `${SHOTS}/03-search.png`, fullPage: true });
     const hit = await page.locator('text=rust_borrow_checker').count();
     rec('T3 搜索', hit > 0, hit > 0 ? '命中 rust_borrow_checker.md' : '搜索页无命中');

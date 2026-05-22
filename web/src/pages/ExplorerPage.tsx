@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Upload, FolderOpen, Search } from 'lucide-react';
+import { Upload, FolderOpen } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/cn';
 import {
@@ -36,12 +36,9 @@ import { FileList } from '@/components/explorer/FileList';
 import { Toolbar } from '@/components/explorer/Toolbar';
 import { Breadcrumb } from '@/components/explorer/Breadcrumb';
 import { FolderTree } from '@/components/explorer/FolderTree';
-import { Logo } from '@/components/layout/Logo';
+import { TopBar } from '@/components/layout/TopBar';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
-import { useAuth } from '@/hooks/useAuth';
-import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
-import { LogOut } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { readView, writeView, type ExplorerView } from '@/components/explorer/viewMode';
 import type { MemFile } from '@/lib/types';
@@ -58,7 +55,6 @@ export function ExplorerPage() {
 }
 
 function ExplorerLayout({ currentPath }: { currentPath: string }) {
-  const { user, logout } = useAuth();
   const navigate = useNavigate();
   const treeQ = useFolderTree();
   const { data: listData, isLoading: listLoading } = useFilesByPath(currentPath);
@@ -93,9 +89,6 @@ function ExplorerLayout({ currentPath }: { currentPath: string }) {
   // pending new-folder slot + rename
   const [pendingNewFolder, setPendingNewFolder] = React.useState(false);
   const [renameKey, setRenameKey] = React.useState<string | null>(null);
-
-  // header search box
-  const [headerQ, setHeaderQ] = React.useState('');
 
   // uploading placeholders (one per in-flight file, by name)
   const [uploading, setUploading] = React.useState<{ name: string }[]>([]);
@@ -523,72 +516,10 @@ function ExplorerLayout({ currentPath }: { currentPath: string }) {
 
   return (
     <div className="h-screen flex flex-col bg-bg text-fg">
-      {/* TopBar */}
-      <header className="sticky top-0 z-30 h-12 border-b border-border bg-bg/85 backdrop-blur-md">
-        <div className="h-full px-4 flex items-center gap-4">
-          <Logo />
-          <div className="h-5 w-px bg-border" aria-hidden />
-          <Breadcrumb path={currentPath} onInternalDropToFolder={handleInternalDropTo} />
-          <form
-            className="ml-auto relative"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const q = headerQ.trim();
-              navigate(q ? `/search?q=${encodeURIComponent(q)}` : '/search');
-            }}
-          >
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-fg-subtle" />
-            <input
-              value={headerQ}
-              onChange={(e) => setHeaderQ(e.target.value)}
-              placeholder="搜索你的网盘…"
-              aria-label="搜索"
-              className="h-8 w-56 rounded-md border border-border bg-bg-inset pl-8 pr-3 text-sm
-                         text-fg placeholder:text-fg-subtle outline-none focus:border-accent/60"
-            />
-          </form>
-          <div className="flex items-center gap-2">
-            <DropdownMenu.Root>
-              <DropdownMenu.Trigger asChild>
-                <button
-                  className="flex items-center gap-2 rounded-md px-2 h-8 hover:bg-bg-inset transition-colors"
-                  aria-label="账户菜单"
-                >
-                  <div className="h-6 w-6 rounded-md bg-accent/20 text-accent grid place-items-center text-xs font-semibold">
-                    {(user?.email ?? 'M').slice(0, 1).toUpperCase()}
-                  </div>
-                </button>
-              </DropdownMenu.Trigger>
-              <DropdownMenu.Portal>
-                <DropdownMenu.Content
-                  align="end"
-                  sideOffset={6}
-                  className="z-50 min-w-44 rounded-md border border-border bg-bg-panel p-1 shadow-soft animate-fade-in"
-                >
-                  <DropdownMenu.Label className="px-2 py-1.5 text-2xs uppercase tracking-wider text-fg-subtle">
-                    {user?.email ?? '未登录'}
-                  </DropdownMenu.Label>
-                  <DropdownMenu.Separator className="my-1 h-px bg-border" />
-                  <DropdownMenu.Item asChild>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="w-full justify-start text-danger hover:text-danger"
-                      onClick={() => {
-                        logout();
-                        navigate('/login');
-                      }}
-                    >
-                      <LogOut className="h-3.5 w-3.5" />
-                      退出登录
-                    </Button>
-                  </DropdownMenu.Item>
-                </DropdownMenu.Content>
-              </DropdownMenu.Portal>
-            </DropdownMenu.Root>
-          </div>
-        </div>
-      </header>
+      <TopBar>
+        <div className="h-5 w-px bg-border" aria-hidden />
+        <Breadcrumb path={currentPath} onInternalDropToFolder={handleInternalDropTo} />
+      </TopBar>
 
       {/* Two-pane */}
       <div className="flex-1 min-h-0 flex">

@@ -56,7 +56,7 @@ try {
   await page.locator('input[aria-label="搜索"]').fill('rust ownership');
   await page.locator('input[aria-label="搜索"]').press('Enter');
   await page.waitForURL((u) => u.pathname === '/search', { timeout: 8000 });
-  await page.waitForTimeout(7000);
+  await page.locator('text=rust_borrow_checker').first().waitFor({ timeout: 30000 }).catch(() => {});
   await shot('04-search');
   const searchHit = await page.locator('text=rust_borrow_checker').count();
   log('5 搜索', searchHit > 0, searchHit > 0 ? '命中 rust_borrow_checker.md' : '无命中');

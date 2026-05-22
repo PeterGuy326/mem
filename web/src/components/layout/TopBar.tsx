@@ -1,29 +1,37 @@
 /**
- * Top nav: drive / ask / faces / providers links + account menu.
+ * Global top nav: logo + drive/ask/faces/providers links + global search box
+ * + account menu. Rendered by AppLayout for the simple pages, and directly by
+ * ExplorerPage (which passes its breadcrumb in via `children`).
  */
+import * as React from 'react';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
-import { LogOut, FolderOpen, Sparkles, Users, Settings } from 'lucide-react';
+import { LogOut, FolderOpen, Sparkles, Users, Settings, Search } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
+import { Logo } from './Logo';
 import { useAuth } from '@/hooks/useAuth';
 import { cn } from '@/lib/cn';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 
-export function TopBar() {
+const navItems = [
+  { to: '/drive', label: 'Drive', icon: FolderOpen, match: '/drive' },
+  { to: '/ask', label: 'Ask', icon: Sparkles, match: '/ask' },
+  { to: '/faces', label: 'Faces', icon: Users, match: '/faces' },
+  { to: '/providers', label: 'Providers', icon: Settings, match: '/providers' },
+];
+
+export function TopBar({ children }: { children?: React.ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
+  const [q, setQ] = React.useState('');
 
   const isActive = (prefix: string) => location.pathname.startsWith(prefix);
-  const navItems = [
-    { to: '/drive', label: 'Drive', icon: FolderOpen, match: '/drive' },
-    { to: '/ask', label: 'Ask', icon: Sparkles, match: '/ask' },
-    { to: '/faces', label: 'Faces', icon: Users, match: '/faces' },
-    { to: '/providers', label: 'Providers', icon: Settings, match: '/providers' },
-  ];
 
   return (
-    <header className="sticky top-0 z-30 h-12 border-b border-border bg-bg/85 backdrop-blur-md">
+    <header className="sticky top-0 z-30 h-12 flex-none border-b border-border bg-bg/85 backdrop-blur-md">
       <div className="h-full px-4 flex items-center gap-3">
+        <Logo />
+        <div className="h-5 w-px bg-border" aria-hidden />
         <nav className="flex items-center gap-1">
           {navItems.map((it) => {
             const Icon = it.icon;
@@ -44,7 +52,29 @@ export function TopBar() {
             );
           })}
         </nav>
-        <div className="ml-auto flex items-center gap-2">
+
+        {children}
+
+        <form
+          className="ml-auto relative"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const v = q.trim();
+            navigate(v ? `/search?q=${encodeURIComponent(v)}` : '/search');
+          }}
+        >
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-fg-subtle" />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="搜索你的网盘…"
+            aria-label="搜索"
+            className="h-8 w-56 rounded-md border border-border bg-bg-inset pl-8 pr-3 text-sm
+                       text-fg placeholder:text-fg-subtle outline-none focus:border-accent/60"
+          />
+        </form>
+
+        <div className="flex items-center gap-2">
           <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild>
               <button

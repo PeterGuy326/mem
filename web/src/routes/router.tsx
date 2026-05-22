@@ -1,5 +1,6 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { LoginGate } from './LoginGate';
+import { AppLayout } from '@/components/layout/AppLayout';
 import { LoginPage } from '@/pages/LoginPage';
 import { ExplorerPage } from '@/pages/ExplorerPage';
 import { FileDetailPage } from '@/pages/FileDetailPage';
@@ -13,7 +14,7 @@ export const router = createBrowserRouter([
   { path: '/login', element: <LoginPage /> },
   { path: '/', element: <Navigate to="/drive" replace /> },
 
-  // Explorer: catch-all under /drive.
+  // Explorer: catch-all under /drive. Renders its own TopBar + two-pane layout.
   {
     path: '/drive/*',
     element: (
@@ -23,11 +24,21 @@ export const router = createBrowserRouter([
     ),
   },
 
-  { path: '/files/:id', element: (<LoginGate><FileDetailPage /></LoginGate>) },
-  { path: '/search', element: (<LoginGate><SearchPage /></LoginGate>) },
-  { path: '/ask', element: (<LoginGate><AskPage /></LoginGate>) },
-  { path: '/faces', element: (<LoginGate><FacesPage /></LoginGate>) },
-  { path: '/providers', element: (<LoginGate><ProvidersPage /></LoginGate>) },
+  // Everything else shares the global TopBar via AppLayout.
+  {
+    element: (
+      <LoginGate>
+        <AppLayout />
+      </LoginGate>
+    ),
+    children: [
+      { path: '/files/:id', element: <FileDetailPage /> },
+      { path: '/search', element: <SearchPage /> },
+      { path: '/ask', element: <AskPage /> },
+      { path: '/faces', element: <FacesPage /> },
+      { path: '/providers', element: <ProvidersPage /> },
+    ],
+  },
 
   { path: '*', element: <NotFoundPage /> },
 ]);
