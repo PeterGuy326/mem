@@ -110,9 +110,10 @@ type FileMeta struct {
 	SHA256     string
 	StorageKey string // bucket-relative S3 key
 	// Provider overrides (optional). Empty values fall back to worker defaults.
-	EmbeddingProvider string
-	LLMProvider       string
-	VLMProvider       string
+	EmbeddingProvider       string
+	VisualEmbeddingProvider string // CLIP image-tower embedder for image/* files
+	LLMProvider             string
+	VLMProvider             string
 }
 
 // Index runs Process synchronously and returns the response. Callers wanting
@@ -145,12 +146,15 @@ func (c *Client) Index(ctx context.Context, m FileMeta) (*workerpb.ProcessRespon
 // buildOptionsJSON encodes per-request provider overrides into a JSON blob
 // the worker understands. Returns nil when no overrides are set.
 func buildOptionsJSON(m FileMeta) []byte {
-	if m.EmbeddingProvider == "" && m.LLMProvider == "" && m.VLMProvider == "" {
+	if m.EmbeddingProvider == "" && m.VisualEmbeddingProvider == "" && m.LLMProvider == "" && m.VLMProvider == "" {
 		return nil
 	}
 	out := map[string]string{}
 	if m.EmbeddingProvider != "" {
 		out["embedding_provider"] = m.EmbeddingProvider
+	}
+	if m.VisualEmbeddingProvider != "" {
+		out["visual_embedding_provider"] = m.VisualEmbeddingProvider
 	}
 	if m.LLMProvider != "" {
 		out["llm_provider"] = m.LLMProvider

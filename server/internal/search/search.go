@@ -1,10 +1,13 @@
 // Package search implements natural-language file retrieval over the
 // embeddings stored in PostgreSQL/pgvector.
 //
-// Phase C scope (W3 partial):
+// Routes (SPEC F3.3):
 //   - Text route: embed query via worker → cosine-distance ANN over
 //     embeddings_text → dedupe to one row per file → join files for metadata.
-//   - Visual route + multi-route rerank are NOT wired yet (SPEC F3.3).
+//   - Visual route: embed query via the CLIP text tower → ANN over
+//     embeddings_visual (CLIP image-tower vectors written at index time).
+//   - Auto route (default): run text + visual in parallel, merge by file_id
+//     keeping the best-scoring row per file, re-sort by score.
 //
 // Filters supported: user_id (required), mime prefix, since/until on
 // timeline_at (or created_at fallback), limit.

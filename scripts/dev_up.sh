@@ -229,8 +229,19 @@ start_minio() {
 # ---------------------------------------------------------------------------
 start_worker() {
   log "mem worker (gRPC :${WORKER_PORT})"
+  # Ensure the CLIP extra (open_clip_torch + torch CPU) is installed so the
+  # visual embedder can run — without it, image indexing degrades to a
+  # caption-text vector that the 512-d visual guard rejects, leaving
+  # embeddings_visual empty and "image search" effectively disabled.
+  if command -v uv >/dev/null 2>&1; then
+    log "syncing worker deps (uv sync --extra clip)"
+    ( cd "${REPO_ROOT}/worker" && uv sync --extra clip >"${LOG_DIR}/worker_uv_sync.log" 2>&1 ) \
+      || warn "uv sync --extra clip failed — see ${LOG_DIR}/worker_uv_sync.log; image search may be unavailable"
+  else
+    warn "uv not on PATH; skipping clip dependency sync (image search needs: cd worker && uv sync --extra clip)"
+  fi
   local py="${REPO_ROOT}/worker/.venv/bin/python"
-  [[ -x "$py" ]] || die "worker venv missing — run: (cd worker && uv sync)"
+  [[ -x "$py" ]] || die "worker venv missing — run: (cd worker && uv sync --extra clip)"
 
   if port_busy "$WORKER_PORT"; then
     ok "worker already listening on :${WORKER_PORT}"

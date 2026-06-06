@@ -38,10 +38,14 @@
      chmod +x .dev/bin/minio .dev/bin/mc
      ```
      > `mc` 是可选的：memd 启动时会自己 `MakeBucket` 建桶，没有 mc 也能跑通。
-   - worker Python 依赖：
+   - worker Python 依赖（`--extra clip` 装 CLIP，启用真正的图搜图）：
      ```bash
-     cd worker && uv sync && cd ..
+     cd worker && uv sync --extra clip && cd ..
      ```
+     > `dev_up.sh` 启动 worker 前也会自动跑一次 `uv sync --extra clip`，所以
+     > 平时直接 `bash scripts/dev_up.sh` 即可，无需手动 sync。
+     > CLIP 走 CPU、首次会下载 ViT-B-32 权重（~600MB，缓存在 `~/.cache`），
+     > torch CPU wheel 也较大，第一次 sync 耐心等。
    - memd 二进制（`dev_up.sh` 会在缺失时自动 `go build`，也可手动）：
      ```bash
      make build-memd build-mem   # -> bin/memd, bin/mem
@@ -50,9 +54,13 @@
 2. **Ollama**：必须已在 `http://localhost:11434` 运行，且已 pull：
    - `nomic-embed-text`（768 维文本 embedding，对上 schema `embeddings_text vector(768)`）
    - `llama3.1`（RAG 问答的 chat LLM）
-   - 视觉模型（minicpm-v）**可选缺失**：图片走优雅降级，只存 caption/EXIF，
-     不产出 512 维 visual 向量，索引不崩（见 `worker/mem_worker/processors/image.py`
-     的维度守卫 `VISUAL_EMBED_DIM`）。
+   - 视觉模型（minicpm-v）**可选缺失**：影响的是 caption 文本，不影响图搜图本身。
+     图片的视觉向量由 **CLIP**（`clip:ViT-B-32`，见下）产出，与 Ollama 无关。
+   - **图搜图 = CLIP**：装了 `--extra clip` 后，图片入库时由 CLIP image-tower
+     编码成 512 维视觉向量写进 `embeddings_visual`，搜索时 query 文本由 CLIP
+     text-tower 编码到同一空间做 ANN——这才是"以文搜图"。若 CLIP 没装，图片
+     走优雅降级（caption 文本向量是 768 维，被维度守卫 `VISUAL_EMBED_DIM=512`
+     拒绝跳过），`embeddings_visual` 为空、图搜图搜不到东西。
 
 ## 用户回来怎么用（日常）
 
@@ -68,8 +76,14 @@ export MEM_TOKEN=$(curl -s -X POST http://localhost:8787/v1/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"email":"demo@mem.local","password":"demo-password-change-me"}' | jq -r .token)
 
-# 搜索
+# 文本搜索（文档语义检索）
 bin/mem --server http://localhost:8787 search "a dog on a meadow" --format json
+
+# 图搜图（以文搜图，走 CLIP 视觉空间）：
+#   --route visual 只搜图片；--route auto（默认）text+visual 并行融合
+bin/mem put scripts/demo_data/images/golden_retriever_grass.jpg   # 先灌示例照片
+bin/mem search "golden retriever on grass" --route visual          # 金毛排首位
+bin/mem search "a cat" --route visual
 
 # RAG 问答（llama3.1 生成 + 出处）
 curl -s -X POST http://localhost:8787/v1/ask \
@@ -116,6 +130,32 @@ npm run build      # 产物在 web/dist/
 - **图片维度守卫**：`embeddings_visual` 是 `vector(512)`；worker 只在向量维度
   == 512 时入库 visual 向量，否则跳过——避免降级 embedder（如 768 维 nomic）
   让整个索引事务回滚把文件标记 `failed`。
+- **图片 visual provider 显式化**：indexer 对 `image/*` 文件显式下发
+  `visual_embedding_provider=clip:ViT-B-32`（`server/internal/indexer/indexer.go`），
+  不再依赖 worker 默认值碰巧是 CLIP。用户也可在 `provider_settings` 里存
+  `kind='visual_embedding'` 覆盖。
+
+## 放自己的照片（图搜图）
+
+```bash
+export MEM_TOKEN=$(curl -s -X POST http://localhost:8787/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"demo@mem.local","password":"demo-password-change-me"}' | jq -r .token)
+
+# 单张
+bin/mem put ~/Pictures/your_photo.jpg
+# 整个目录
+bin/mem put ~/Pictures --recursive
+
+# 等 index_status=done 后，以文搜图：
+bin/mem search "草地上的金毛" --route visual
+bin/mem search "snowy mountain at sunset" --route visual
+```
+
+`scripts/demo_data/images/` 下自带 3 张开放许可示例照片（Wikimedia Commons：
+金毛犬 / 猫 / 河流风景），可直接 `bin/mem put` 进去验证图搜图。换成你自己的照片
+只需放进任意目录再 `put` 即可——CLIP 是通用视觉模型，对真实照片才有意义
+（纯噪声/占位图搜不出有意义结果）。
 
 ## 常见问题排查
 

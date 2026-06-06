@@ -123,17 +123,24 @@ func (s *Service) IndexFile(ctx context.Context, f *file.File) {
 
 	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	embProv, llmProv, vlmProv := s.providerOverrides(ctx, f.UserID)
+	embProv, visualProv, llmProv, vlmProv := s.providerOverrides(ctx, f.UserID)
+	// For images, always pin a CLIP image-tower embedder so the visual vector
+	// lands in the same 512-d latent space the search visual route queries.
+	// Without this we relied on the worker's default coinciding with CLIP.
+	if visualProv == "" && strings.HasPrefix(f.MIME, "image/") {
+		visualProv = "clip:ViT-B-32"
+	}
 	resp, err := s.client.Index(rpcCtx, workerclient.FileMeta{
-		FileID:            f.ID.String(),
-		UserID:            f.UserID.String(),
-		Name:              f.Name,
-		MIME:              f.MIME,
-		SHA256:            f.SHA256,
-		StorageKey:        f.StorageKey,
-		EmbeddingProvider: embProv,
-		LLMProvider:       llmProv,
-		VLMProvider:       vlmProv,
+		FileID:                  f.ID.String(),
+		UserID:                  f.UserID.String(),
+		Name:                    f.Name,
+		MIME:                    f.MIME,
+		SHA256:                  f.SHA256,
+		StorageKey:              f.StorageKey,
+		EmbeddingProvider:       embProv,
+		VisualEmbeddingProvider: visualProv,
+		LLMProvider:             llmProv,
+		VLMProvider:             vlmProv,
 	})
 	if err != nil {
 		s.log.Error("indexer.worker_failed", "file_id", f.ID, "err", err)
@@ -282,12 +289,12 @@ func (s *Service) fileUserID(ctx context.Context, tx pgx.Tx, fileID uuid.UUID) (
 //
 // Done as a separate package-internal query (not via provider.Service) to
 // avoid an import cycle. Missing rows fall through to worker defaults.
-func (s *Service) providerOverrides(ctx context.Context, userID uuid.UUID) (emb, llm, vlm string) {
+func (s *Service) providerOverrides(ctx context.Context, userID uuid.UUID) (emb, visual, llm, vlm string) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT kind, spec FROM provider_settings WHERE user_id = $1`, userID)
 	if err != nil {
 		s.log.Warn("indexer.provider_lookup_failed", "user_id", userID, "err", err)
-		return "", "", ""
+		return "", "", "", ""
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -298,6 +305,8 @@ func (s *Service) providerOverrides(ctx context.Context, userID uuid.UUID) (emb,
 		switch kind {
 		case "embedding":
 			emb = spec
+		case "visual_embedding":
+			visual = spec
 		case "llm":
 			llm = spec
 		case "vlm":

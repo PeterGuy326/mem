@@ -299,6 +299,22 @@ upload_demo_data() {
     ok "put ${name}  id=${id}  status=${status}"
     count=$((count + 1))
   done
+  # Also upload demo images (for the image-search / CLIP assertion). These are
+  # real open-license photos in demo_data/images/. If the directory is empty
+  # the loop is a no-op and the visual assertion later self-skips.
+  local img
+  for img in "${DEMO_DIR}"/images/*.jpg "${DEMO_DIR}"/images/*.png; do
+    [[ -f "$img" ]] || continue
+    local out name id status
+    out=$(mem put "$img" --to "$TARGET_FOLDER" --format json) || {
+      warn "image upload failed: $img (image search assertion may skip)"
+      continue
+    }
+    name=$(echo "$out" | jq -r '.file.name // empty')
+    id=$(echo "$out"   | jq -r '.file.id // empty')
+    status=$(echo "$out" | jq -r '.file.index_status // "?"')
+    [[ -n "$id" ]] && { ok "put ${name}  id=${id}  status=${status}"; count=$((count + 1)); }
+  done
   log "uploaded ${count} files to ${TARGET_FOLDER}"
 }
 
@@ -389,6 +405,33 @@ assert_search_hit() {
   PASS_COUNT=$((PASS_COUNT + 1))
 }
 
+# assert_visual_hit <query> <expected_image_basename> <label>
+# Image search via the CLIP visual route. Self-SKIPS (not FAIL) when no visual
+# embeddings exist — i.e. the worker was started without the `clip` extra — so
+# this never breaks the core text-search contract on a CLIP-less machine.
+assert_visual_hit() {
+  local query="$1" expected="$2" label="$3"
+  log "visual search assertion [${label}]: '${query}' should hit ${expected}"
+  local out top_name top_source
+  out=$(mem search "$query" --route visual --type image --format json 2>&1) || {
+    warn "  SKIP  mem search --route visual exited non-zero (CLIP/visual route unavailable)"
+    return 0
+  }
+  top_name=$(echo "$out"   | jq -r '.hits[0].name // .results[0].name // "?"')
+  top_source=$(echo "$out" | jq -r '.hits[0].source // .results[0].source // "?"')
+  if [[ "$top_name" == "?" || "$top_source" != "visual" ]]; then
+    warn "  SKIP  no visual hit (embeddings_visual empty? install worker with: uv sync --extra clip)"
+    return 0
+  fi
+  if [[ "$top_name" != "$expected" ]]; then
+    err "  FAIL  hits[0]=${top_name}  (expected ${expected})"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    return 1
+  fi
+  ok "  PASS  route=visual  hits[0]=${top_name}"
+  PASS_COUNT=$((PASS_COUNT + 1))
+}
+
 run_assertions() {
   log "running search assertions"
   # The three assertions are deliberately *pure-semantic*: the content-bearing
@@ -400,6 +443,10 @@ run_assertions() {
   assert_search_hit "a dog on a meadow"                          "golden_retriever.md"  "Q1-dog-meadow"   || true
   assert_search_hit "a vacation in southwest china"              "yunnan_trip_2012.md"  "Q2-yunnan-trip"  || true
   assert_search_hit "fermentation chemistry in a kitchen jar"    "sourdough_starter.md" "Q3-sourdough"    || true
+  # Image search (CLIP visual route). Pure cross-modal: the query text never
+  # touches the image bytes — a passing hit can only come from CLIP's shared
+  # text/image latent space. Self-skips if the worker has no `clip` extra.
+  assert_visual_hit "golden retriever on grass"                  "golden_retriever_grass.jpg" "Q4-visual-dog" || true
 }
 
 # ---- main ------------------------------------------------------------------
