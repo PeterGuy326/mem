@@ -22,6 +22,10 @@ secrets/
 /bin/
 server/bin/
 server/dist/
+# stray `go build` output dropped directly in server/ (no path flag)
+server/memd
+server/mem
+server/mem-mcp
 server/coverage.out
 server/coverage.html
 server/*.test
@@ -64,6 +68,10 @@ worker/mem_worker/proto/*_pb2.pyi
 /storage/
 .scratch/
 *.log
+
+# === Bare-metal dev stack (scripts/dev_up.sh) ===
+# Local runtime: postgres cluster, minio data, downloaded binaries, logs, pids.
+/.dev/
 
 # === Docker ===
 .docker-data/

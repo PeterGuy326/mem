@@ -52,7 +52,13 @@ func Load() (*Config, error) {
 		// which are shifted off the upstream defaults (6379, 9000) so the stack
 		// coexists with other local Redis/MinIO instances. Override with
 		// MEM_REDIS_URL / MEM_S3_ENDPOINT when running against a non-compose stack.
-		RedisURL:    getenv("MEM_REDIS_URL", "redis://localhost:6479"),
+		//
+		// MEM_REDIS_URL has three states:
+		//   - unset           -> default redis://localhost:6479 (compose stack)
+		//   - set & non-empty -> that URL
+		//   - set & EMPTY     -> "" => queue disabled, inline goroutine fallback
+		// The empty case is the bare-metal/no-redis dev path (scripts/dev_up.sh).
+		RedisURL:    getenvRedis(),
 		S3Endpoint:  getenv("MEM_S3_ENDPOINT", "http://localhost:9100"),
 		S3Bucket:    getenv("MEM_S3_BUCKET", "mem"),
 		S3AccessKey: getenv("MEM_S3_ACCESS_KEY", "mem"),
@@ -93,6 +99,16 @@ func getenv(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// getenvRedis resolves MEM_REDIS_URL with empty-aware semantics: an explicitly
+// set but empty value means "no redis — use the inline goroutine fallback",
+// which is the bare-metal dev path. Unset falls back to the compose default.
+func getenvRedis() string {
+	if v, ok := os.LookupEnv("MEM_REDIS_URL"); ok {
+		return v // honor explicit value, including ""
+	}
+	return "redis://localhost:6479"
 }
 
 // S3EndpointHost strips the scheme prefix from S3Endpoint, returning host:port

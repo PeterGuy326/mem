@@ -75,7 +75,10 @@ MEM_SERVER="${MEM_SERVER:-http://localhost:8787}"
 ADMIN_EMAIL="${MEM_ADMIN_EMAIL:-demo@mem.local}"
 ADMIN_PASSWORD="${MEM_ADMIN_PASSWORD:-demo-password-change-me}"
 TARGET_FOLDER="${MEM_DEMO_FOLDER:-/demo}"
-INGEST_TIMEOUT_SEC="${MEM_INGEST_TIMEOUT_SEC:-90}"
+# llama3.1/nomic embedding on CPU is slow; default the ingest poll generously.
+INGEST_TIMEOUT_SEC="${MEM_INGEST_TIMEOUT_SEC:-300}"
+# Bare-metal DB connection for the admin bootstrap (matches server/.env.example).
+MEM_DB_URL="${MEM_DB_URL:-postgres://mem:mem@localhost:5432/mem?sslmode=disable}"
 
 # ---- color helpers (NO_COLOR honored) --------------------------------------
 if [[ -n "${NO_COLOR:-}" || ! -t 1 ]]; then
@@ -94,16 +97,19 @@ fatal() { err "$*"; dump_diagnostics; exit 1; }
 dump_diagnostics() {
   echo >&2
   echo "${C_YELLOW}--- diagnostics ---${C_RESET}" >&2
+  # Bare-metal stack (no Docker): tail the local process logs that
+  # scripts/dev_up.sh writes under .dev/logs/.
+  local logdir="${REPO_ROOT}/.dev/logs"
+  local svc
+  for svc in memd worker; do
+    if [[ -f "${logdir}/${svc}.log" ]]; then
+      echo >&2
+      echo "${C_YELLOW}--- recent ${svc} logs (last 30 lines: ${logdir}/${svc}.log) ---${C_RESET}" >&2
+      tail -n 30 "${logdir}/${svc}.log" 2>/dev/null | sed 's/^/  /' >&2 || true
+    fi
+  done
   if command -v docker >/dev/null 2>&1; then
     (cd "$REPO_ROOT" && docker compose ps 2>&1 | sed 's/^/  /') >&2 || true
-    echo >&2
-    echo "${C_YELLOW}--- recent memd logs (last 30 lines) ---${C_RESET}" >&2
-    (cd "$REPO_ROOT" && docker compose logs --tail=30 memd 2>&1 | sed 's/^/  /') >&2 || true
-    echo >&2
-    echo "${C_YELLOW}--- recent worker logs (last 30 lines) ---${C_RESET}" >&2
-    (cd "$REPO_ROOT" && docker compose logs --tail=30 worker 2>&1 | sed 's/^/  /') >&2 || true
-  else
-    echo "  (docker not on PATH; cannot dump compose state)" >&2
   fi
 }
 
@@ -114,18 +120,24 @@ dump_diagnostics() {
 mem_bin=""
 mem_args_prefix=()
 detect_mem() {
-  if command -v mem >/dev/null 2>&1; then
-    mem_bin="mem"
-    mem_args_prefix=()
-  elif [[ -x "${REPO_ROOT}/bin/mem" ]]; then
+  # Prefer the repo's freshly-built bin/mem. On WSL the PATH inherits Windows
+  # interop entries, where a legacy `mem.exe` (the DOS memory command) shadows
+  # our CLI — `command -v mem` would resolve to it and its --help lacks the
+  # `search` subcommand, failing pre-flight. So bin/mem wins when present.
+  if [[ -x "${REPO_ROOT}/bin/mem" ]]; then
     mem_bin="${REPO_ROOT}/bin/mem"
+    mem_args_prefix=()
+  elif command -v mem >/dev/null 2>&1 && \
+       mem --help 2>&1 | grep -qE '^[[:space:]]*search([[:space:]]|$)'; then
+    # Only trust a PATH `mem` if it actually exposes our subcommands.
+    mem_bin="mem"
     mem_args_prefix=()
   elif command -v go >/dev/null 2>&1; then
     mem_bin="go"
     mem_args_prefix=(run "./cmd/mem")
     warn "mem binary not found; falling back to 'go run ./cmd/mem' (first call will compile)"
   else
-    fatal "no 'mem' on PATH, no bin/mem in repo, and 'go' is also missing — install one of them"
+    fatal "no usable 'mem' (repo bin/mem, a real PATH mem, or 'go') found — build with 'make build-mem'"
   fi
 }
 
@@ -149,8 +161,21 @@ preflight() {
   command -v curl >/dev/null 2>&1 \
     || fatal "curl is required"
 
-  command -v docker >/dev/null 2>&1 \
-    || fatal "docker is required for diagnostics + bootstrap"
+  # Bare-metal stack (no Docker): admin bootstrap goes through a local psql
+  # against MEM_DB_URL. Resolve a psql binary (brew keg-only postgres@16 is
+  # not on PATH by default — dev_up.sh exports it, but probe common locations
+  # here too so the script also works when run standalone).
+  PSQL_BIN="${PSQL_BIN:-}"
+  if [[ -z "$PSQL_BIN" ]]; then
+    if command -v psql >/dev/null 2>&1; then
+      PSQL_BIN="psql"
+    elif [[ -x /home/linuxbrew/.linuxbrew/opt/postgresql@16/bin/psql ]]; then
+      PSQL_BIN="/home/linuxbrew/.linuxbrew/opt/postgresql@16/bin/psql"
+    else
+      fatal "psql not found (set PSQL_BIN or put postgres@16 bin on PATH)"
+    fi
+  fi
+  ok "psql: $PSQL_BIN"
 
   detect_mem
   ok "mem CLI: $mem_bin ${mem_args_prefix[*]:-}"
@@ -159,7 +184,7 @@ preflight() {
   local code
   code=$(curl -sS -o /dev/null -w '%{http_code}' "${MEM_SERVER}/healthz" || echo "000")
   if [[ "$code" != "200" ]]; then
-    fatal "memd /healthz returned ${code} at ${MEM_SERVER} — is 'docker compose up -d' done?"
+    fatal "memd /healthz returned ${code} at ${MEM_SERVER} — is the stack up? run 'bash scripts/dev_up.sh'"
   fi
   ok "memd /healthz reachable at ${MEM_SERVER}"
 
@@ -196,28 +221,34 @@ preflight() {
 
 # ---- bootstrap admin user --------------------------------------------------
 # memd has no /v1/auth/register HTTP route (intentional for v1 — admin users
-# are provisioned out-of-band). We insert directly into the users table via
-# docker compose exec, using ON CONFLICT DO NOTHING so the script is
-# idempotent across runs. bcrypt hash is generated by Python's bcrypt
-# library if available, otherwise we delegate to docker run on a python image.
+# are provisioned out-of-band). Bare-metal path (no Docker): generate a bcrypt
+# hash with a local Python `bcrypt` (auth.go uses golang.org/x/crypto/bcrypt,
+# which is wire-compatible with python `bcrypt`) and INSERT directly into the
+# users table via a local psql against MEM_DB_URL. ON CONFLICT DO NOTHING keeps
+# it idempotent across re-runs.
 bootstrap_admin() {
   log "bootstrap admin user: ${ADMIN_EMAIL}"
 
-  local hash
-  if command -v python3 >/dev/null 2>&1 && \
-     python3 -c 'import bcrypt' 2>/dev/null; then
-    hash=$(python3 -c "import bcrypt,sys; print(bcrypt.hashpw(sys.argv[1].encode(),bcrypt.gensalt()).decode())" "$ADMIN_PASSWORD")
+  # Find a python with bcrypt: prefer system python3, fall back to the worker
+  # venv (which can have bcrypt via the face/dev extras).
+  local py=""
+  if command -v python3 >/dev/null 2>&1 && python3 -c 'import bcrypt' 2>/dev/null; then
+    py="python3"
+  elif [[ -x "${REPO_ROOT}/worker/.venv/bin/python" ]] && \
+       "${REPO_ROOT}/worker/.venv/bin/python" -c 'import bcrypt' 2>/dev/null; then
+    py="${REPO_ROOT}/worker/.venv/bin/python"
   else
-    warn "python3+bcrypt not available; using docker python:3.12-alpine fallback (slower)"
-    hash=$(docker run --rm python:3.12-alpine sh -c \
-      "pip install -q bcrypt && python -c 'import bcrypt,sys; print(bcrypt.hashpw(sys.argv[1].encode(),bcrypt.gensalt()).decode())' '$ADMIN_PASSWORD'")
+    fatal "no python with the 'bcrypt' module found (pip install bcrypt) — needed to provision the admin user"
   fi
 
-  # The auth schema's column names track auth.go's UserRow struct — adjust
-  # here if the migrations evolve (id uuid pk, email text unique,
-  # password_hash text). The ON CONFLICT makes this idempotent.
-  docker compose -f "${REPO_ROOT}/docker-compose.yml" exec -T postgres \
-    psql -U mem -d mem -v ON_ERROR_STOP=1 <<SQL
+  local hash
+  hash=$("$py" -c "import bcrypt,sys; print(bcrypt.hashpw(sys.argv[1].encode(),bcrypt.gensalt()).decode())" "$ADMIN_PASSWORD") \
+    || fatal "bcrypt hashing failed"
+
+  # The auth schema's column names track auth.go's UserRow struct (id uuid pk,
+  # email text unique, password_hash text). ON CONFLICT makes this idempotent.
+  PGPASSWORD="${MEM_DB_PASSWORD:-mem}" "$PSQL_BIN" "${MEM_DB_URL:-postgres://mem:mem@localhost:5432/mem?sslmode=disable}" \
+    -v ON_ERROR_STOP=1 <<SQL || fatal "psql admin INSERT failed"
 INSERT INTO users (id, email, password_hash)
 VALUES (gen_random_uuid(), '${ADMIN_EMAIL}', '${hash}')
 ON CONFLICT (email) DO NOTHING;
@@ -272,9 +303,10 @@ upload_demo_data() {
 }
 
 # ---- poll ingest completion ------------------------------------------------
-# We wait until every file in TARGET_FOLDER has index_status=indexed. That's
-# the visible signal that the worker pipeline (TextProcessor + EmbedText)
-# ran to completion.
+# We wait until every file in TARGET_FOLDER reaches a terminal index status.
+# The indexer writes index_status='done' on success (see indexer.go
+# setStatus(...,"done")); we also accept 'indexed' for forward-compat. A
+# 'failed' status aborts the wait immediately with a diagnostic.
 wait_for_ingest() {
   log "waiting for ingest to complete (up to ${INGEST_TIMEOUT_SEC}s)"
   local deadline=$(( $(date +%s) + INGEST_TIMEOUT_SEC ))
@@ -285,17 +317,23 @@ wait_for_ingest() {
       sleep 2
       continue
     }
-    # Total + indexed counts. Schema may surface either {parent,folders,files}
+    # Total + done counts. Schema may surface either {parent,folders,files}
     # (folder-view) or a flat array (filter-view).
-    local files_array total indexed
+    local files_array total done_n failed_n
     files_array=$(echo "$listing" | jq -c '.files // .')
     total=$(echo "$files_array"   | jq 'length')
-    indexed=$(echo "$files_array" | jq '[.[] | select((.index_status // .IndexStatus) == "indexed")] | length')
-    if [[ "$total" -gt 0 && "$total" == "$indexed" ]]; then
-      ok "all ${indexed}/${total} files indexed"
+    done_n=$(echo "$files_array" | jq '[.[] | select((.index_status // .IndexStatus) as $s | $s == "done" or $s == "indexed")] | length')
+    failed_n=$(echo "$files_array" | jq '[.[] | select((.index_status // .IndexStatus) == "failed")] | length')
+    if [[ "$failed_n" -gt 0 ]]; then
+      err "  ${failed_n}/${total} files have index_status=failed — worker pipeline error"
+      echo "$files_array" | jq -r '.[] | select((.index_status // .IndexStatus) == "failed") | "    FAILED: \(.name)"' >&2 || true
+      return 1
+    fi
+    if [[ "$total" -gt 0 && "$total" == "$done_n" ]]; then
+      ok "all ${done_n}/${total} files indexed (status=done)"
       return 0
     fi
-    log "  progress: ${indexed}/${total} indexed; sleeping 3s"
+    log "  progress: ${done_n}/${total} indexed; sleeping 3s"
     sleep 3
   done
   err "ingest did not complete within ${INGEST_TIMEOUT_SEC}s"

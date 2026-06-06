@@ -39,6 +39,12 @@ log = get_logger(__name__)
 _EXIF_NAMES = {v: k for k, v in ExifTags.TAGS.items()}
 _GPS_NAMES = {v: k for k, v in ExifTags.GPSTAGS.items()}
 
+# Dimension of the embeddings_visual.embedding column in the DB schema
+# (server/internal/db/migrations/0001_init.sql -> vector(512), CLIP ViT-B/32).
+# Visual vectors of any other dimension are skipped rather than inserted, so a
+# degraded text-embedder fallback can never abort the indexing transaction.
+VISUAL_EMBED_DIM = 512
+
 
 class ImageProcessor:
     """Process raster images via VLM + visual embedding."""
@@ -148,6 +154,28 @@ class ImageProcessor:
                 if rows:
                     vec = rows[0]
                     src = "vlm_caption"
+
+            # The embeddings_visual column is fixed at vector(VISUAL_EMBED_DIM)
+            # (CLIP ViT-B/32 = 512-d) in the DB schema. A degraded fallback
+            # embedder (e.g. ollama:nomic-embed-text = 768-d) would produce a
+            # vector of the wrong dimension; inserting it aborts the whole
+            # indexing transaction and marks the file `failed`. Guard here:
+            # only emit a visual embedding when its dimension matches the
+            # schema, otherwise skip it (the text link is unaffected, the
+            # image still indexes with caption/EXIF metadata).
+            if vec is not None and len(vec) != VISUAL_EMBED_DIM:
+                log.warning(
+                    "image.visual_dim_mismatch",
+                    file_id=file.file_id,
+                    got_dim=len(vec),
+                    want_dim=VISUAL_EMBED_DIM,
+                    source=src,
+                    provider=embedder.name,
+                )
+                result.metadata["visual_embed_skipped"] = (
+                    f"dim {len(vec)} != schema {VISUAL_EMBED_DIM}"
+                )
+                vec = None
 
             if vec:
                 result.embeddings["visual"] = EmbeddingSet(
