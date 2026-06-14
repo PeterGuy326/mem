@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -74,6 +75,7 @@ func (s *Server) Router() http.Handler {
 	})
 
 	// Public auth
+	r.Post("/v1/auth/register", s.handleRegister)
 	r.Post("/v1/auth/login", s.handleLogin)
 
 	// Token-authenticated routes
@@ -203,16 +205,50 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", "email or password is incorrect")
 		return
 	}
-	// Dev convenience: issue a 24h admin-scope token so the CLI can immediately
-	// operate. Real OAuth lives in a future phase.
+	s.issueSession(w, u, http.StatusOK)
+}
+
+// handleRegister provisions a new user (bcrypt-hashed password) and logs them
+// straight in. Public endpoint — this is how a fresh self-hosted install gets
+// its first account without touching the database by hand.
+func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
+	var req loginReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	if !strings.Contains(req.Email, "@") {
+		writeError(w, http.StatusBadRequest, "bad_email", "a valid email is required")
+		return
+	}
+	if len(req.Password) < 6 {
+		writeError(w, http.StatusBadRequest, "weak_password", "password must be at least 6 characters")
+		return
+	}
+	u, err := s.Auth.CreateUser(r.Context(), req.Email, req.Password)
+	if err != nil {
+		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "23505") {
+			writeError(w, http.StatusConflict, "email_taken", "an account with this email already exists")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "register_failed", err.Error())
+		return
+	}
+	s.issueSession(w, u, http.StatusCreated)
+}
+
+// issueSession mints a 24h admin-scope session token for u and writes the
+// standard {user, token, token_meta} envelope. Shared by login + register.
+func (s *Server) issueSession(w http.ResponseWriter, u *auth.User, status int) {
 	exp := time.Now().Add(24 * time.Hour)
-	plain, tok, err := s.Auth.CreateToken(r.Context(), u.ID, "session-"+time.Now().Format("20060102-150405"),
+	plain, tok, err := s.Auth.CreateToken(context.Background(), u.ID, "session-"+time.Now().Format("20060102-150405"),
 		auth.AllScopes, nil, &exp, false)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSON(w, status, map[string]any{
 		"user":  map[string]any{"id": u.ID, "email": u.Email},
 		"token": plain,
 		"token_meta": map[string]any{

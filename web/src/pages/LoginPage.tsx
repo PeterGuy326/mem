@@ -4,23 +4,44 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Logo } from '@/components/layout/Logo';
 import { useAuth } from '@/hooks/useAuth';
+import { ApiException } from '@/lib/api';
 import { toast } from 'sonner';
 
+type Mode = 'login' | 'register';
+
 export function LoginPage() {
-  const { token, login, loading } = useAuth();
+  const { token, login, register, loading } = useAuth();
   const navigate = useNavigate();
-  const [email, setEmail] = React.useState('demo@mem.dev');
-  const [password, setPassword] = React.useState('demo');
+  const [mode, setMode] = React.useState<Mode>('login');
+  const [email, setEmail] = React.useState('');
+  const [password, setPassword] = React.useState('');
+  const [error, setError] = React.useState<string | null>(null);
 
   if (token) return <Navigate to="/" replace />;
 
+  const isRegister = mode === 'register';
+
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    setError(null);
     try {
-      await login(email, password);
+      if (isRegister) {
+        await register(email, password);
+        toast.success('账号已创建');
+      } else {
+        await login(email, password);
+      }
       navigate('/', { replace: true });
     } catch (err) {
-      toast.error('登录失败', { description: err instanceof Error ? err.message : '请检查邮箱与密码' });
+      // Prefer the backend's human-readable hint over the error code.
+      const msg =
+        err instanceof ApiException
+          ? err.hint || err.message
+          : err instanceof Error
+            ? err.message
+            : '请稍后重试';
+      setError(msg);
+      toast.error(isRegister ? '注册失败' : '登录失败', { description: msg });
     }
   }
 
@@ -37,16 +58,31 @@ export function LoginPage() {
           <Logo className="scale-125" />
           <p className="text-sm text-fg-muted">Agent-Native AI 网盘</p>
         </div>
-        <form
-          onSubmit={onSubmit}
-          className="surface p-6 flex flex-col gap-4 shadow-soft"
-        >
-          <div>
-            <div className="text-base font-semibold text-fg mb-1">登录</div>
-            <div className="text-sm text-fg-muted">W1 demo · 任意邮箱密码均可通过</div>
+        <form onSubmit={onSubmit} className="surface p-6 flex flex-col gap-4 shadow-soft">
+          {/* Mode switch */}
+          <div className="flex rounded-lg bg-bg-inset p-1 text-sm">
+            {(['login', 'register'] as Mode[]).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => {
+                  setMode(m);
+                  setError(null);
+                }}
+                className={
+                  'flex-1 rounded-md py-1.5 font-medium transition-colors ' +
+                  (mode === m ? 'bg-bg-panel text-fg shadow-soft' : 'text-fg-muted hover:text-fg')
+                }
+              >
+                {m === 'login' ? '登录' : '注册'}
+              </button>
+            ))}
           </div>
+
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs text-fg-muted" htmlFor="email">邮箱</label>
+            <label className="text-xs text-fg-muted" htmlFor="email">
+              邮箱
+            </label>
             <Input
               id="email"
               type="email"
@@ -58,20 +94,62 @@ export function LoginPage() {
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs text-fg-muted" htmlFor="password">密码</label>
+            <label className="text-xs text-fg-muted" htmlFor="password">
+              密码
+            </label>
             <Input
               id="password"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-              autoComplete="current-password"
+              placeholder={isRegister ? '至少 6 位' : '••••••••'}
+              autoComplete={isRegister ? 'new-password' : 'current-password'}
+              minLength={isRegister ? 6 : undefined}
               required
             />
           </div>
+
+          {error && (
+            <div className="text-xs text-danger bg-danger/10 border border-danger/30 rounded-md px-3 py-2">
+              {error}
+            </div>
+          )}
+
           <Button type="submit" variant="primary" size="lg" loading={loading} className="mt-1">
-            登录
+            {isRegister ? '创建账号' : '登录'}
           </Button>
+
+          <div className="text-center text-xs text-fg-subtle">
+            {isRegister ? (
+              <>
+                已有账号？
+                <button
+                  type="button"
+                  className="text-accent hover:underline ml-1"
+                  onClick={() => {
+                    setMode('login');
+                    setError(null);
+                  }}
+                >
+                  去登录
+                </button>
+              </>
+            ) : (
+              <>
+                还没有账号？
+                <button
+                  type="button"
+                  className="text-accent hover:underline ml-1"
+                  onClick={() => {
+                    setMode('register');
+                    setError(null);
+                  }}
+                >
+                  立即注册
+                </button>
+              </>
+            )}
+          </div>
         </form>
         <p className="mt-4 text-center text-xs text-fg-subtle">
           自部署版本 · 数据全在本地 · Apache-2.0
