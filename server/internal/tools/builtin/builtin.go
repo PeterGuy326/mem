@@ -37,6 +37,8 @@ func RegisterAll(reg *tools.Registry, client *apiclient.Client) error {
 		registerFolderTree,
 		registerSearch,
 		registerAsk,
+		registerRelated,
+		registerFace,
 	} {
 		if err := fn(reg, client); err != nil {
 			return err
@@ -397,6 +399,104 @@ func registerAsk(reg *tools.Registry, c *apiclient.Client) error {
 			var out map[string]any
 			if err := c.DoJSON(ctx, http.MethodPost, "/v1/ask", body, &out); err != nil {
 				return nil, err
+			}
+			return out, nil
+		},
+	})
+}
+
+// --- related tool ---
+
+func registerRelated(reg *tools.Registry, c *apiclient.Client) error {
+	return reg.Register(tools.Tool{
+		Name: "mem_related",
+		Description: "Given a file_id, return the top-K files most related by embedding " +
+			"similarity — the \"open a contract, surface its receipts/chats\" link-out. " +
+			"Use after mem_search/mem_info when you have a file_id and want neighbours. " +
+			"Returns {file_id, related[]}. SPEC §8.1.",
+		InputSchema: tools.Schema{
+			Type:     "object",
+			Required: []string{"file_id"},
+			Properties: map[string]tools.Property{
+				"file_id": {Type: "string", Description: "Anchor file id to find neighbours of"},
+				"type":    {Type: "string", Description: "MIME prefix filter: image|text|application|audio|video"},
+				"limit":   {Type: "integer", Description: "Max results (default 10, max 100)", Default: 10},
+			},
+		},
+		Run: func(ctx context.Context, args map[string]any) (any, error) {
+			id, _ := args["file_id"].(string)
+			if id == "" {
+				return nil, fmt.Errorf("mem_related: file_id is required")
+			}
+			q := url.Values{}
+			if v, _ := args["type"].(string); v != "" {
+				q.Set("type", v)
+			}
+			if v := args["limit"]; v != nil {
+				q.Set("limit", fmt.Sprintf("%v", v))
+			}
+			path := "/v1/files/" + url.PathEscape(id) + "/related"
+			if enc := q.Encode(); enc != "" {
+				path += "?" + enc
+			}
+			var out map[string]any
+			if err := c.DoJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+				return nil, err
+			}
+			return out, nil
+		},
+	})
+}
+
+// --- face tool ---
+
+func registerFace(reg *tools.Registry, c *apiclient.Client) error {
+	return reg.Register(tools.Tool{
+		Name: "mem_face",
+		Description: "Manage person clusters detected in images. action=list returns " +
+			"{clusters[]} (id + size + name); action=name labels a cluster so later " +
+			"searches like \"photos with Xiao Ming\" resolve; action=merge folds one " +
+			"cluster into another. SPEC §F6.1 / §8.1.",
+		InputSchema: tools.Schema{
+			Type:     "object",
+			Required: []string{"action"},
+			Properties: map[string]tools.Property{
+				"action":     {Type: "string", Description: "list | name | merge", Enum: []string{"list", "name", "merge"}},
+				"cluster_id": {Type: "string", Description: "Target cluster id (required for name/merge; the surviving cluster for merge)"},
+				"name":       {Type: "string", Description: "Person name to assign (required for action=name)"},
+				"merge_id":   {Type: "string", Description: "Cluster id to fold into cluster_id, then removed (required for action=merge)"},
+			},
+		},
+		Run: func(ctx context.Context, args map[string]any) (any, error) {
+			action, _ := args["action"].(string)
+			var out map[string]any
+			switch action {
+			case "list":
+				if err := c.DoJSON(ctx, http.MethodGet, "/v1/faces", nil, &out); err != nil {
+					return nil, err
+				}
+			case "name":
+				id, _ := args["cluster_id"].(string)
+				name, _ := args["name"].(string)
+				if id == "" || name == "" {
+					return nil, fmt.Errorf("mem_face: action=name requires cluster_id and name")
+				}
+				path := "/v1/faces/" + url.PathEscape(id) + "/name"
+				if err := c.DoJSON(ctx, http.MethodPost, path, map[string]any{"name": name}, &out); err != nil {
+					return nil, err
+				}
+			case "merge":
+				id, _ := args["cluster_id"].(string)
+				into, _ := args["merge_id"].(string)
+				if id == "" || into == "" {
+					return nil, fmt.Errorf("mem_face: action=merge requires cluster_id (keep) and merge_id (folded in)")
+				}
+				path := "/v1/faces/" + url.PathEscape(id) + "/merge"
+				if err := c.DoJSON(ctx, http.MethodPost, path, map[string]any{"into": into}, &out); err != nil {
+					return nil, err
+				}
+			default:
+				return nil, fmt.Errorf("mem_face: action must be one of list|name|merge, got %q", action)
 			}
 			return out, nil
 		},

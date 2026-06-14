@@ -58,8 +58,16 @@ Tool flow:
 | `mem_mv` | Move file to a different folder, or rename in place |
 | `mem_folder_tree` | Full folder tree as nested structure |
 
-W3 / W4 additions (`mem_search`, `mem_ask`, `mem_related`, `mem_face`) plug
-into the same registry — see SPEC §8 for their planned shapes.
+## Built-in tools (W3 / W4)
+
+These plug into the same registry and ship today (12 tools total):
+
+| Tool | Description |
+|------|-------------|
+| `mem_search` | Natural-language search (text / visual / auto fuse); ranked files + snippets |
+| `mem_ask` | Cross-file RAG: synthesized answer with citations |
+| `mem_related` | Top-K files related to a `file_id` by embedding similarity |
+| `mem_face` | Person clusters: `action=list` / `name` / `merge` |
 
 ---
 
