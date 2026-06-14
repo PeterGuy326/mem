@@ -92,10 +92,10 @@ def test_processor_protocol_compliance():
         assert callable(inst.process)
 
 
-def test_stub_processors_return_marker():
-    # AudioProcessor is still a W2 stub. PDFProcessor is now real (see
-    # test_pdf_processor_* in test_processor_logic.py) — on a non-PDF payload
-    # it must degrade gracefully (parse_error / text_empty), never stub.
+def test_no_stub_processors():
+    # PDFProcessor and AudioProcessor are now real (see test_pdf_processor_* /
+    # test_audio_processor_* in test_processor_logic.py). On junk payloads they
+    # must degrade gracefully with a clear marker — never the old W1 stub.
     from mem_worker.processors.audio import AudioProcessor
     from mem_worker.processors.pdf import PDFProcessor
 
@@ -106,8 +106,19 @@ def test_stub_processors_return_marker():
     assert r.metadata.get("stub") is not True
     assert "parse_error" in r.metadata or r.metadata.get("text_empty")
 
-    r = AudioProcessor().process(FileRef(
+    # Undecodable audio → ASR raises → asr_error marker, non-fatal. We inject a
+    # failing ASR so the test stays offline (no whisper model download here; the
+    # real model is exercised by the seed Q6-audio assertion end-to-end).
+    from mem_worker.providers.base import ProviderError
+
+    class _BoomASR:
+        name = "boom:asr"
+        def transcribe(self, audio, **kw):
+            raise ProviderError("cannot decode")
+
+    r = AudioProcessor(asr=_BoomASR()).process(FileRef(
         file_id="x", storage_uri="file:///dev/null", mime="audio/mpeg",
         sha256="", user_id="u", data=b"\xff\xfb",
     ))
-    assert r.metadata.get("stub") is True
+    assert r.metadata.get("stub") is not True
+    assert "asr_error" in r.metadata

@@ -344,6 +344,22 @@ upload_demo_data() {
     status=$(echo "$out" | jq -r '.file.index_status // "?"')
     [[ -n "$id" ]] && { ok "put ${name}  id=${id}  status=${status}"; count=$((count + 1)); }
   done
+  # Upload demo audio (for the AudioProcessor / faster-whisper assertion). The
+  # worker transcribes via faster-whisper, then the transcript runs through the
+  # text pipeline — so the recording is searchable by what is said in it.
+  local aud
+  for aud in "${DEMO_DIR}"/audio/*.flac "${DEMO_DIR}"/audio/*.mp3 "${DEMO_DIR}"/audio/*.wav "${DEMO_DIR}"/audio/*.m4a; do
+    [[ -f "$aud" ]] || continue
+    local out name id status
+    out=$(mem put "$aud" --to "$TARGET_FOLDER" --format json) || {
+      warn "audio upload failed: $aud (audio search assertion may skip)"
+      continue
+    }
+    name=$(echo "$out" | jq -r '.file.name // empty')
+    id=$(echo "$out"   | jq -r '.file.id // empty')
+    status=$(echo "$out" | jq -r '.file.index_status // "?"')
+    [[ -n "$id" ]] && { ok "put ${name}  id=${id}  status=${status}"; count=$((count + 1)); }
+  done
   log "uploaded ${count} files to ${TARGET_FOLDER}"
 }
 
@@ -476,6 +492,10 @@ run_assertions() {
   # extracted its text layer and the text pipeline embedded it (PDFProcessor is
   # real, not the W1 stub).
   assert_search_hit "residential lease monthly rent and security deposit terms" "lease_agreement.pdf" "Q5-pdf-lease" || true
+  # Audio ingestion: jfk.flac has no text twin — a hit proves faster-whisper
+  # transcribed the speech and the transcript was embedded (AudioProcessor is
+  # real, not the W1 stub).
+  assert_search_hit "ask what you can do for your country" "jfk.flac" "Q6-audio-jfk" || true
   # Image search (CLIP visual route). Pure cross-modal: the query text never
   # touches the image bytes — a passing hit can only come from CLIP's shared
   # text/image latent space. Self-skips if the worker has no `clip` extra.

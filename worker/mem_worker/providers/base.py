@@ -1,10 +1,11 @@
 """Provider interfaces — Protocols + value objects.
 
-Three families (SPEC §9.3):
+Four families (SPEC §9.3):
 
   * :class:`EmbeddingProvider` — text + image vector encoders
   * :class:`LLMProvider`       — chat / streaming completion
   * :class:`VLMProvider`       — image caption + visual QA
+  * :class:`ASRProvider`       — speech-to-text transcription
 
 Adapters live in sibling modules (``ollama.py``, ``openai.py``, …) and are
 constructed by :func:`mem_worker.providers.registry.get_*_provider`.
@@ -75,4 +76,24 @@ class VLMProvider(Protocol):
         ...
 
     def vqa(self, image: bytes, question: str, **kwargs: Any) -> str:
+        ...
+
+
+@dataclass(slots=True)
+class Transcription:
+    """Result of speech-to-text: the transcript plus light metadata."""
+
+    text: str
+    language: str = ""        # detected language code, e.g. "en"
+    duration: float = 0.0     # audio duration in seconds (0 if unknown)
+
+
+@runtime_checkable
+class ASRProvider(Protocol):
+    """Automatic speech recognition (speech-to-text)."""
+
+    name: str  # e.g. "faster-whisper:tiny"
+
+    def transcribe(self, audio: bytes, **kwargs: Any) -> Transcription:
+        """Transcribe audio bytes (any ffmpeg-decodable container)."""
         ...

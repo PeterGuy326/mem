@@ -73,6 +73,7 @@ class Settings(BaseSettings):
     )
     default_llm: str = Field(default="ollama:qwen2.5:7b", alias="MEM_DEFAULT_LLM")
     default_vlm: str = Field(default="ollama:minicpm-v", alias="MEM_DEFAULT_VLM")
+    default_asr: str = Field(default="faster-whisper:tiny", alias="MEM_DEFAULT_ASR")
 
     # ---- Pipeline knobs ----
     text_chunk_size: int = Field(default=1000, alias="MEM_TEXT_CHUNK_SIZE")

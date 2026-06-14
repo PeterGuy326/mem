@@ -311,3 +311,79 @@ def test_pdf_processor_malformed_is_non_fatal():
     # surface a marker and must NOT raise / produce embeddings.
     assert "parse_error" in r.metadata or r.metadata.get("text_empty")
     assert "text" not in r.embeddings
+
+
+# ---------------------------------------------------------------------------
+# AudioProcessor
+# ---------------------------------------------------------------------------
+
+class FakeASR:
+    name = "fake:asr"
+
+    def __init__(self, text="hello world", language="en", duration=1.5, boom=False):
+        from mem_worker.providers.base import Transcription
+        self._t = Transcription(text=text, language=language, duration=duration)
+        self._boom = boom
+
+    def transcribe(self, audio, **kw):
+        if self._boom:
+            from mem_worker.providers.base import ProviderError
+            raise ProviderError("asr down")
+        return self._t
+
+
+def test_audio_processor_transcribes_and_runs_text_pipeline():
+    from mem_worker.processors.audio import AudioProcessor
+
+    # >=200 chars so TextProcessor's summary path runs (short clips skip it).
+    transcript = (
+        "And so my fellow Americans ask not what your country can do for you "
+        "ask what you can do for your country. My fellow citizens of the world "
+        "ask not what America will do for you but what together we can do for "
+        "the freedom of man across the whole of this great planet."
+    )
+    asr = FakeASR(text=transcript, language="en", duration=11.0)
+    emb, llm = FakeEmbedder(), FakeLLM(reply="A patriotic call to service.")
+    proc = AudioProcessor(asr=asr, embedder=emb, llm=llm)
+    fref = FileRef(
+        file_id="aud1", storage_uri="file:///jfk.flac", mime="audio/flac",
+        sha256="", user_id="u", data=b"FAKE-AUDIO-BYTES",
+    )
+    r = proc.process(fref)
+
+    assert r.processor == "audio"
+    assert r.metadata["language"] == "en"
+    assert r.metadata["duration_sec"] == 11.0
+    assert r.metadata["transcript_char_length"] == len(transcript)
+    assert r.metadata["asr_provider"] == "fake:asr"
+    # Text pipeline ran on the transcript.
+    assert "text" in r.embeddings and r.embeddings["text"].rows
+    assert r.summary == "A patriotic call to service."
+    assert "country" in emb.calls[0][0]
+
+
+def test_audio_processor_asr_failure_is_non_fatal():
+    from mem_worker.processors.audio import AudioProcessor
+
+    proc = AudioProcessor(asr=FakeASR(boom=True), embedder=FakeEmbedder(), llm=FakeLLM())
+    fref = FileRef(
+        file_id="aud2", storage_uri="file:///x.mp3", mime="audio/mpeg",
+        sha256="", user_id="u", data=b"\xff\xfb",
+    )
+    r = proc.process(fref)
+    assert r.processor == "audio"
+    assert "asr_error" in r.metadata
+    assert "text" not in r.embeddings
+
+
+def test_audio_processor_empty_transcript_marker():
+    from mem_worker.processors.audio import AudioProcessor
+
+    proc = AudioProcessor(asr=FakeASR(text="   "), embedder=FakeEmbedder(), llm=FakeLLM())
+    fref = FileRef(
+        file_id="aud3", storage_uri="file:///silent.wav", mime="audio/wav",
+        sha256="", user_id="u", data=b"RIFF....",
+    )
+    r = proc.process(fref)
+    assert r.metadata.get("transcript_empty") is True
+    assert "text" not in r.embeddings

@@ -18,7 +18,7 @@ from typing import Optional
 from . import anthropic as anthropic_mod
 from . import ollama as ollama_mod
 from . import openai as openai_mod
-from .base import EmbeddingProvider, LLMProvider, ProviderError, VLMProvider
+from .base import ASRProvider, EmbeddingProvider, LLMProvider, ProviderError, VLMProvider
 
 
 def parse_spec(spec: str) -> tuple[str, str]:
@@ -84,6 +84,16 @@ def get_vlm_provider(spec: str) -> VLMProvider:
     if vendor == "anthropic":
         return anthropic_mod.AnthropicVLMProvider(model=model)
     raise ProviderError(f"no VLMProvider for vendor {vendor!r}")
+
+
+def get_asr_provider(spec: str) -> ASRProvider:
+    """Construct an :class:`ASRProvider` for ``spec``."""
+    vendor, model = parse_spec(spec)
+    if vendor in ("faster-whisper", "whisper"):
+        from . import whisper as whisper_mod  # lazy: pulls in faster-whisper
+
+        return whisper_mod.FasterWhisperASRProvider(model=model)
+    raise ProviderError(f"no ASRProvider for vendor {vendor!r}")
 
 
 # Convenience: build all three from defaults in one call.
