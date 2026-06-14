@@ -162,18 +162,26 @@ preflight() {
     || fatal "curl is required"
 
   # Bare-metal stack (no Docker): admin bootstrap goes through a local psql
-  # against MEM_DB_URL. Resolve a psql binary (brew keg-only postgres@16 is
+  # against MEM_DB_URL. Resolve a psql binary (brew keg-only postgres@NN is
   # not on PATH by default — dev_up.sh exports it, but probe common locations
-  # here too so the script also works when run standalone).
+  # here too so the script also works when run standalone). Mirror dev_up.sh's
+  # version probe order (@17/@18/@16) so detection stays consistent across both.
   PSQL_BIN="${PSQL_BIN:-}"
   if [[ -z "$PSQL_BIN" ]]; then
     if command -v psql >/dev/null 2>&1; then
       PSQL_BIN="psql"
-    elif [[ -x /home/linuxbrew/.linuxbrew/opt/postgresql@16/bin/psql ]]; then
-      PSQL_BIN="/home/linuxbrew/.linuxbrew/opt/postgresql@16/bin/psql"
     else
-      fatal "psql not found (set PSQL_BIN or put postgres@16 bin on PATH)"
+      brew_prefix="${HOMEBREW_PREFIX:-/home/linuxbrew/.linuxbrew}"
+      for v in 17 18 16; do
+        cand="${brew_prefix}/opt/postgresql@${v}/bin/psql"
+        if [[ -x "$cand" ]]; then
+          PSQL_BIN="$cand"
+          break
+        fi
+      done
     fi
+    [[ -n "$PSQL_BIN" ]] \
+      || fatal "psql not found (set PSQL_BIN, or run: brew install postgresql@17)"
   fi
   ok "psql: $PSQL_BIN"
 
