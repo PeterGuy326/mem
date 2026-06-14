@@ -7,6 +7,7 @@ import {
   FileQuestion,
 } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { AuthedImage } from '@/components/ui/AuthedImage';
 import type { FileKind, IndexStatus, MemFile } from '@/lib/types';
 import type { FolderNode } from '@/lib/folder-tree';
 import { useExplorer } from './ExplorerContext';
@@ -270,13 +271,11 @@ function FileCard({
       title={file.name}
     >
       <div className="relative w-full aspect-square overflow-hidden rounded-md bg-bg-inset grid place-items-center">
-        {file.kind === 'image' && file.thumbnail_url ? (
-          <img
-            src={file.thumbnail_url}
-            alt=""
-            loading="lazy"
-            draggable={false}
-            className="h-full w-full object-cover"
+        {file.kind === 'image' ? (
+          <AuthedImage
+            fileId={file.id}
+            alt={file.name}
+            fallback={<KindIcon kind={file.kind} />}
           />
         ) : (
           <KindIcon kind={file.kind} />

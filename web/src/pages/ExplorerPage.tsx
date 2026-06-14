@@ -41,6 +41,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Button } from '@/components/ui/Button';
 import { readView, writeView, type ExplorerView } from '@/components/explorer/viewMode';
+import { downloadFile } from '@/lib/api';
 import type { MemFile } from '@/lib/types';
 
 /** Outer page handles current path from URL. Inner page does the work. */
@@ -313,14 +314,7 @@ function ExplorerLayout({ currentPath }: { currentPath: string }) {
             key: 'download',
             label: '下载',
             onSelect: () => {
-              if (file.download_url) {
-                const a = document.createElement('a');
-                a.href = file.download_url;
-                a.download = file.name;
-                a.click();
-              } else {
-                toast.error('下载链接不可用');
-              }
+              downloadFile(file.id, file.name).catch(() => toast.error('下载失败'));
             },
           },
           {

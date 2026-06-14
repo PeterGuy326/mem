@@ -23,6 +23,9 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { useDeleteFile, useFile, useRelated } from '@/hooks/useFiles';
+import { useAuthedBlobUrl } from '@/hooks/useAuthedBlob';
+import { AuthedImage } from '@/components/ui/AuthedImage';
+import { downloadFile } from '@/lib/api';
 import { formatBytes, formatDateTime } from '@/lib/format';
 import { toast } from 'sonner';
 import type { FileKind, MemFile } from '@/lib/types';
@@ -91,14 +94,16 @@ export function FileDetailPage() {
           <Copy className="h-3.5 w-3.5" />
           复制 ID
         </Button>
-        {file.download_url && (
-          <a href={file.download_url} download={file.name}>
-            <Button variant="secondary" size="sm">
-              <Download className="h-3.5 w-3.5" />
-              下载
-            </Button>
-          </a>
-        )}
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => {
+            downloadFile(file.id, file.name).catch(() => toast.error('下载失败'));
+          }}
+        >
+          <Download className="h-3.5 w-3.5" />
+          下载
+        </Button>
         <Button variant="danger" size="sm" onClick={() => setConfirmOpen(true)}>
           <Trash2 className="h-3.5 w-3.5" />
           删除
@@ -240,13 +245,18 @@ export function FileDetailPage() {
 }
 
 function PreviewArea({ file }: { file: MemFile }) {
-  if (file.kind === 'image' && file.preview_url) {
+  if (file.kind === 'image') {
     return (
-      <div className="bg-bg-inset/60 flex items-center justify-center">
-        <img
-          src={file.preview_url}
+      <div className="bg-bg-inset/60 flex items-center justify-center min-h-[280px]">
+        <AuthedImage
+          fileId={file.id}
           alt={file.caption ?? file.name}
           className="max-h-[72vh] w-auto object-contain"
+          fallback={
+            <div className="p-12 text-fg-subtle">
+              <ImageIcon className="h-10 w-10" />
+            </div>
+          }
         />
       </div>
     );
@@ -263,27 +273,32 @@ function PreviewArea({ file }: { file: MemFile }) {
     );
   }
   if (file.kind === 'audio') {
-    return (
-      <div className="p-12 flex flex-col items-center gap-4">
-        <div className="h-20 w-20 rounded-2xl bg-accent/10 text-accent grid place-items-center">
-          <Music className="h-8 w-8" />
-        </div>
-        <audio
-          controls
-          src={file.download_url ?? undefined}
-          className="w-full max-w-md"
-        />
-        <div className="text-xs text-fg-muted text-center max-w-md">
-          {file.summary ?? '音频 ASR 转写完成后会出现在 AI 洞察区。'}
-        </div>
-      </div>
-    );
+    return <AudioPreview file={file} />;
   }
   return (
     <div className="p-12 flex flex-col items-center gap-3 text-fg-muted">
       <FileQuestion className="h-10 w-10 text-fg-subtle" />
       <div className="text-sm">无法预览此文件类型</div>
       <div className="text-2xs text-fg-subtle">{file.mime}</div>
+    </div>
+  );
+}
+
+function AudioPreview({ file }: { file: MemFile }) {
+  const { url, isLoading } = useAuthedBlobUrl(file.id);
+  return (
+    <div className="p-12 flex flex-col items-center gap-4">
+      <div className="h-20 w-20 rounded-2xl bg-accent/10 text-accent grid place-items-center">
+        <Music className="h-8 w-8" />
+      </div>
+      {url ? (
+        <audio controls src={url} className="w-full max-w-md" />
+      ) : (
+        <div className="text-2xs text-fg-subtle">{isLoading ? '加载音频…' : '音频不可用'}</div>
+      )}
+      <div className="text-xs text-fg-muted text-center max-w-md">
+        {file.summary ?? '音频 ASR 转写完成后会出现在 AI 洞察区。'}
+      </div>
     </div>
   );
 }
@@ -344,8 +359,8 @@ function RelatedRow({
       className="group flex items-center gap-3 px-4 py-2.5 hover:bg-bg-inset/60 transition-colors"
     >
       <div className="h-9 w-9 flex-none rounded-md overflow-hidden bg-bg-inset border border-border grid place-items-center">
-        {file.thumbnail_url ? (
-          <img src={file.thumbnail_url} alt="" className="h-full w-full object-cover" loading="lazy" />
+        {file.kind === 'image' ? (
+          <AuthedImage fileId={file.id} fallback={<Icon className="h-3.5 w-3.5 text-fg-subtle" />} />
         ) : (
           <Icon className="h-3.5 w-3.5 text-fg-subtle" />
         )}

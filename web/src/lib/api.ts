@@ -96,9 +96,48 @@ function safeParse(text: string): unknown {
   }
 }
 
+/**
+ * Fetch a raw binary body (image / audio / any blob) with the bearer token
+ * attached. `<img src>` / `<audio src>` can't carry an Authorization header,
+ * so we pull the bytes here and the caller turns them into an object URL.
+ */
+export async function apiBlob(path: string, opts: RequestOptions = {}): Promise<Blob> {
+  // Drop body/formData — a binary GET never carries them; keeping them would
+  // leak `body: unknown` into fetch's RequestInit.
+  const { query, headers, body: _body, formData: _formData, ...rest } = opts;
+  void _body;
+  void _formData;
+  const finalHeaders: Record<string, string> = {
+    ...(headers as Record<string, string> | undefined),
+  };
+  const token = getToken();
+  if (token) finalHeaders['Authorization'] = `Bearer ${token}`;
+
+  const url = `${API_BASE}${path}${buildQuery(query)}`;
+  const res = await fetch(url, { ...rest, headers: finalHeaders });
+  if (!res.ok) {
+    throw new ApiException({ error: res.statusText || 'blob fetch failed', status: res.status });
+  }
+  return res.blob();
+}
+
+/** Download a file's bytes (with auth) and trigger a browser save dialog. */
+export async function downloadFile(fileId: string, name: string): Promise<void> {
+  const blob = await apiBlob(`/files/${fileId}/content`);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 /* Convenience verbs */
 export const api = {
   get: <T>(path: string, opts?: RequestOptions) => apiFetch<T>(path, { ...opts, method: 'GET' }),
+  blob: (path: string, opts?: RequestOptions) => apiBlob(path, { ...opts, method: 'GET' }),
   post: <T>(path: string, body?: unknown, opts?: RequestOptions) =>
     apiFetch<T>(path, { ...opts, method: 'POST', body }),
   put: <T>(path: string, body?: unknown, opts?: RequestOptions) =>

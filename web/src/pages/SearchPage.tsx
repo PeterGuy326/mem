@@ -8,6 +8,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Kbd } from '@/components/ui/Kbd';
 import { cn } from '@/lib/cn';
+import { AuthedImage } from '@/components/ui/AuthedImage';
 import { useSearch } from '@/hooks/useFiles';
 import { formatDate } from '@/lib/format';
 import type { FileKind, SearchResult, SearchTypeFilter } from '@/lib/types';
@@ -282,12 +283,16 @@ function ImageResultCard({ result }: { result: SearchResult }) {
                  bg-bg-panel hover:border-border-strong hover:shadow-soft transition-all"
     >
       <div className="relative bg-bg-inset">
-        {f.thumbnail_url ? (
-          <img
-            src={f.thumbnail_url}
+        {f.kind === 'image' ? (
+          <AuthedImage
+            fileId={f.id}
             alt={f.caption ?? f.name}
-            loading="lazy"
-            className="w-full h-auto block transition-transform duration-500 group-hover:scale-[1.02]"
+            className="w-full h-auto object-contain block transition-transform duration-500 group-hover:scale-[1.02]"
+            fallback={
+              <div className="aspect-[4/3] grid place-items-center text-fg-subtle">
+                <ImageIcon className="h-8 w-8" />
+              </div>
+            }
           />
         ) : (
           <div className="aspect-[4/3] grid place-items-center text-fg-subtle">

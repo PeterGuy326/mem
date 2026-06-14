@@ -25,11 +25,32 @@ export const searchKeys = {
   query: (params: Record<string, unknown>) => ['search', params] as const,
 };
 
+/**
+ * memd returns the raw `files` row — it has no derived `kind` / `*_url` fields,
+ * so we backfill them client-side. `kind` (computed from mime) drives icons,
+ * thumbnails, and preview routing across the UI.
+ */
+function normalizeFile(f: MemFile): MemFile {
+  return {
+    ...f,
+    caption: f.caption ?? null,
+    timeline_at: f.timeline_at ?? null,
+    geo: f.geo ?? null,
+    kind: f.kind ?? mimeToKind(f.mime),
+    preview_url: f.preview_url ?? null,
+    thumbnail_url: f.thumbnail_url ?? null,
+    download_url: f.download_url ?? null,
+  };
+}
+
 /** List direct children of a folder by absolute virtual path. */
 export function useFilesByPath(path: string) {
   return useQuery({
     queryKey: fileKeys.byPath(path),
-    queryFn: () => api.get<ListFilesResponse>('/files', { query: { path, limit: 1000 } }),
+    queryFn: async () => {
+      const raw = await api.get<ListFilesResponse>('/files', { query: { path, limit: 1000 } });
+      return { ...raw, files: (raw.files ?? []).map(normalizeFile) };
+    },
   });
 }
 
@@ -68,7 +89,7 @@ export function useFolderTree() {
 export function useFile(id: string | undefined) {
   return useQuery({
     queryKey: fileKeys.detail(id ?? ''),
-    queryFn: () => api.get<MemFile>(`/files/${id}`),
+    queryFn: async () => normalizeFile(await api.get<MemFile>(`/files/${id}`)),
     enabled: !!id,
   });
 }
