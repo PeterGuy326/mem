@@ -332,5 +332,5 @@ echo "    worker   : localhost:${WORKER_PORT} (gRPC)"
 echo "    memd     : http://localhost:${MEMD_ADDR#:}  (healthz OK)"
 echo "    logs     : ${LOG_DIR}/"
 echo
-echo "Next: bash scripts/seed_demo_data.sh   # 7 docs + 3/3 vector-search assertions"
+echo "Next: bash scripts/seed_demo_data.sh   # seed demo data + 5 search assertions (text · PDF · CLIP image)"
 echo "Stop: bash scripts/dev_down.sh"

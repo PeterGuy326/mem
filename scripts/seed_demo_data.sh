@@ -307,6 +307,27 @@ upload_demo_data() {
     ok "put ${name}  id=${id}  status=${status}"
     count=$((count + 1))
   done
+  # Upload demo PDFs (for the PDFProcessor assertion). pypdf extracts the text
+  # layer, then the same chunk+embed+summarize text pipeline runs — so a PDF is
+  # searchable by its content just like a .md file.
+  local pdf
+  for pdf in "${DEMO_DIR}"/*.pdf; do
+    [[ -f "$pdf" ]] || continue
+    local out name id status
+    out=$(mem put "$pdf" --to "$TARGET_FOLDER" --format json) || {
+      err "pdf upload failed: $pdf"
+      return 1
+    }
+    name=$(echo "$out" | jq -r '.file.name // empty')
+    id=$(echo "$out"   | jq -r '.file.id // empty')
+    status=$(echo "$out" | jq -r '.file.index_status // "?"')
+    if [[ -z "$id" ]]; then
+      err "pdf upload response missing id; raw=${out}"
+      return 1
+    fi
+    ok "put ${name}  id=${id}  status=${status}"
+    count=$((count + 1))
+  done
   # Also upload demo images (for the image-search / CLIP assertion). These are
   # real open-license photos in demo_data/images/. If the directory is empty
   # the loop is a no-op and the visual assertion later self-skips.
@@ -451,6 +472,10 @@ run_assertions() {
   assert_search_hit "a dog on a meadow"                          "golden_retriever.md"  "Q1-dog-meadow"   || true
   assert_search_hit "a vacation in southwest china"              "yunnan_trip_2012.md"  "Q2-yunnan-trip"  || true
   assert_search_hit "fermentation chemistry in a kitchen jar"    "sourdough_starter.md" "Q3-sourdough"    || true
+  # PDF ingestion: lease_agreement.pdf has no text twin — a hit proves pypdf
+  # extracted its text layer and the text pipeline embedded it (PDFProcessor is
+  # real, not the W1 stub).
+  assert_search_hit "residential lease monthly rent and security deposit terms" "lease_agreement.pdf" "Q5-pdf-lease" || true
   # Image search (CLIP visual route). Pure cross-modal: the query text never
   # touches the image bytes — a passing hit can only come from CLIP's shared
   # text/image latent space. Self-skips if the worker has no `clip` extra.

@@ -22,14 +22,16 @@ from mem_worker.providers.base import Message
 
 class FakeEmbedder:
     name = "fake:embed"
-    dim = 4
 
-    def __init__(self):
+    def __init__(self, dim: int = 4):
+        # dim defaults to 4 for text tests; the image path needs 512 to clear
+        # ImageProcessor's visual-dim guard (CLIP ViT-B/32 schema = vector(512)).
+        self.dim = dim
         self.calls: list[list[str]] = []
 
     def embed_text(self, texts):
         self.calls.append(list(texts))
-        return [[float(len(t)), 0.0, 0.0, 0.0] for t in texts]
+        return [[float(len(t))] + [0.0] * (self.dim - 1) for t in texts]
 
     def embed_image(self, images):
         raise NotImplementedError
@@ -179,7 +181,7 @@ def _png_bytes() -> bytes:
 
 def test_image_processor_runs_vlm_and_embeds():
     vlm = FakeVLM(caption="red rectangle")
-    embedder = FakeEmbedder()
+    embedder = FakeEmbedder(dim=512)  # match the visual schema so the vec isn't skipped
     proc = ImageProcessor(vlm=vlm, embedder=embedder)
 
     fref = FileRef(
@@ -227,3 +229,85 @@ def test_image_processor_handles_vlm_failure():
     assert r.caption is None
     assert "vlm_error" in r.metadata
     assert "visual" not in r.embeddings
+
+
+# ---------------------------------------------------------------------------
+# PDFProcessor
+# ---------------------------------------------------------------------------
+
+def _pdf_bytes(lines):
+    """Build a minimal valid single-page PDF with an extractable text layer."""
+    def esc(s):
+        return s.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
+
+    parts = ["BT", "/F1 14 Tf", "72 720 Td", "16 TL"]
+    for i, ln in enumerate(lines):
+        if i:
+            parts.append("T*")
+        parts.append("(%s) Tj" % esc(ln))
+    parts.append("ET")
+    stream = "\n".join(parts).encode("latin-1")
+
+    objs = [
+        b"<</Type /Catalog /Pages 2 0 R>>",
+        b"<</Type /Pages /Kids [3 0 R] /Count 1>>",
+        b"<</Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Resources <</Font <</F1 4 0 R>>>> /Contents 5 0 R>>",
+        b"<</Type /Font /Subtype /Type1 /BaseFont /Helvetica>>",
+        b"<</Length %d>>\nstream\n" % len(stream) + stream + b"\nendstream",
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for i, body in enumerate(objs, start=1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % i + body + b"\nendobj\n"
+    xref_pos = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs) + 1)
+    for off in offsets:
+        out += b"%010d 00000 n \n" % off
+    out += b"trailer\n<</Size %d /Root 1 0 R>>\nstartxref\n%d\n%%%%EOF\n" % (
+        len(objs) + 1, xref_pos)
+    return bytes(out)
+
+
+def test_pdf_processor_extracts_text_and_runs_text_pipeline():
+    from mem_worker.processors.pdf import PDFProcessor
+
+    lines = [
+        "Residential Lease Agreement",
+        "Monthly rent: 1800 RMB due on the first day of each month",
+        "Security deposit equals two months rent, refundable on move-out",
+        "The tenant shall not sublet the premises without written consent",
+    ]
+    emb, llm = FakeEmbedder(), FakeLLM(reply="A lease summary.")
+    proc = PDFProcessor(embedder=emb, llm=llm)
+    fref = FileRef(
+        file_id="pdf1", storage_uri="file:///lease.pdf", mime="application/pdf",
+        sha256="", user_id="u", data=_pdf_bytes(lines),
+    )
+    r = proc.process(fref)
+
+    assert r.processor == "pdf"
+    assert r.metadata["page_count"] == 1
+    assert r.metadata["extracted_char_length"] > 0
+    assert r.metadata["source_mime"] == "application/pdf"
+    # Text pipeline ran: embeddings produced + summary delegated to the LLM.
+    assert "text" in r.embeddings and r.embeddings["text"].rows
+    assert r.summary == "A lease summary."
+    assert "1800 RMB" in emb.calls[0][0]
+
+
+def test_pdf_processor_malformed_is_non_fatal():
+    from mem_worker.processors.pdf import PDFProcessor
+
+    proc = PDFProcessor(embedder=FakeEmbedder(), llm=FakeLLM())
+    fref = FileRef(
+        file_id="pdf2", storage_uri="file:///x.pdf", mime="application/pdf",
+        sha256="", user_id="u", data=b"%PDF-1.4 not really a pdf",
+    )
+    r = proc.process(fref)
+    assert r.processor == "pdf"
+    # Either it parsed zero pages (text_empty) or failed to parse — both must
+    # surface a marker and must NOT raise / produce embeddings.
+    assert "parse_error" in r.metadata or r.metadata.get("text_empty")
+    assert "text" not in r.embeddings

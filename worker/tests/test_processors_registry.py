@@ -93,15 +93,18 @@ def test_processor_protocol_compliance():
 
 
 def test_stub_processors_return_marker():
+    # AudioProcessor is still a W2 stub. PDFProcessor is now real (see
+    # test_pdf_processor_* in test_processor_logic.py) — on a non-PDF payload
+    # it must degrade gracefully (parse_error / text_empty), never stub.
     from mem_worker.processors.audio import AudioProcessor
     from mem_worker.processors.pdf import PDFProcessor
 
-    fref = FileRef(
+    r = PDFProcessor().process(FileRef(
         file_id="x", storage_uri="file:///dev/null", mime="application/pdf",
         sha256="", user_id="u", data=b"%PDF-",
-    )
-    r = PDFProcessor().process(fref)
-    assert r.metadata.get("stub") is True
+    ))
+    assert r.metadata.get("stub") is not True
+    assert "parse_error" in r.metadata or r.metadata.get("text_empty")
 
     r = AudioProcessor().process(FileRef(
         file_id="x", storage_uri="file:///dev/null", mime="audio/mpeg",
