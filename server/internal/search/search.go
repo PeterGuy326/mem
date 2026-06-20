@@ -288,7 +288,11 @@ func (s *Service) scanHits(ctx context.Context, sql string, args []any, route st
 			return nil, fmt.Errorf("scan hit: %w", err)
 		}
 		if len(h.Snippet) > 240 {
-			h.Snippet = h.Snippet[:237] + "..."
+			// Truncate on a byte budget but drop any partial trailing
+			// multibyte char — a raw [:237] byte slice can split a UTF-8
+			// rune (e.g. Chinese text), yielding invalid UTF-8 that later
+			// breaks gRPC marshaling in the ask/chat path.
+			h.Snippet = strings.ToValidUTF8(h.Snippet[:237], "") + "..."
 		}
 		h.Source = route
 		out = append(out, h)
