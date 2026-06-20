@@ -25,6 +25,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { useDeleteFile, useFile, useRelated } from '@/hooks/useFiles';
 import { useAuthedBlobUrl } from '@/hooks/useAuthedBlob';
 import { AuthedImage } from '@/components/ui/AuthedImage';
+import { Markdown } from '@/components/ui/Markdown';
 import { downloadFile } from '@/lib/api';
 import { formatBytes, formatDateTime } from '@/lib/format';
 import { toast } from 'sonner';
@@ -245,41 +246,125 @@ export function FileDetailPage() {
 }
 
 function PreviewArea({ file }: { file: MemFile }) {
-  if (file.kind === 'image') {
-    return (
-      <div className="bg-bg-inset/60 flex items-center justify-center min-h-[280px]">
-        <AuthedImage
-          fileId={file.id}
+  const mime = file.mime || '';
+  if (file.kind === 'image') return <ImagePreview file={file} />;
+  if (file.kind === 'pdf' || mime === 'application/pdf') return <PdfPreview file={file} />;
+  if (file.kind === 'video' || mime.startsWith('video/')) return <VideoPreview file={file} />;
+  if (file.kind === 'audio' || mime.startsWith('audio/')) return <AudioPreview file={file} />;
+  if (
+    file.kind === 'text' ||
+    file.kind === 'doc' ||
+    mime.startsWith('text/') ||
+    mime === 'application/json'
+  )
+    return <TextPreview file={file} />;
+  return <UnsupportedPreview file={file} />;
+}
+
+/** Full-bleed image, contained (no crop) — distinct from the cover-cropped grid thumb. */
+function ImagePreview({ file }: { file: MemFile }) {
+  const { url, isLoading } = useAuthedBlobUrl(file.id);
+  return (
+    <div className="bg-bg-inset/60 flex items-center justify-center min-h-[280px]">
+      {url ? (
+        <img
+          src={url}
           alt={file.caption ?? file.name}
           className="max-h-[72vh] w-auto object-contain"
-          fallback={
-            <div className="p-12 text-fg-subtle">
-              <ImageIcon className="h-10 w-10" />
-            </div>
-          }
+          draggable={false}
         />
-      </div>
-    );
-  }
-  if (file.kind === 'text' || file.kind === 'pdf' || file.kind === 'doc') {
-    return (
-      <div className="p-8 max-h-[72vh] overflow-y-auto">
-        <div className="font-mono text-xs text-fg-muted whitespace-pre-wrap leading-relaxed">
-          {file.summary
-            ? file.summary
-            : '（文本预览占位 — 后端接入后会展示分块原文或 PDF 转写。）'}
+      ) : (
+        <div className="p-12 text-fg-subtle">
+          {isLoading ? (
+            <div className="h-10 w-10 animate-pulse rounded bg-bg-inset" />
+          ) : (
+            <ImageIcon className="h-10 w-10" />
+          )}
         </div>
+      )}
+    </div>
+  );
+}
+
+/** Native browser PDF viewer via a blob URL in an iframe (renders real pages). */
+function PdfPreview({ file }: { file: MemFile }) {
+  const { url, isLoading, isError } = useAuthedBlobUrl(file.id);
+  if (isLoading)
+    return <div className="h-[72vh] w-full animate-pulse bg-bg-inset/60" />;
+  if (isError || !url) return <UnsupportedPreview file={file} />;
+  return (
+    <iframe
+      src={`${url}#view=FitH`}
+      title={file.name}
+      className="w-full h-[72vh] border-0 bg-white"
+    />
+  );
+}
+
+function VideoPreview({ file }: { file: MemFile }) {
+  const { url, isLoading } = useAuthedBlobUrl(file.id);
+  return (
+    <div className="bg-black flex items-center justify-center min-h-[280px]">
+      {url ? (
+        <video controls src={url} className="max-h-[72vh] w-auto" />
+      ) : (
+        <div className="p-12 text-2xs text-fg-subtle">{isLoading ? '加载视频…' : '视频不可用'}</div>
+      )}
+    </div>
+  );
+}
+
+/** Fetch the file's real text via its blob URL and render it (Markdown for .md). */
+function TextPreview({ file }: { file: MemFile }) {
+  const { url, isLoading } = useAuthedBlobUrl(file.id);
+  const [text, setText] = React.useState<string | null>(null);
+  const [err, setErr] = React.useState(false);
+  React.useEffect(() => {
+    if (!url) return;
+    let alive = true;
+    fetch(url)
+      .then((r) => r.text())
+      .then((t) => alive && setText(t))
+      .catch(() => alive && setErr(true));
+    return () => {
+      alive = false;
+    };
+  }, [url]);
+
+  const isMarkdown = /\.(md|markdown)$/i.test(file.name) || file.mime === 'text/markdown';
+
+  if (isLoading || (text === null && !err))
+    return (
+      <div className="p-8 space-y-3 max-h-[72vh]">
+        <Skeleton className="h-4 w-5/6" />
+        <Skeleton className="h-4 w-4/6" />
+        <Skeleton className="h-4 w-3/4" />
       </div>
     );
-  }
-  if (file.kind === 'audio') {
-    return <AudioPreview file={file} />;
-  }
+  if (err || text === null) return <UnsupportedPreview file={file} />;
+
+  return (
+    <div className="p-8 max-h-[72vh] overflow-y-auto">
+      {isMarkdown ? (
+        <Markdown className="text-sm text-fg">{text}</Markdown>
+      ) : (
+        <pre className="font-mono text-xs text-fg-muted whitespace-pre-wrap leading-relaxed">
+          {text}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+function UnsupportedPreview({ file }: { file: MemFile }) {
   return (
     <div className="p-12 flex flex-col items-center gap-3 text-fg-muted">
       <FileQuestion className="h-10 w-10 text-fg-subtle" />
-      <div className="text-sm">无法预览此文件类型</div>
+      <div className="text-sm">无法直接预览此文件类型</div>
       <div className="text-2xs text-fg-subtle">{file.mime}</div>
+      <Button variant="secondary" size="sm" onClick={() => downloadFile(file.id, file.name)}>
+        <Download className="h-4 w-4" /> 下载查看
+      </Button>
     </div>
   );
 }
