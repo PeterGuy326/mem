@@ -247,11 +247,13 @@ start_worker() {
   # caption-text vector that the 512-d visual guard rejects, leaving
   # embeddings_visual empty and "image search" effectively disabled.
   if command -v uv >/dev/null 2>&1; then
-    log "syncing worker deps (uv sync --extra clip --extra test)"
+    log "syncing worker deps (uv sync --extra clip --extra test --extra face)"
     # --extra test keeps pytest in the venv across restarts; without it a sync
     # would prune the test deps and `python -m pytest` breaks after dev_up.
-    ( cd "${REPO_ROOT}/worker" && uv sync --extra clip --extra test >"${LOG_DIR}/worker_uv_sync.log" 2>&1 ) \
-      || warn "uv sync --extra clip --extra test failed — see ${LOG_DIR}/worker_uv_sync.log; image search may be unavailable"
+    # --extra face keeps insightface (buffalo_l face detection) installed;
+    # without it a sync would prune insightface and the Faces feature breaks.
+    ( cd "${REPO_ROOT}/worker" && uv sync --extra clip --extra test --extra face >"${LOG_DIR}/worker_uv_sync.log" 2>&1 ) \
+      || warn "uv sync --extra clip --extra test --extra face failed — see ${LOG_DIR}/worker_uv_sync.log; image search may be unavailable"
   else
     warn "uv not on PATH; skipping clip dependency sync (image search needs: cd worker && uv sync --extra clip)"
   fi
