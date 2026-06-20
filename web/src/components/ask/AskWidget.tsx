@@ -36,12 +36,13 @@ export function AskWidget() {
       <button
         onClick={() => setOpen((o) => !o)}
         aria-label={t('ask.title')}
-        className="fixed bottom-5 right-5 z-40 grid h-13 w-13 place-items-center rounded-full
-                   bg-accent text-white shadow-lg shadow-accent/30 transition-transform
-                   hover:scale-105 active:scale-95"
-        style={{ height: 52, width: 52 }}
+        className={`fixed bottom-5 right-5 z-40 grid place-items-center rounded-full text-white
+                    bg-gradient-to-br from-accent-hover to-accent-muted
+                    transition-all duration-200 hover:scale-105 active:scale-95
+                    ${open ? 'rotate-90' : 'animate-breathe'}`}
+        style={{ height: 54, width: 54 }}
       >
-        {open ? <X className="h-5 w-5" /> : <Sparkles className="h-5 w-5" />}
+        {open ? <X className="h-5 w-5" /> : <Sparkles className="h-5 w-5 drop-shadow" />}
       </button>
     </>
   );
@@ -81,18 +82,24 @@ function AskPanel({ onClose }: { onClose: () => void }) {
 
   return (
     <div
-      className="fixed bottom-20 right-5 z-40 flex w-[min(380px,calc(100vw-2.5rem))] flex-col
-                 overflow-hidden rounded-xl border border-border bg-bg-panel shadow-2xl
-                 animate-fade-in"
-      style={{ maxHeight: 'min(560px, calc(100vh - 7rem))' }}
+      className="fixed bottom-[5.5rem] right-5 z-40 flex w-[min(390px,calc(100vw-2.5rem))] flex-col
+                 overflow-hidden rounded-2xl border border-border/80 bg-bg-panel/95 backdrop-blur-xl
+                 shadow-2xl ring-1 ring-black/20 animate-slide-up"
+      style={{ maxHeight: 'min(580px, calc(100vh - 8rem))' }}
     >
       {/* Header */}
-      <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-        <Sparkles className="h-4 w-4 text-accent" />
-        <span className="text-sm font-medium">{t('ask.title')}</span>
+      <div className="relative flex items-center gap-2.5 px-4 py-3
+                      bg-gradient-to-r from-accent/15 via-accent/5 to-transparent border-b border-border/70">
+        <div className="grid h-7 w-7 place-items-center rounded-lg bg-gradient-to-br from-accent-hover to-accent-muted text-white shadow-sm">
+          <Sparkles className="h-4 w-4" />
+        </div>
+        <div className="leading-tight">
+          <div className="text-sm font-semibold">{t('ask.title')}</div>
+          <div className="text-2xs text-fg-subtle">mem · AI</div>
+        </div>
         <button
           onClick={onClose}
-          className="ml-auto rounded p-1 text-fg-muted hover:bg-bg-inset hover:text-fg"
+          className="ml-auto rounded-md p-1.5 text-fg-muted hover:bg-bg-inset hover:text-fg transition-colors"
           aria-label="close"
         >
           <X className="h-4 w-4" />
@@ -100,22 +107,31 @@ function AskPanel({ onClose }: { onClose: () => void }) {
       </div>
 
       {/* Body */}
-      <div ref={bodyRef} className="flex-1 overflow-y-auto px-4 py-3 text-sm">
+      <div ref={bodyRef} className="flex-1 overflow-y-auto px-4 py-3.5 text-sm">
         {!resp && !busy && !err && (
-          <div className="space-y-3">
-            <p className="text-xs text-fg-muted">{t('ask.subtitle')}</p>
+          <div className="space-y-3 py-2">
+            <div className="flex flex-col items-center gap-2 py-3 text-center">
+              <div className="grid h-11 w-11 place-items-center rounded-2xl bg-gradient-to-br from-accent-hover to-accent-muted text-white shadow-glow">
+                <Sparkles className="h-5 w-5" />
+              </div>
+              <p className="max-w-[16rem] text-xs leading-relaxed text-fg-muted">{t('ask.subtitle')}</p>
+            </div>
             {history.items.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {history.items.slice(0, 4).map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => submit(s)}
-                    className="max-w-full truncate rounded-full border border-border bg-bg-subtle px-2.5 py-1
-                               text-2xs text-fg-muted hover:text-fg hover:bg-bg-inset"
-                  >
-                    {s}
-                  </button>
-                ))}
+              <div className="space-y-1.5">
+                <div className="text-2xs uppercase tracking-wider text-fg-subtle">{t('common.recent')}</div>
+                <div className="flex flex-col gap-1.5">
+                  {history.items.slice(0, 4).map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => submit(s)}
+                      className="group flex items-center gap-2 truncate rounded-lg border border-border/70 bg-bg-subtle/60 px-3 py-2
+                                 text-xs text-fg-muted hover:text-fg hover:border-accent/40 hover:bg-bg-inset transition-colors"
+                    >
+                      <Sparkles className="h-3 w-3 flex-none text-fg-subtle group-hover:text-accent" />
+                      <span className="truncate">{s}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -133,9 +149,9 @@ function AskPanel({ onClose }: { onClose: () => void }) {
           <div className="space-y-3">
             {resp.steps && resp.steps.length > 0 && <ExecutionTrace steps={resp.steps} />}
             {split.thinking && <ThinkingPanel text={split.thinking} />}
-            <div className="rounded-md bg-bg-subtle/50 p-3 text-fg">
+            <div className="rounded-xl border border-border/60 bg-gradient-to-b from-bg-subtle/60 to-bg-subtle/20 p-3.5 text-fg shadow-sm">
               {split.answer ? (
-                <Markdown className="text-[13px]">{split.answer}</Markdown>
+                <Markdown className="text-[13px] leading-relaxed">{split.answer}</Markdown>
               ) : (
                 <span className="text-fg-subtle">{t('ask.emptyAnswer')}</span>
               )}
@@ -164,7 +180,7 @@ function AskPanel({ onClose }: { onClose: () => void }) {
 
       {/* Input */}
       <form
-        className="flex items-center gap-2 border-t border-border p-2.5"
+        className="flex items-center gap-2 border-t border-border/70 bg-bg-panel/80 p-2.5"
         onSubmit={(e) => {
           e.preventDefault();
           submit(q);
@@ -176,14 +192,15 @@ function AskPanel({ onClose }: { onClose: () => void }) {
           onChange={(e) => setQ(e.target.value)}
           placeholder={t('ask.placeholder')}
           autoFocus
-          className="h-9 flex-1 rounded-md border border-border bg-bg-inset px-3 text-[13px]
-                     outline-none focus:border-accent/60"
+          className="h-10 flex-1 rounded-full border border-border bg-bg-inset px-4 text-[13px]
+                     outline-none transition-colors focus:border-accent/60 focus:ring-2 focus:ring-accent/15"
         />
         <button
           type="submit"
           disabled={busy || !q.trim()}
-          className="grid h-9 w-9 flex-none place-items-center rounded-md bg-accent text-white
-                     disabled:opacity-40"
+          className="grid h-10 w-10 flex-none place-items-center rounded-full text-white shadow-sm
+                     bg-gradient-to-br from-accent-hover to-accent-muted transition-all
+                     hover:scale-105 active:scale-95 disabled:opacity-40 disabled:hover:scale-100"
           aria-label={t('ask.run')}
         >
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
