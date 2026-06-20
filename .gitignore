@@ -85,3 +85,6 @@ node_modules/
 
 # === Local dev overrides ===
 docker-compose.override.yml
+
+# 云端 provider 真实 key（含密钥，禁止提交）
+scripts/cloud_env.sh
