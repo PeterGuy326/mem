@@ -9,7 +9,9 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Kbd } from '@/components/ui/Kbd';
 import { cn } from '@/lib/cn';
 import { AuthedImage } from '@/components/ui/AuthedImage';
+import { History, X } from 'lucide-react';
 import { useSearch } from '@/hooks/useFiles';
+import { useHistory } from '@/hooks/useHistory';
 import { formatDate } from '@/lib/format';
 import type { FileKind, SearchResult, SearchTypeFilter } from '@/lib/types';
 
@@ -68,6 +70,13 @@ export function SearchPage() {
   const hasQuery = debouncedQ.trim().length > 0;
   const results = data?.results ?? [];
 
+  // Record successful searches into history (once results land for a query).
+  const history = useHistory('mem.history.search');
+  React.useEffect(() => {
+    if (hasQuery && data) history.push(debouncedQ);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, hasQuery, debouncedQ]);
+
   return (
     <div className="mx-auto max-w-6xl px-8 py-10">
       {/* Hero search */}
@@ -92,18 +101,51 @@ export function SearchPage() {
           />
         </div>
         {!hasQuery && (
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            <span className="text-xs text-fg-subtle mr-1">试试搜:</span>
-            {SAMPLE_QUERIES.map((s) => (
-              <button
-                key={s}
-                onClick={() => setQ(s)}
-                className="rounded-full border border-border bg-bg-subtle hover:bg-bg-inset hover:border-border-strong
-                           px-3 py-1 text-xs text-fg-muted hover:text-fg transition-colors"
-              >
-                {s}
-              </button>
-            ))}
+          <div className="mt-4 space-y-3">
+            {history.items.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="inline-flex items-center gap-1 text-xs text-fg-subtle mr-1">
+                  <History className="h-3 w-3" /> 最近搜索:
+                </span>
+                {history.items.slice(0, 8).map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => setQ(s)}
+                    className="group inline-flex items-center gap-1 rounded-full border border-border bg-bg-subtle
+                               hover:bg-bg-inset hover:border-border-strong px-3 py-1 text-xs text-fg-muted
+                               hover:text-fg transition-colors max-w-[16rem]"
+                  >
+                    <span className="truncate">{s}</span>
+                    <X
+                      className="h-3 w-3 opacity-0 group-hover:opacity-60 hover:!opacity-100"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        history.remove(s);
+                      }}
+                    />
+                  </button>
+                ))}
+                <button
+                  onClick={history.clear}
+                  className="text-2xs text-fg-subtle hover:text-fg underline-offset-2 hover:underline"
+                >
+                  清空
+                </button>
+              </div>
+            )}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-fg-subtle mr-1">试试搜:</span>
+              {SAMPLE_QUERIES.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setQ(s)}
+                  className="rounded-full border border-border bg-bg-subtle hover:bg-bg-inset hover:border-border-strong
+                             px-3 py-1 text-xs text-fg-muted hover:text-fg transition-colors"
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
           </div>
         )}
       </section>
