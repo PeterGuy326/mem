@@ -1,6 +1,7 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { Button } from './Button';
 import { X } from 'lucide-react';
+import { tt } from '@/i18n';
 
 export interface ConfirmDialogProps {
   open: boolean;
@@ -18,8 +19,8 @@ export function ConfirmDialog({
   onOpenChange,
   title,
   description,
-  confirmText = '确认',
-  cancelText = '取消',
+  confirmText,
+  cancelText,
   destructive,
   onConfirm,
 }: ConfirmDialogProps) {
@@ -35,7 +36,7 @@ export function ConfirmDialog({
             <Dialog.Title className="text-base font-semibold text-fg">{title}</Dialog.Title>
             <Dialog.Close asChild>
               <button
-                aria-label="关闭"
+                aria-label={tt('action.close')}
                 className="text-fg-subtle hover:text-fg transition-colors"
               >
                 <X className="h-4 w-4" />

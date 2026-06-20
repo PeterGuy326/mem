@@ -2,17 +2,19 @@ import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { FileQuestion } from 'lucide-react';
+import { useT } from '@/i18n';
 
 export function NotFoundPage() {
+  const { t } = useT();
   return (
     <div className="mx-auto max-w-3xl px-8 py-16">
       <EmptyState
         icon={<FileQuestion />}
-        title="404 · 这里什么也没有"
-        description="可能链接过期了，或者你需要先登录。"
+        title={t('notFound.title')}
+        description={t('notFound.desc')}
         action={
           <Link to="/">
-            <Button variant="secondary" size="sm">回到首页</Button>
+            <Button variant="secondary" size="sm">{t('action.home')}</Button>
           </Link>
         }
       />

@@ -1,3 +1,4 @@
+import { tt } from '@/i18n';
 /** Format helpers for display only — no domain logic here. */
 
 export function formatBytes(bytes: number): string {
@@ -38,13 +39,13 @@ export function formatRelative(iso: string | null | undefined): string {
   if (Number.isNaN(then)) return '—';
   const diff = Date.now() - then;
   const s = Math.floor(diff / 1000);
-  if (s < 60) return '刚刚';
+  if (s < 60) return tt('time.justNow');
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m} 分钟前`;
+  if (m < 60) return tt('time.minutesAgo', { n: m });
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h} 小时前`;
+  if (h < 24) return tt('time.hoursAgo', { n: h });
   const d = Math.floor(h / 24);
-  if (d < 30) return `${d} 天前`;
+  if (d < 30) return tt('time.daysAgo', { n: d });
   return formatDate(iso);
 }
 

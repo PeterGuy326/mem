@@ -82,7 +82,7 @@ export function TopBar({ children }: { children?: React.ReactNode }) {
             <DropdownMenu.Trigger asChild>
               <button
                 className="flex items-center gap-2 rounded-md px-2 h-8 hover:bg-bg-inset transition-colors"
-                aria-label="账户菜单"
+                aria-label={t('nav.account')}
               >
                 <div className="h-6 w-6 rounded-md bg-accent/20 text-accent grid place-items-center text-xs font-semibold">
                   {(user?.email ?? 'M').slice(0, 1).toUpperCase()}

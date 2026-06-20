@@ -26,7 +26,7 @@ import { useDeleteFile, useFile, useRelated } from '@/hooks/useFiles';
 import { useAuthedBlobUrl } from '@/hooks/useAuthedBlob';
 import { AuthedImage } from '@/components/ui/AuthedImage';
 import { Markdown } from '@/components/ui/Markdown';
-import { useT } from '@/i18n';
+import { useT, tt } from '@/i18n';
 import { downloadFile } from '@/lib/api';
 import { formatBytes, formatDateTime } from '@/lib/format';
 import { toast } from 'sonner';
@@ -52,11 +52,11 @@ export function FileDetailPage() {
         </Button>
         <EmptyState
           icon={<FileQuestion />}
-          title="文件不存在"
-          description="可能已删除，或 file_id 错了。"
+          title={t('detail.notFoundTitle')}
+          description={t('detail.notFoundDesc')}
           action={
             <Link to="/">
-              <Button variant="secondary" size="sm">回到首页</Button>
+              <Button variant="secondary" size="sm">{t('action.home')}</Button>
             </Link>
           }
         />
@@ -67,17 +67,17 @@ export function FileDetailPage() {
   function copyId() {
     if (!file) return;
     navigator.clipboard.writeText(file.id).catch(() => {});
-    toast.success('已复制 file_id');
+    toast.success(tt('toast.copiedId'));
   }
 
   async function onDelete() {
     if (!file) return;
     try {
       await del.mutateAsync(file.id);
-      toast.success('已删除');
+      toast.success(tt('toast.deleted'));
       navigate('/', { replace: true });
     } catch (err) {
-      toast.error('删除失败', { description: err instanceof Error ? err.message : undefined });
+      toast.error(tt('toast.deleteFailed'), { description: err instanceof Error ? err.message : undefined });
     }
   }
 
@@ -101,7 +101,7 @@ export function FileDetailPage() {
           variant="secondary"
           size="sm"
           onClick={() => {
-            downloadFile(file.id, file.name).catch(() => toast.error('下载失败'));
+            downloadFile(file.id, file.name).catch(() => toast.error(tt('toast.downloadFailed')));
           }}
         >
           <Download className="h-3.5 w-3.5" />
@@ -143,7 +143,7 @@ export function FileDetailPage() {
               {file.geo && (
                 <MetaRow
                   icon={<MapPin className="h-3 w-3" />}
-                  label="经纬"
+                  label={t('detail.geo')}
                   value={`${file.geo.lat.toFixed(2)}, ${file.geo.lon.toFixed(2)}`}
                   mono
                   full
@@ -168,7 +168,7 @@ export function FileDetailPage() {
             <CardBody className="space-y-4 text-sm">
               {file.caption && (
                 <div>
-                  <div className="text-2xs uppercase tracking-wider text-fg-subtle mb-1">Caption (VLM)</div>
+                  <div className="text-2xs uppercase tracking-wider text-fg-subtle mb-1">{t('detail.captionVlm')}</div>
                   <div className="text-fg leading-relaxed">{file.caption}</div>
                 </div>
               )}
@@ -180,7 +180,7 @@ export function FileDetailPage() {
               )}
               {file.tags.length > 0 && (
                 <div>
-                  <div className="text-2xs uppercase tracking-wider text-fg-subtle mb-1.5">自动标签</div>
+                  <div className="text-2xs uppercase tracking-wider text-fg-subtle mb-1.5">{t('detail.autoTags')}</div>
                   <div className="flex flex-wrap gap-1.5">
                     {file.tags.map((t) => (
                       <Badge key={t} tone="neutral">{t}</Badge>
@@ -192,7 +192,7 @@ export function FileDetailPage() {
                 <div>
                   <div className="text-2xs uppercase tracking-wider text-fg-subtle mb-1.5 flex items-center gap-1.5">
                     <Users className="h-3 w-3" />
-                    识别到的实体
+                    {t('detail.entities')}
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     {file.entities.map((e) => (
@@ -227,7 +227,7 @@ export function FileDetailPage() {
                   ))}
                 </ol>
               ) : (
-                <div className="p-4 text-xs text-fg-subtle">暂无关联（mock：W3 接入后启用）</div>
+                <div className="p-4 text-xs text-fg-subtle">{t('search.none')}</div>
               )}
             </CardBody>
           </Card>
@@ -237,9 +237,9 @@ export function FileDetailPage() {
       <ConfirmDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
-        title="删除该文件？"
-        description={`将永久删除 “${file.name}” 及其所有 AI 索引（caption / embeddings / 人脸聚类）。此操作不可恢复。`}
-        confirmText="删除"
+        title={t('detail.deleteTitle')}
+        description={t('detail.deleteDesc', { name: file.name })}
+        confirmText={t('common.delete')}
         destructive
         onConfirm={onDelete}
       />
@@ -390,7 +390,7 @@ function AudioPreview({ file }: { file: MemFile }) {
         <div className="text-2xs text-fg-subtle">{isLoading ? t('detail.loadingAudio') : '—'}</div>
       )}
       <div className="text-xs text-fg-muted text-center max-w-md">
-        {file.summary ?? '音频 ASR 转写完成后会出现在 AI 洞察区。'}
+        {file.summary ?? ''}
       </div>
     </div>
   );
@@ -464,7 +464,7 @@ function RelatedRow({
         </div>
         <div className="text-2xs text-fg-subtle">{file.caption ?? file.summary ?? '—'}</div>
       </div>
-      <Badge tone="muted">{relation}</Badge>
+      <Badge tone="muted">{tt(`related.${relation}`)}</Badge>
     </Link>
   );
 }

@@ -29,6 +29,7 @@ const dict: Record<string, Partial<Record<Lang, string>>> = {
   'nav.logout': { zh: '退出登录', en: 'Sign out' },
   'nav.notSignedIn': { zh: '未登录', en: 'Not signed in' },
   'nav.language': { zh: '语言', en: 'Language' },
+  'nav.account': { zh: '账户菜单', en: 'Account menu' },
 
   // ---- common actions ----
   'common.back': { zh: '返回', en: 'Back' },
@@ -125,12 +126,137 @@ const dict: Record<string, Partial<Record<Lang, string>>> = {
   'search.docsAudio': { zh: '文档与音频', en: 'Docs & audio' },
   'search.noImages': { zh: '这次搜索没有图片命中', en: 'No image hits this time' },
   'search.none': { zh: '无', en: 'None' },
+  'search.detectedEntities': { zh: '检测到实体:', en: 'Detected entities:' },
+  'search.footer': {
+    zh: '共 {total} 条结果 · 用时 {ms} ms · 多路融合（visual / text / metadata）',
+    en: '{total} results · {ms} ms · fused (visual / text / metadata)',
+  },
+
+  // ---- drive / explorer ----
+  'drive.root': { zh: '我的网盘', en: 'My Drive' },
+  'drive.newFolder': { zh: '新建文件夹', en: 'New folder' },
+  'drive.upload': { zh: '上传', en: 'Upload' },
+  'drive.uploadTo': { zh: '上传到 {path}', en: 'Upload to {path}' },
+  'drive.grid': { zh: '网格', en: 'Grid' },
+  'drive.list': { zh: '列表', en: 'List' },
+  'drive.colName': { zh: '名称', en: 'Name' },
+  'drive.colSize': { zh: '大小', en: 'Size' },
+  'drive.colModified': { zh: '修改时间', en: 'Modified' },
+  'drive.colType': { zh: '类型', en: 'Type' },
+  'drive.folder': { zh: '文件夹', en: 'Folder' },
+  'drive.untitledFolder': { zh: '未命名文件夹', en: 'Untitled folder' },
+  'drive.folderName': { zh: '文件夹名', en: 'Folder name' },
+  'drive.now': { zh: '现在', en: 'now' },
+  'drive.uploading': { zh: '上传中', en: 'Uploading' },
+  'drive.itemsN': { zh: '{n} 项', en: '{n} items' },
+  'drive.emptyTitle': { zh: '{name} 是空的', en: '{name} is empty' },
+  'drive.emptyHint': { zh: '把文件拖进来，或新建一个子文件夹', en: 'Drop files here, or create a subfolder' },
+  'drive.selectedN': { zh: '已选 {n} 项', en: '{n} selected' },
+  'drive.breadcrumb': { zh: '面包屑', en: 'Breadcrumb' },
+  'drive.expand': { zh: '展开', en: 'Expand' },
+  'drive.collapse': { zh: '收起', en: 'Collapse' },
+  // context-menu / actions
+  'action.open': { zh: '打开', en: 'Open' },
+  'action.rename': { zh: '重命名', en: 'Rename' },
+  'action.confirm': { zh: '确认', en: 'Confirm' },
+  'action.cancel': { zh: '取消', en: 'Cancel' },
+  'action.close': { zh: '关闭', en: 'Close' },
+  'action.home': { zh: '回到首页', en: 'Back home' },
+  // delete dialogs
+  'drive.deleteNTitle': { zh: '删除 {n} 项？', en: 'Delete {n} items?' },
+  'drive.deleteFolderDesc': { zh: '文件夹及其中所有文件会被永久删除，且不可恢复。', en: 'The folder and all files inside are permanently deleted and cannot be recovered.' },
+  'drive.deleteFilesDesc': { zh: '所选文件会被永久删除，且不可恢复。', en: 'The selected files are permanently deleted and cannot be recovered.' },
+
+  // ---- file kinds ----
+  'kind.image': { zh: '图片', en: 'Image' },
+  'kind.audio': { zh: '音频', en: 'Audio' },
+  'kind.video': { zh: '视频', en: 'Video' },
+  'kind.doc': { zh: '文档', en: 'Document' },
+  'kind.text': { zh: '文本', en: 'Text' },
+  'kind.other': { zh: '其它', en: 'Other' },
+
+  // ---- index status ----
+  'status.pending': { zh: '等待', en: 'Pending' },
+  'status.processing': { zh: '处理中', en: 'Processing' },
+  'status.done': { zh: '已就绪', en: 'Ready' },
+  'status.failed': { zh: '失败', en: 'Failed' },
+
+  // ---- relative time ----
+  'time.justNow': { zh: '刚刚', en: 'just now' },
+  'time.minutesAgo': { zh: '{n} 分钟前', en: '{n} min ago' },
+  'time.hoursAgo': { zh: '{n} 小时前', en: '{n} h ago' },
+  'time.daysAgo': { zh: '{n} 天前', en: '{n} d ago' },
+
+  // ---- related types ----
+  'related.same_topic': { zh: '同主题', en: 'Same topic' },
+  'related.same_person': { zh: '同人', en: 'Same person' },
+  'related.same_event': { zh: '同事件', en: 'Same event' },
+  'related.sequel': { zh: '续作', en: 'Sequel' },
+
+  // ---- file detail (remaining) ----
+  'detail.notFoundTitle': { zh: '文件不存在', en: 'File not found' },
+  'detail.notFoundDesc': { zh: '可能已删除，或 file_id 错了。', en: 'It may have been deleted, or the id is wrong.' },
+  'detail.geo': { zh: '经纬', en: 'Geo' },
+  'detail.autoTags': { zh: '自动标签', en: 'Auto tags' },
+  'detail.entities': { zh: '识别到的实体', en: 'Detected entities' },
+  'detail.deleteTitle': { zh: '删除该文件？', en: 'Delete this file?' },
+  'detail.deleteDesc': { zh: '将永久删除 “{name}” 及其所有 AI 索引（caption / embeddings / 人脸聚类）。此操作不可恢复。', en: 'Permanently deletes "{name}" and all its AI index (caption / embeddings / face clusters). This cannot be undone.' },
+
+  // ---- toasts ----
+  'toast.uploaded': { zh: '已上传 {n} 个文件到 {path}', en: 'Uploaded {n} files to {path}' },
+  'toast.uploadedDesc': { zh: 'AI 索引会在后台异步处理', en: 'AI indexing runs in the background' },
+  'toast.uploadFailed': { zh: '上传失败', en: 'Upload failed' },
+  'toast.retryLater': { zh: '请稍后重试', en: 'Please try again later' },
+  'toast.movedN': { zh: '已移动 {n} 项到 {path}', en: 'Moved {n} items to {path}' },
+  'toast.moveFailed': { zh: '移动失败', en: 'Move failed' },
+  'toast.noFolderIntoItself': { zh: '不能把文件夹拖到自己里面', en: "Can't move a folder into itself" },
+  'toast.renamedFolder': { zh: '已重命名文件夹', en: 'Folder renamed' },
+  'toast.renamed': { zh: '已重命名', en: 'Renamed' },
+  'toast.renameFailed': { zh: '重命名失败', en: 'Rename failed' },
+  'toast.createdFolder': { zh: '新建文件夹 “{name}”', en: 'Created folder "{name}"' },
+  'toast.createFailed': { zh: '新建失败', en: 'Create failed' },
+  'toast.deleted': { zh: '已删除', en: 'Deleted' },
+  'toast.deleteFailed': { zh: '删除失败', en: 'Delete failed' },
+  'toast.downloadFailed': { zh: '下载失败', en: 'Download failed' },
+  'toast.copiedId': { zh: '已复制 file_id', en: 'Copied file id' },
+  'toast.accountCreated': { zh: '账号已创建', en: 'Account created' },
+
+  // ---- login ----
+  'login.tagline': { zh: 'Agent-Native AI 网盘', en: 'Agent-Native AI drive' },
+  'login.signIn': { zh: '登录', en: 'Sign in' },
+  'login.signUp': { zh: '注册', en: 'Sign up' },
+  'login.email': { zh: '邮箱', en: 'Email' },
+  'login.password': { zh: '密码', en: 'Password' },
+  'login.passwordHint': { zh: '至少 6 位', en: 'At least 6 characters' },
+  'login.createAccount': { zh: '创建账号', en: 'Create account' },
+  'login.haveAccount': { zh: '已有账号？', en: 'Already have an account?' },
+  'login.goSignIn': { zh: '去登录', en: 'Sign in' },
+  'login.noAccount': { zh: '还没有账号？', en: "Don't have an account?" },
+  'login.goSignUp': { zh: '立即注册', en: 'Sign up' },
+  'login.signInFailed': { zh: '登录失败', en: 'Sign in failed' },
+  'login.signUpFailed': { zh: '注册失败', en: 'Sign up failed' },
+  'login.footer': { zh: '自部署版本 · 数据全在本地 · Apache-2.0', en: 'Self-hosted · all data stays local · Apache-2.0' },
+
+  // ---- 404 ----
+  'notFound.title': { zh: '404 · 这里什么也没有', en: '404 · Nothing here' },
+  'notFound.desc': { zh: '可能链接过期了，或者你需要先登录。', en: 'The link may have expired, or you need to sign in first.' },
 };
 
 function lookup(key: string, lang: Lang): string {
   const entry = dict[key];
   if (!entry) return key;
   return entry[lang] ?? entry.en ?? key;
+}
+
+// Module-level mirror of the active language, kept in sync by I18nProvider.
+// Lets non-React code (formatters, pure helpers) translate via tt() without a
+// hook. React components should still use useT() so they re-render on change.
+let currentLang: Lang = 'en';
+export function getLang(): Lang {
+  return currentLang;
+}
+export function tt(key: string, vars?: Record<string, string | number>): string {
+  return interpolate(lookup(key, currentLang), vars);
 }
 
 function interpolate(s: string, vars?: Record<string, string | number>): string {
@@ -159,8 +285,13 @@ function detectInitial(): Lang {
 }
 
 export function I18nProvider({ children }: { children: React.ReactNode }) {
-  const [lang, setLangState] = React.useState<Lang>(detectInitial);
+  const [lang, setLangState] = React.useState<Lang>(() => {
+    const l = detectInitial();
+    currentLang = l;
+    return l;
+  });
   const setLang = React.useCallback((l: Lang) => {
+    currentLang = l;
     setLangState(l);
     try {
       localStorage.setItem(STORAGE_KEY, l);

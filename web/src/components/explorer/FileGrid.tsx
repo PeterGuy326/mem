@@ -13,6 +13,7 @@ import type { FolderNode } from '@/lib/folder-tree';
 import { useExplorer } from './ExplorerContext';
 import { RenameInput } from './RenameInput';
 import type { ContextMenuItem } from './ContextMenu';
+import { useT, tt } from '@/i18n';
 
 export interface FileGridProps {
   folders: FolderNode[];
@@ -43,6 +44,8 @@ export interface FileGridProps {
 }
 
 export function FileGrid(props: FileGridProps) {
+  const { t } = useT();
+  void t;
   const {
     folders,
     files,
@@ -70,8 +73,8 @@ export function FileGrid(props: FileGridProps) {
         <div className="flex flex-col items-center text-center gap-2 p-2 rounded-lg border border-dashed border-accent/40 bg-accent/5">
           <FolderClosed className="h-12 w-12 text-fg-subtle" />
           <RenameInput
-            initial="未命名文件夹"
-            placeholder="文件夹名"
+            initial={tt('drive.untitledFolder')}
+            placeholder={tt('drive.folderName')}
             preserveExtension={false}
             onCommit={onCommitNewFolder}
             onCancel={onCancelNewFolder}
@@ -124,7 +127,7 @@ export function FileGrid(props: FileGridProps) {
           <div className="text-xs text-fg-muted truncate w-full" title={u.name}>
             {u.name}
           </div>
-          <div className="text-2xs text-fg-subtle">上传中</div>
+          <div className="text-2xs text-fg-subtle">{tt('drive.uploading')}</div>
         </div>
       ))}
     </div>
@@ -210,7 +213,7 @@ function FolderCard({
           : 'border-transparent hover:bg-bg-inset/60 hover:border-border',
         dropHover && 'ring-2 ring-dashed ring-accent/70 bg-accent/10',
       )}
-      title={`${folder.name} · ${folder.fileCount} 项`}
+      title={`${folder.name} · ${tt('drive.itemsN', { n: folder.fileCount })}`}
     >
       <FolderClosed className="h-14 w-14 text-accent/80" strokeWidth={1.4} />
       {renaming ? (
@@ -225,7 +228,7 @@ function FolderCard({
           {folder.name}
         </div>
       )}
-      <div className="text-2xs text-fg-subtle">{folder.fileCount} 项</div>
+      <div className="text-2xs text-fg-subtle">{tt('drive.itemsN', { n: folder.fileCount })}</div>
     </div>
   );
 }
@@ -303,7 +306,7 @@ function KindIcon({ kind }: { kind: FileKind }) {
 }
 
 function StatusOverlay({ status }: { status: IndexStatus }) {
-  const text = status === 'processing' ? '处理中' : status === 'pending' ? '等待' : '失败';
+  const text = tt(`status.${status}`);
   const tone = status === 'failed' ? 'bg-danger/80' : 'bg-bg/70';
   return (
     <div

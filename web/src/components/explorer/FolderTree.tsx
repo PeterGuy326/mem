@@ -10,6 +10,7 @@ import {
 } from '@/lib/folder-tree';
 import { useExplorer } from './ExplorerContext';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { tt } from '@/i18n';
 
 export interface FolderTreeProps {
   tree: FolderNode | undefined;
@@ -197,7 +198,7 @@ function TreeNode({
       >
         <button
           type="button"
-          aria-label={isOpen ? '收起' : '展开'}
+          aria-label={isOpen ? tt('drive.collapse') : tt('drive.expand')}
           onClick={(e) => {
             e.stopPropagation();
             if (hasChildren) onToggle(node.path);
@@ -212,7 +213,7 @@ function TreeNode({
           />
         </button>
         <Icon className={cn('h-3.5 w-3.5 flex-none', isActive ? 'text-accent' : 'text-fg-subtle')} />
-        <span className="truncate flex-1 text-xs">{node.name}</span>
+        <span className="truncate flex-1 text-xs">{node.path === ROOT_PATH ? tt('drive.root') : node.name}</span>
         {node.fileCount > 0 && (
           <span className="text-2xs text-fg-subtle tabular-nums">{node.fileCount}</span>
         )}

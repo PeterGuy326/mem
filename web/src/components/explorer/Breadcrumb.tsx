@@ -2,8 +2,9 @@ import * as React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/cn';
-import { buildCrumbs, isDescendant, pathToDriveRoute } from '@/lib/folder-tree';
+import { ROOT_PATH, buildCrumbs, isDescendant, pathToDriveRoute } from '@/lib/folder-tree';
 import { useExplorer } from './ExplorerContext';
+import { useT } from '@/i18n';
 
 export interface BreadcrumbProps {
   path: string;
@@ -11,18 +12,19 @@ export interface BreadcrumbProps {
 }
 
 export function Breadcrumb({ path, onInternalDropToFolder }: BreadcrumbProps) {
+  const { t } = useT();
   const navigate = useNavigate();
   const crumbs = buildCrumbs(path);
   const { drag, setDrag } = useExplorer();
 
   return (
-    <nav aria-label="面包屑" className="flex items-center gap-1 min-w-0 flex-1">
+    <nav aria-label={t('drive.breadcrumb')} className="flex items-center gap-1 min-w-0 flex-1">
       {crumbs.map((c, i) => {
         const isLast = i === crumbs.length - 1;
         return (
           <React.Fragment key={c.path}>
             <Crumb
-              name={c.name}
+              name={c.path === ROOT_PATH ? t('drive.root') : c.name}
               path={c.path}
               isLast={isLast}
               navigate={navigate}

@@ -9,8 +9,10 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { listFaces, nameFace, mergeFaces, type FaceCluster } from '@/lib/ai';
 import { ApiException } from '@/lib/api';
+import { useT } from '@/i18n';
 
 export function FacesPage() {
+  const { t } = useT();
   const [clusters, setClusters] = React.useState<FaceCluster[] | null>(null);
   const [busy, setBusy] = React.useState(true);
   const [err, setErr] = React.useState<string | null>(null);
@@ -143,7 +145,7 @@ export function FacesPage() {
                       value={draftName}
                       onChange={(e) => setDraftName(e.target.value)}
                       className="h-8 rounded-md border border-border bg-bg-inset px-2 text-sm flex-1"
-                      placeholder="e.g. 小明"
+                      placeholder={t('detail.entities')}
                     />
                     <Button size="sm" type="submit">
                       Save

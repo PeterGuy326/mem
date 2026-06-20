@@ -6,10 +6,12 @@ import { Logo } from '@/components/layout/Logo';
 import { useAuth } from '@/hooks/useAuth';
 import { ApiException } from '@/lib/api';
 import { toast } from 'sonner';
+import { useT } from '@/i18n';
 
 type Mode = 'login' | 'register';
 
 export function LoginPage() {
+  const { t } = useT();
   const { token, login, register, loading } = useAuth();
   const navigate = useNavigate();
   const [mode, setMode] = React.useState<Mode>('login');
@@ -27,7 +29,7 @@ export function LoginPage() {
     try {
       if (isRegister) {
         await register(email, password);
-        toast.success('账号已创建');
+        toast.success(t('toast.accountCreated'));
       } else {
         await login(email, password);
       }
@@ -39,9 +41,9 @@ export function LoginPage() {
           ? err.hint || err.message
           : err instanceof Error
             ? err.message
-            : '请稍后重试';
+            : t('toast.retryLater');
       setError(msg);
-      toast.error(isRegister ? '注册失败' : '登录失败', { description: msg });
+      toast.error(isRegister ? t('login.signUpFailed') : t('login.signInFailed'), { description: msg });
     }
   }
 
@@ -56,7 +58,7 @@ export function LoginPage() {
       <div className="relative z-10 w-[400px] max-w-[92vw]">
         <div className="mb-8 flex flex-col items-center gap-3">
           <Logo className="scale-125" />
-          <p className="text-sm text-fg-muted">Agent-Native AI 网盘</p>
+          <p className="text-sm text-fg-muted">{t('login.tagline')}</p>
         </div>
         <form onSubmit={onSubmit} className="surface p-6 flex flex-col gap-4 shadow-soft">
           {/* Mode switch */}
@@ -74,14 +76,14 @@ export function LoginPage() {
                   (mode === m ? 'bg-bg-panel text-fg shadow-soft' : 'text-fg-muted hover:text-fg')
                 }
               >
-                {m === 'login' ? '登录' : '注册'}
+                {m === 'login' ? t('login.signIn') : t('login.signUp')}
               </button>
             ))}
           </div>
 
           <div className="flex flex-col gap-1.5">
             <label className="text-xs text-fg-muted" htmlFor="email">
-              邮箱
+              {t('login.email')}
             </label>
             <Input
               id="email"
@@ -95,14 +97,14 @@ export function LoginPage() {
           </div>
           <div className="flex flex-col gap-1.5">
             <label className="text-xs text-fg-muted" htmlFor="password">
-              密码
+              {t('login.password')}
             </label>
             <Input
               id="password"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder={isRegister ? '至少 6 位' : '••••••••'}
+              placeholder={isRegister ? t('login.passwordHint') : '••••••••'}
               autoComplete={isRegister ? 'new-password' : 'current-password'}
               minLength={isRegister ? 6 : undefined}
               required
@@ -116,13 +118,13 @@ export function LoginPage() {
           )}
 
           <Button type="submit" variant="primary" size="lg" loading={loading} className="mt-1">
-            {isRegister ? '创建账号' : '登录'}
+            {isRegister ? t('login.createAccount') : t('login.signIn')}
           </Button>
 
           <div className="text-center text-xs text-fg-subtle">
             {isRegister ? (
               <>
-                已有账号？
+                {t('login.haveAccount')}
                 <button
                   type="button"
                   className="text-accent hover:underline ml-1"
@@ -131,12 +133,12 @@ export function LoginPage() {
                     setError(null);
                   }}
                 >
-                  去登录
+                  {t('login.goSignIn')}
                 </button>
               </>
             ) : (
               <>
-                还没有账号？
+                {t('login.noAccount')}
                 <button
                   type="button"
                   className="text-accent hover:underline ml-1"
@@ -145,14 +147,14 @@ export function LoginPage() {
                     setError(null);
                   }}
                 >
-                  立即注册
+                  {t('login.goSignUp')}
                 </button>
               </>
             )}
           </div>
         </form>
         <p className="mt-4 text-center text-xs text-fg-subtle">
-          自部署版本 · 数据全在本地 · Apache-2.0
+          {t('login.footer')}
         </p>
       </div>
     </div>

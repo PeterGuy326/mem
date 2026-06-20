@@ -44,6 +44,7 @@ import { Button } from '@/components/ui/Button';
 import { readView, writeView, type ExplorerView } from '@/components/explorer/viewMode';
 import { downloadFile } from '@/lib/api';
 import type { MemFile } from '@/lib/types';
+import { useT, tt } from '@/i18n';
 
 /** Outer page handles current path from URL. Inner page does the work. */
 export function ExplorerPage() {
@@ -57,6 +58,7 @@ export function ExplorerPage() {
 }
 
 function ExplorerLayout({ currentPath }: { currentPath: string }) {
+  const { t } = useT();
   const navigate = useNavigate();
   const treeQ = useFolderTree();
   const { data: listData, isLoading: listLoading } = useFilesByPath(currentPath);
@@ -142,12 +144,12 @@ function ExplorerLayout({ currentPath }: { currentPath: string }) {
           setUploadProgress(done / total);
         }
         toast.success(
-          `已上传 ${total} 个文件到 ${pretty(targetPath)}`,
-          { description: 'AI 索引会在后台异步处理' },
+          tt('toast.uploaded', { n: total, path: pretty(targetPath) }),
+          { description: tt('toast.uploadedDesc') },
         );
       } catch (err) {
-        toast.error('上传失败', {
-          description: err instanceof Error ? err.message : '请稍后重试',
+        toast.error(tt('toast.uploadFailed'), {
+          description: err instanceof Error ? err.message : tt('toast.retryLater'),
         });
       } finally {
         setUploading([]);
@@ -212,7 +214,7 @@ function ExplorerLayout({ currentPath }: { currentPath: string }) {
       const label =
         keys.length === 1
           ? `${(isFolderKey(keys[0]!)?.name ?? isFileKey(keys[0]!)?.name) ?? ''}`
-          : `已选 ${keys.length} 项`;
+          : tt('drive.selectedN', { n: keys.length });
       const payload: InternalDragPayload = {
         fileIds,
         folderPaths,
@@ -249,7 +251,7 @@ function ExplorerLayout({ currentPath }: { currentPath: string }) {
       if (!drag) return;
       const allowed = !drag.folderPaths.some((fp) => isDescendant(targetPath, fp));
       if (!allowed) {
-        toast.error('不能把文件夹拖到自己里面');
+        toast.error(tt('toast.noFolderIntoItself'));
         return;
       }
       if (drag.sourceFolder === targetPath && drag.folderPaths.length === 0) {
@@ -261,10 +263,10 @@ function ExplorerLayout({ currentPath }: { currentPath: string }) {
           ...drag.folderPaths.map((p) => moveFolder.mutateAsync({ path: p, newParent: targetPath })),
         ]);
         toast.success(
-          `已移动 ${drag.fileIds.length + drag.folderPaths.length} 项到 ${pretty(targetPath)}`,
+          tt('toast.movedN', { n: drag.fileIds.length + drag.folderPaths.length, path: pretty(targetPath) }),
         );
       } catch (err) {
-        toast.error('移动失败', {
+        toast.error(tt('toast.moveFailed'), {
           description: err instanceof Error ? err.message : undefined,
         });
       } finally {
@@ -285,18 +287,18 @@ function ExplorerLayout({ currentPath }: { currentPath: string }) {
         return [
           {
             key: 'open',
-            label: '打开',
+            label: tt('action.open'),
             onSelect: () => navigate(pathToDriveRoute(folder.path)),
           },
           {
             key: 'rename',
-            label: '重命名',
+            label: tt('action.rename'),
             shortcut: 'F2',
             onSelect: () => setRenameKey(folder.path),
           },
           {
             key: 'delete',
-            label: '删除',
+            label: tt('common.delete'),
             shortcut: 'Del',
             destructive: true,
             separatorAbove: true,
@@ -308,25 +310,25 @@ function ExplorerLayout({ currentPath }: { currentPath: string }) {
         return [
           {
             key: 'open',
-            label: '打开',
+            label: tt('action.open'),
             onSelect: () => navigate(`/files/${file.id}`),
           },
           {
             key: 'download',
-            label: '下载',
+            label: tt('common.download'),
             onSelect: () => {
-              downloadFile(file.id, file.name).catch(() => toast.error('下载失败'));
+              downloadFile(file.id, file.name).catch(() => toast.error(tt('toast.downloadFailed')));
             },
           },
           {
             key: 'rename',
-            label: '重命名',
+            label: tt('action.rename'),
             shortcut: 'F2',
             onSelect: () => setRenameKey(file.id),
           },
           {
             key: 'delete',
-            label: '删除',
+            label: tt('common.delete'),
             shortcut: 'Del',
             destructive: true,
             separatorAbove: true,
@@ -343,12 +345,12 @@ function ExplorerLayout({ currentPath }: { currentPath: string }) {
     (): ContextMenuItem[] => [
       {
         key: 'new-folder',
-        label: '新建文件夹',
+        label: tt('drive.newFolder'),
         onSelect: () => setPendingNewFolder(true),
       },
       {
         key: 'upload',
-        label: '上传',
+        label: tt('drive.upload'),
         onSelect: () => fileInputRef.current?.click(),
       },
     ],
@@ -364,13 +366,13 @@ function ExplorerLayout({ currentPath }: { currentPath: string }) {
       try {
         if (folder) {
           await renameFolder.mutateAsync({ path: folder.path, name: next });
-          toast.success('已重命名文件夹');
+          toast.success(tt('toast.renamedFolder'));
         } else if (file) {
           await renameFile.mutateAsync({ id: file.id, name: next });
-          toast.success('已重命名');
+          toast.success(tt('toast.renamed'));
         }
       } catch (err) {
-        toast.error('重命名失败', {
+        toast.error(tt('toast.renameFailed'), {
           description: err instanceof Error ? err.message : undefined,
         });
       }
@@ -383,9 +385,9 @@ function ExplorerLayout({ currentPath }: { currentPath: string }) {
       setPendingNewFolder(false);
       try {
         await createFolder.mutateAsync({ path: currentPath, name });
-        toast.success(`新建文件夹 “${name}”`);
+        toast.success(tt('toast.createdFolder', { name }));
       } catch (err) {
-        toast.error('新建失败', {
+        toast.error(tt('toast.createFailed'), {
           description: err instanceof Error ? err.message : undefined,
         });
       }
@@ -401,10 +403,10 @@ function ExplorerLayout({ currentPath }: { currentPath: string }) {
         ...confirmDelete.files.map((id) => deleteFile.mutateAsync(id)),
         ...confirmDelete.folders.map((p) => deleteFolder.mutateAsync({ path: p })),
       ]);
-      toast.success('已删除');
+      toast.success(tt('toast.deleted'));
       selection.clear();
     } catch (err) {
-      toast.error('删除失败', {
+      toast.error(tt('toast.deleteFailed'), {
         description: err instanceof Error ? err.message : undefined,
       });
     } finally {
@@ -557,7 +559,7 @@ function ExplorerLayout({ currentPath }: { currentPath: string }) {
           >
             {contentDropHover && (
               <div className="pointer-events-none sticky top-0 z-10 mx-6 mt-4 rounded-md border border-dashed border-accent bg-bg-panel/80 backdrop-blur-sm px-4 py-2 text-sm text-accent text-center">
-                上传到 {pretty(currentPath)}
+                {t('drive.uploadTo', { path: pretty(currentPath) })}
               </div>
             )}
 
@@ -639,14 +641,14 @@ function ExplorerLayout({ currentPath }: { currentPath: string }) {
       <ConfirmDialog
         open={!!confirmDelete}
         onOpenChange={(o) => !o && setConfirmDelete(null)}
-        title={`删除 ${(confirmDelete?.files.length ?? 0) + (confirmDelete?.folders.length ?? 0)} 项？`}
+        title={t('drive.deleteNTitle', { n: (confirmDelete?.files.length ?? 0) + (confirmDelete?.folders.length ?? 0) })}
         description={
           confirmDelete?.folders.length
-            ? '文件夹及其中所有文件会被永久删除，且不可恢复。'
-            : '所选文件会被永久删除，且不可恢复。'
+            ? t('drive.deleteFolderDesc')
+            : t('drive.deleteFilesDesc')
         }
         destructive
-        confirmText="删除"
+        confirmText={t('common.delete')}
         onConfirm={performDelete}
       />
 
@@ -659,7 +661,7 @@ function ExplorerLayout({ currentPath }: { currentPath: string }) {
 }
 
 function pretty(path: string): string {
-  return path === ROOT_PATH ? '我的网盘' : path;
+  return path === ROOT_PATH ? tt('drive.root') : path;
 }
 
 function ContentSkeleton({ view }: { view: ExplorerView }) {
@@ -693,22 +695,23 @@ function EmptyFolder({
   onUploadClick: () => void;
   onNewFolder: () => void;
 }) {
+  const { t } = useT();
   const crumbs = buildCrumbs(path);
-  const inside = crumbs[crumbs.length - 1]?.name ?? '我的网盘';
+  const inside = crumbs[crumbs.length - 1]?.name ?? tt('drive.root');
   return (
     <div className="flex flex-col items-center justify-center text-center py-24 px-6 text-fg-muted">
       <FolderOpen className="h-12 w-12 text-fg-subtle mb-4" strokeWidth={1.3} />
-      <div className="text-sm text-fg">{inside} 是空的</div>
+      <div className="text-sm text-fg">{t('drive.emptyTitle', { name: inside })}</div>
       <div className="mt-1 text-xs text-fg-subtle">
-        把文件拖进来，或新建一个子文件夹
+        {t('drive.emptyHint')}
       </div>
       <div className="mt-5 flex items-center gap-2">
         <Button variant="secondary" size="sm" onClick={onUploadClick}>
           <Upload className="h-3.5 w-3.5" />
-          上传
+          {t('drive.upload')}
         </Button>
         <Button variant="ghost" size="sm" onClick={onNewFolder}>
-          新建文件夹
+          {t('drive.newFolder')}
         </Button>
       </div>
     </div>

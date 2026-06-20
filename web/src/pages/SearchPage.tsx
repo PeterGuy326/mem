@@ -194,7 +194,7 @@ export function SearchPage() {
       {/* Query plan / meta */}
       {hasQuery && data?.query_plan?.entities && data.query_plan.entities.length > 0 && (
         <div className="mb-4 text-xs text-fg-muted flex items-center gap-2">
-          <span>检测到实体:</span>
+          <span>{t('search.detectedEntities')}</span>
           {data.query_plan.entities.map((e) => (
             <Badge key={e} tone="accent">
               {e}
@@ -216,7 +216,7 @@ export function SearchPage() {
         <EmptyState
           icon={<Search />}
           title={t('search.noHits')}
-          description="试试换个说法，比如把日期范围去掉，或者换成英文关键词。"
+          description={t('search.noHitsHint')}
         />
       ) : (
         <ResultGrid results={results} />
@@ -225,7 +225,7 @@ export function SearchPage() {
       {/* Footer meta */}
       {hasQuery && data && (
         <div className="mt-10 text-2xs text-fg-subtle text-center">
-          共 {data.total} 条结果 · 用时 {data._meta?.latency_ms ?? '?'} ms · 多路融合（visual / text / metadata）
+          {t('search.footer', { total: data.total, ms: data._meta?.latency_ms ?? '?' })}
         </div>
       )}
     </div>

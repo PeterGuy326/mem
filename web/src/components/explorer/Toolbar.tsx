@@ -3,6 +3,7 @@ import { FolderPlus, Upload, LayoutGrid, List } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { cn } from '@/lib/cn';
 import type { ExplorerView } from './viewMode';
+import { useT } from '@/i18n';
 
 export interface ToolbarProps {
   onNewFolder: () => void;
@@ -12,28 +13,29 @@ export interface ToolbarProps {
 }
 
 export function Toolbar({ onNewFolder, onUploadClick, view, onViewChange }: ToolbarProps) {
+  const { t } = useT();
   return (
     <div className="flex items-center gap-2 px-4 h-11 border-b border-border bg-bg-subtle/40">
       <Button variant="ghost" size="sm" onClick={onNewFolder}>
         <FolderPlus className="h-3.5 w-3.5" />
-        新建文件夹
+        {t('drive.newFolder')}
       </Button>
       <Button variant="ghost" size="sm" onClick={onUploadClick}>
         <Upload className="h-3.5 w-3.5" />
-        上传
+        {t('drive.upload')}
       </Button>
       <div className="ml-auto flex items-center gap-1 rounded-md border border-border bg-bg-subtle p-0.5">
         <ViewButton
           active={view === 'grid'}
           onClick={() => onViewChange('grid')}
           icon={<LayoutGrid className="h-3.5 w-3.5" />}
-          label="网格"
+          label={t('drive.grid')}
         />
         <ViewButton
           active={view === 'list'}
           onClick={() => onViewChange('list')}
           icon={<List className="h-3.5 w-3.5" />}
-          label="列表"
+          label={t('drive.list')}
         />
       </div>
     </div>

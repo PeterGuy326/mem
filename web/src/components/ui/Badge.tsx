@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { cn } from '@/lib/cn';
 import type { IndexStatus } from '@/lib/types';
+import { useT } from '@/i18n';
 
 type Tone = 'neutral' | 'accent' | 'success' | 'warn' | 'danger' | 'muted';
 
@@ -47,17 +48,11 @@ const STATUS_TONE: Record<IndexStatus, Tone> = {
   failed: 'danger',
 };
 
-const STATUS_LABEL: Record<IndexStatus, string> = {
-  pending: '等待',
-  processing: '处理中',
-  done: '已就绪',
-  failed: '失败',
-};
-
 export function StatusBadge({ status }: { status: IndexStatus }) {
+  const { t } = useT();
   return (
     <Badge tone={STATUS_TONE[status]} dot>
-      {STATUS_LABEL[status]}
+      {t(`status.${status}`)}
     </Badge>
   );
 }
