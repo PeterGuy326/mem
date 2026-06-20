@@ -5,10 +5,11 @@
  * <think>…</think>; we split it out into a collapsible "思考过程" panel.
  */
 import * as React from 'react';
-import { Send, Sparkles, Brain, ChevronDown, History, X } from 'lucide-react';
+import { Send, Sparkles, Brain, ChevronDown, History, X, Search, Cpu, Check } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { askQuestion, type AskResponse } from '@/lib/ai';
+import { Markdown } from '@/components/ui/Markdown';
+import { askQuestion, type AskResponse, type AskStep } from '@/lib/ai';
 import { ApiException } from '@/lib/api';
 import { useHistory, splitThinking } from '@/hooks/useHistory';
 
@@ -150,10 +151,16 @@ export function AskPage() {
 
       {resp && split && (
         <div className="mt-8">
+          {resp.steps && resp.steps.length > 0 && <ExecutionTrace steps={resp.steps} />}
+
           {split.thinking && <ThinkingPanel text={split.thinking} />}
 
-          <div className="surface p-5 leading-relaxed whitespace-pre-wrap text-fg">
-            {split.answer || <span className="text-fg-subtle">(empty answer)</span>}
+          <div className="surface p-5 text-fg">
+            {split.answer ? (
+              <Markdown>{split.answer}</Markdown>
+            ) : (
+              <span className="text-fg-subtle">(empty answer)</span>
+            )}
           </div>
 
           {resp.sources?.length > 0 && (
@@ -196,25 +203,91 @@ export function AskPage() {
   );
 }
 
-/** Live "thinking…" state with an elapsed-seconds counter (thinking models are slow). */
+/** Completed execution trace: the real RAG pipeline stages with wall-clock cost. */
+function ExecutionTrace({ steps }: { steps: AskStep[] }) {
+  const total = steps.reduce((a, s) => a + s.duration_ms, 0);
+  return (
+    <div className="mb-3 rounded-md border border-border bg-bg-subtle/40 p-3">
+      <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-wider text-fg-muted">
+        <Cpu className="h-3.5 w-3.5 text-accent" /> 执行过程
+        <span className="ml-auto font-mono text-2xs text-fg-subtle normal-case">{total} ms</span>
+      </div>
+      <ol className="space-y-1.5">
+        {steps.map((s, i) => {
+          const Icon = s.name === 'retrieve' ? Search : s.name === 'generate' ? Cpu : Check;
+          return (
+            <li key={i} className="flex items-center gap-2.5 text-sm">
+              <span className="grid h-5 w-5 flex-none place-items-center rounded-full bg-success/15 text-success">
+                <Check className="h-3 w-3" />
+              </span>
+              <Icon className="h-3.5 w-3.5 flex-none text-fg-muted" />
+              <span className="text-fg">{s.label}</span>
+              <span className="text-2xs text-fg-subtle truncate">· {s.detail}</span>
+              <span className="ml-auto font-mono text-2xs text-fg-subtle">{s.duration_ms} ms</span>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
+const PIPELINE_STAGES = [
+  { icon: Search, label: '向量检索', hint: '把问题编码成向量，从 pgvector 召回最相关片段' },
+  { icon: Cpu, label: '生成答案', hint: 'qwen3.7-max 基于片段推理并作答（会先思考）' },
+];
+
+/** Live pipeline progress: advances through retrieve → generate by elapsed time. */
 function ThinkingIndicator() {
   const [sec, setSec] = React.useState(0);
   React.useEffect(() => {
     const t = setInterval(() => setSec((s) => s + 1), 1000);
     return () => clearInterval(t);
   }, []);
+  // First ~2s feels like retrieval; after that the LLM is generating.
+  const active = sec < 2 ? 0 : 1;
   return (
     <div className="mt-8 surface p-5">
-      <div className="flex items-center gap-2 text-sm text-fg-muted">
-        <Brain className="h-4 w-4 text-accent animate-pulse" />
-        <span>模型思考中…</span>
+      <div className="mb-3 flex items-center gap-2 text-sm text-fg-muted">
+        <Cpu className="h-4 w-4 text-accent animate-pulse" />
+        <span>执行中…</span>
         <span className="ml-auto font-mono text-2xs text-fg-subtle">{sec}s</span>
       </div>
-      <div className="mt-4 space-y-2">
-        <div className="h-3 w-3/4 rounded bg-bg-inset animate-pulse" />
-        <div className="h-3 w-5/6 rounded bg-bg-inset animate-pulse" />
-        <div className="h-3 w-2/3 rounded bg-bg-inset animate-pulse" />
-      </div>
+      <ol className="space-y-2">
+        {PIPELINE_STAGES.map((st, i) => {
+          const done = i < active;
+          const running = i === active;
+          const Icon = st.icon;
+          return (
+            <li key={i} className="flex items-start gap-2.5 text-sm">
+              <span
+                className={`mt-0.5 grid h-5 w-5 flex-none place-items-center rounded-full ${
+                  done
+                    ? 'bg-success/15 text-success'
+                    : running
+                      ? 'bg-accent/15 text-accent'
+                      : 'bg-bg-inset text-fg-subtle'
+                }`}
+              >
+                {done ? (
+                  <Check className="h-3 w-3" />
+                ) : running ? (
+                  <Icon className="h-3 w-3 animate-pulse" />
+                ) : (
+                  <Icon className="h-3 w-3" />
+                )}
+              </span>
+              <div className="min-w-0">
+                <div className={running || done ? 'text-fg' : 'text-fg-subtle'}>
+                  {st.label}
+                  {running && <span className="ml-2 text-2xs text-accent">进行中</span>}
+                </div>
+                <div className="text-2xs text-fg-subtle">{st.hint}</div>
+              </div>
+            </li>
+          );
+        })}
+      </ol>
       <p className="mt-3 text-2xs text-fg-subtle">
         qwen3.7-max 是推理模型，会先思考再作答，单次约 15–30 秒。
       </p>

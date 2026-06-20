@@ -45,9 +45,16 @@ export interface AskSource {
   excerpt: string;
   score: number;
 }
+export interface AskStep {
+  name: string; // "retrieve" | "generate"
+  label: string;
+  detail: string;
+  duration_ms: number;
+}
 export interface AskResponse {
   answer: string;
   sources: AskSource[];
+  steps?: AskStep[];
   provider: string;
   latency_ms: number;
   asked_at: string;
