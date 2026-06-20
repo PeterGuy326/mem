@@ -16,7 +16,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { Markdown } from '@/components/ui/Markdown';
-import { askQuestion, type AskResponse, type AskStep } from '@/lib/ai';
+import { askQuestion, streamAsk, type AskStep, type AskSource } from '@/lib/ai';
 import { ApiException } from '@/lib/api';
 import { useHistory, splitThinking } from '@/hooks/useHistory';
 import { useAuth } from '@/hooks/useAuth';
@@ -52,23 +52,54 @@ function AskPanel({ onClose }: { onClose: () => void }) {
   const { t } = useT();
   const [q, setQ] = React.useState('');
   const [busy, setBusy] = React.useState(false);
-  const [resp, setResp] = React.useState<AskResponse | null>(null);
+  const [steps, setSteps] = React.useState<AskStep[]>([]);
+  const [thinking, setThinking] = React.useState('');
+  const [answer, setAnswer] = React.useState('');
+  const [sources, setSources] = React.useState<AskSource[]>([]);
   const [err, setErr] = React.useState<string | null>(null);
   const history = useHistory('mem.history.ask');
   const bodyRef = React.useRef<HTMLDivElement>(null);
+  const abortRef = React.useRef<AbortController | null>(null);
 
   async function submit(question: string) {
     const Q = question.trim();
     if (!Q || busy) return;
     setBusy(true);
     setErr(null);
-    setResp(null);
+    setSteps([]);
+    setThinking('');
+    setAnswer('');
+    setSources([]);
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
     try {
-      const r = await askQuestion({ question: Q, top_k: 5 });
-      setResp(r);
+      await streamAsk(
+        { question: Q, top_k: 5 },
+        (ev) => {
+          if (ev.type === 'step' && ev.step) setSteps((p) => [...p, ev.step!]);
+          else if (ev.type === 'thinking') setThinking((p) => p + (ev.delta ?? ''));
+          else if (ev.type === 'answer') setAnswer((p) => p + (ev.delta ?? ''));
+          else if (ev.type === 'sources') setSources(ev.sources ?? []);
+          else if (ev.type === 'error') setErr(ev.error ?? 'error');
+        },
+        ac.signal,
+      );
       history.push(Q);
     } catch (e) {
-      setErr(e instanceof ApiException ? e.message : String(e));
+      // Fall back to the non-streaming endpoint if streaming fails.
+      try {
+        const r = await askQuestion({ question: Q, top_k: 5 });
+        const split = splitThinking(r.answer);
+        if (split.thinking) setThinking(split.thinking);
+        setAnswer(split.answer);
+        setSources(r.sources);
+        setSteps(r.steps ?? []);
+        history.push(Q);
+      } catch (e2) {
+        setErr(e2 instanceof ApiException ? e2.message : String(e2));
+        void e;
+      }
     } finally {
       setBusy(false);
     }
@@ -76,9 +107,11 @@ function AskPanel({ onClose }: { onClose: () => void }) {
 
   React.useEffect(() => {
     bodyRef.current?.scrollTo({ top: bodyRef.current.scrollHeight });
-  }, [resp, busy]);
+  }, [steps, thinking, answer, busy]);
 
-  const split = resp ? splitThinking(resp.answer) : null;
+  React.useEffect(() => () => abortRef.current?.abort(), []);
+
+  const hasContent = busy || steps.length > 0 || !!thinking || !!answer;
 
   return (
     <div
@@ -108,7 +141,7 @@ function AskPanel({ onClose }: { onClose: () => void }) {
 
       {/* Body */}
       <div ref={bodyRef} className="flex-1 overflow-y-auto px-4 py-3.5 text-sm">
-        {!resp && !busy && !err && (
+        {!hasContent && !err && (
           <div className="space-y-3 py-2">
             <div className="flex flex-col items-center gap-2 py-3 text-center">
               <div className="grid h-11 w-11 place-items-center rounded-2xl bg-gradient-to-br from-accent-hover to-accent-muted text-white shadow-glow">
@@ -137,32 +170,40 @@ function AskPanel({ onClose }: { onClose: () => void }) {
           </div>
         )}
 
-        {busy && <ThinkingIndicator />}
-
         {err && (
           <div className="rounded-md border border-danger/40 bg-danger/5 px-3 py-2 text-xs text-danger">
             {err}
           </div>
         )}
 
-        {resp && split && (
+        {hasContent && (
           <div className="space-y-3">
-            {resp.steps && resp.steps.length > 0 && <ExecutionTrace steps={resp.steps} />}
-            {split.thinking && <ThinkingPanel text={split.thinking} />}
-            <div className="rounded-xl border border-border/60 bg-gradient-to-b from-bg-subtle/60 to-bg-subtle/20 p-3.5 text-fg shadow-sm">
-              {split.answer ? (
-                <Markdown className="text-[13px] leading-relaxed">{split.answer}</Markdown>
-              ) : (
-                <span className="text-fg-subtle">{t('ask.emptyAnswer')}</span>
-              )}
-            </div>
-            {resp.sources?.length > 0 && (
+            {steps.length > 0 && <ExecutionTrace steps={steps} />}
+
+            {/* Waiting for the first token after retrieval. */}
+            {busy && steps.length > 0 && !thinking && !answer && (
+              <div className="flex items-center gap-2 text-xs text-fg-muted">
+                <Cpu className="h-3.5 w-3.5 animate-pulse text-accent" />
+                {t('ask.running')}
+              </div>
+            )}
+
+            {thinking && <ThinkingPanel text={thinking} streaming={busy && !answer} />}
+
+            {answer && (
+              <div className="rounded-xl border border-border/60 bg-gradient-to-b from-bg-subtle/60 to-bg-subtle/20 p-3.5 text-fg shadow-sm">
+                <Markdown className="text-[13px] leading-relaxed">{answer}</Markdown>
+                {busy && <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-accent align-middle" />}
+              </div>
+            )}
+
+            {sources.length > 0 && (
               <div>
                 <div className="mb-1 text-2xs uppercase tracking-wider text-fg-muted">
-                  {t('ask.sources')} · {resp.sources.length}
+                  {t('ask.sources')} · {sources.length}
                 </div>
                 <ol className="space-y-1">
-                  {resp.sources.map((s, i) => (
+                  {sources.map((s, i) => (
                     <li key={s.file_id} className="flex items-center gap-1.5 text-2xs">
                       <span className="font-mono text-fg-subtle">[{i + 1}]</span>
                       <a href={`/files/${s.file_id}`} className="truncate text-fg hover:text-accent">
@@ -236,67 +277,45 @@ function ExecutionTrace({ steps }: { steps: AskStep[] }) {
   );
 }
 
-function ThinkingPanel({ text }: { text: string }) {
+/** Thinking panel — auto-expands while the reasoning is still streaming in,
+ *  and stays collapsible afterward. */
+function ThinkingPanel({ text, streaming }: { text: string; streaming?: boolean }) {
   const { t } = useT();
   const [open, setOpen] = React.useState(false);
+  // Follow the stream live; once it stops, fold it away unless the user opened it.
+  const [userToggled, setUserToggled] = React.useState(false);
+  const expanded = userToggled ? open : !!streaming;
+  const innerRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    if (streaming && innerRef.current) innerRef.current.scrollTop = innerRef.current.scrollHeight;
+  }, [text, streaming]);
   return (
     <div className="overflow-hidden rounded-md border border-border bg-bg-subtle/60">
       <button
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          setUserToggled(true);
+          setOpen(!expanded);
+        }}
         className="flex w-full items-center gap-1.5 px-3 py-2 text-2xs text-fg-muted hover:text-fg"
       >
-        <Brain className="h-3.5 w-3.5 text-accent" />
+        <Brain className={`h-3.5 w-3.5 text-accent ${streaming ? 'animate-pulse' : ''}`} />
         {t('ask.thinking')}
-        <span className="text-fg-subtle">（{t('ask.thinkingChars', { n: text.length })}）</span>
-        <ChevronDown className={`ml-auto h-3.5 w-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />
+        {streaming ? (
+          <span className="text-accent">· {t('ask.inProgress')}</span>
+        ) : (
+          <span className="text-fg-subtle">（{t('ask.thinkingChars', { n: text.length })}）</span>
+        )}
+        <ChevronDown className={`ml-auto h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-180' : ''}`} />
       </button>
-      {open && (
-        <div className="border-t border-border px-3 py-2 text-2xs leading-relaxed text-fg-muted whitespace-pre-wrap">
+      {expanded && (
+        <div
+          ref={innerRef}
+          className="max-h-40 overflow-y-auto border-t border-border px-3 py-2 text-2xs leading-relaxed text-fg-muted whitespace-pre-wrap"
+        >
           {text}
+          {streaming && <span className="ml-0.5 inline-block h-3 w-1 animate-pulse bg-accent align-middle" />}
         </div>
       )}
-    </div>
-  );
-}
-
-function ThinkingIndicator() {
-  const { t } = useT();
-  const [sec, setSec] = React.useState(0);
-  React.useEffect(() => {
-    const timer = setInterval(() => setSec((s) => s + 1), 1000);
-    return () => clearInterval(timer);
-  }, []);
-  const active = sec < 2 ? 0 : 1;
-  const stages = [
-    { icon: Search, key: 'ask.stageRetrieve' },
-    { icon: Cpu, key: 'ask.stageGenerate' },
-  ];
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-1.5 text-xs text-fg-muted">
-        <Cpu className="h-3.5 w-3.5 text-accent animate-pulse" />
-        {t('ask.running')}
-        <span className="ml-auto font-mono text-2xs text-fg-subtle">{sec}s</span>
-      </div>
-      {stages.map((st, i) => {
-        const done = i < active;
-        const running = i === active;
-        const Icon = st.icon;
-        return (
-          <div key={i} className="flex items-center gap-1.5 text-2xs">
-            <span
-              className={`grid h-4 w-4 flex-none place-items-center rounded-full ${
-                done ? 'bg-success/15 text-success' : running ? 'bg-accent/15 text-accent' : 'bg-bg-inset text-fg-subtle'
-              }`}
-            >
-              {done ? <Check className="h-2.5 w-2.5" /> : <Icon className="h-2.5 w-2.5" />}
-            </span>
-            <span className={running || done ? 'text-fg' : 'text-fg-subtle'}>{t(st.key)}</span>
-            {running && <span className="text-accent">· {t('ask.inProgress')}</span>}
-          </div>
-        );
-      })}
-      <p className="text-2xs text-fg-subtle">{t('ask.thinkingNote')}</p>
     </div>
   );
 }

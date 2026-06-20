@@ -98,6 +98,7 @@ func (s *Server) Router() http.Handler {
 
 		// Ask — RAG cross-file QA (SPEC §F5)
 		r.With(s.requireScope(auth.ScopeSearch)).Post("/v1/ask", s.handleAsk)
+		r.With(s.requireScope(auth.ScopeSearch)).Post("/v1/ask/stream", s.handleAskStream)
 
 		// Providers (SPEC §F8)
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/providers", s.handleListProviders)
