@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Search, Filter, Image as ImageIcon, FileText, Music, FileQuestion, Sparkles, ArrowLeft } from 'lucide-react';
+import { Search, Filter, Image as ImageIcon, FileText, Music, FileQuestion, ArrowLeft } from 'lucide-react';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
@@ -187,11 +187,6 @@ export function SearchPage() {
             清除
           </Button>
         )}
-        <div className="ml-auto text-2xs text-fg-subtle inline-flex items-center gap-2">
-          <span className="inline-flex items-center gap-1 rounded-md border border-dashed border-border px-2 py-0.5">
-            <Sparkles className="h-3 w-3" /> 人脸过滤 W2 上线
-          </span>
-        </div>
       </section>
 
       {/* Query plan / meta */}
@@ -211,7 +206,7 @@ export function SearchPage() {
         <EmptyState
           icon={<Search />}
           title="开始搜索"
-          description="语义 + 视觉 + 元数据多路召回。支持中文、按时间过滤、按人物过滤（W2）。"
+          description="语义 + 视觉多路召回。支持中文自然语言、按类型和时间过滤。"
         />
       ) : isFetching && !data ? (
         <ResultGridSkeleton />
