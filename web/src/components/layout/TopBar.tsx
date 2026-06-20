@@ -10,19 +10,21 @@ import { Button } from '@/components/ui/Button';
 import { Logo } from './Logo';
 import { useAuth } from '@/hooks/useAuth';
 import { cn } from '@/lib/cn';
+import { useT, LANGS } from '@/i18n';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 
 const navItems = [
-  { to: '/drive', label: 'Drive', icon: FolderOpen, match: '/drive' },
-  { to: '/ask', label: 'Ask', icon: Sparkles, match: '/ask' },
-  { to: '/faces', label: 'Faces', icon: Users, match: '/faces' },
-  { to: '/providers', label: 'Providers', icon: Settings, match: '/providers' },
+  { to: '/drive', labelKey: 'nav.drive', icon: FolderOpen, match: '/drive' },
+  { to: '/ask', labelKey: 'nav.ask', icon: Sparkles, match: '/ask' },
+  { to: '/faces', labelKey: 'nav.faces', icon: Users, match: '/faces' },
+  { to: '/providers', labelKey: 'nav.providers', icon: Settings, match: '/providers' },
 ];
 
 export function TopBar({ children }: { children?: React.ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
+  const { t, lang, setLang } = useT();
   const [q, setQ] = React.useState('');
 
   const isActive = (prefix: string) => location.pathname.startsWith(prefix);
@@ -47,7 +49,7 @@ export function TopBar({ children }: { children?: React.ReactNode }) {
                 )}
               >
                 <Icon className="h-3.5 w-3.5" />
-                {it.label}
+                {t(it.labelKey)}
               </Link>
             );
           })}
@@ -67,8 +69,8 @@ export function TopBar({ children }: { children?: React.ReactNode }) {
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="搜索你的网盘…"
-            aria-label="搜索"
+            placeholder={t('nav.searchPlaceholder')}
+            aria-label={t('search.title')}
             className="h-8 w-56 rounded-md border border-border bg-bg-inset pl-8 pr-3 text-sm
                        text-fg placeholder:text-fg-subtle outline-none focus:border-accent/60"
           />
@@ -93,8 +95,28 @@ export function TopBar({ children }: { children?: React.ReactNode }) {
                 className="z-50 min-w-44 rounded-md border border-border bg-bg-panel p-1 shadow-soft animate-fade-in"
               >
                 <DropdownMenu.Label className="px-2 py-1.5 text-2xs uppercase tracking-wider text-fg-subtle">
-                  {user?.email ?? '未登录'}
+                  {user?.email ?? t('nav.notSignedIn')}
                 </DropdownMenu.Label>
+                <DropdownMenu.Separator className="my-1 h-px bg-border" />
+                <DropdownMenu.Label className="px-2 pt-1 pb-0.5 text-2xs uppercase tracking-wider text-fg-subtle">
+                  {t('nav.language')}
+                </DropdownMenu.Label>
+                <div className="flex gap-1 px-1.5 pb-1">
+                  {LANGS.map((l) => (
+                    <button
+                      key={l.code}
+                      onClick={() => setLang(l.code)}
+                      className={cn(
+                        'flex-1 rounded px-2 h-7 text-xs transition-colors',
+                        lang === l.code
+                          ? 'bg-bg-inset text-fg'
+                          : 'text-fg-muted hover:text-fg hover:bg-bg-inset/60',
+                      )}
+                    >
+                      {l.label}
+                    </button>
+                  ))}
+                </div>
                 <DropdownMenu.Separator className="my-1 h-px bg-border" />
                 <DropdownMenu.Item asChild>
                   <Button
@@ -107,7 +129,7 @@ export function TopBar({ children }: { children?: React.ReactNode }) {
                     }}
                   >
                     <LogOut className="h-3.5 w-3.5" />
-                    退出登录
+                    {t('nav.logout')}
                   </Button>
                 </DropdownMenu.Item>
               </DropdownMenu.Content>

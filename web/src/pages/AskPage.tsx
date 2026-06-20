@@ -12,6 +12,7 @@ import { Markdown } from '@/components/ui/Markdown';
 import { askQuestion, type AskResponse, type AskStep } from '@/lib/ai';
 import { ApiException } from '@/lib/api';
 import { useHistory, splitThinking } from '@/hooks/useHistory';
+import { useT } from '@/i18n';
 
 const SAMPLE_QS = [
   'what is in my rental contract?',
@@ -20,6 +21,7 @@ const SAMPLE_QS = [
 ];
 
 export function AskPage() {
+  const { t } = useT();
   const [q, setQ] = React.useState('');
   const [topK, setTopK] = React.useState(5);
   const [busy, setBusy] = React.useState(false);
@@ -48,11 +50,9 @@ export function AskPage() {
   return (
     <div className="mx-auto max-w-3xl px-8 py-10">
       <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
-        <Sparkles className="h-5 w-5 text-accent" /> Ask
+        <Sparkles className="h-5 w-5 text-accent" /> {t('ask.title')}
       </h1>
-      <p className="mt-1.5 text-sm text-fg-muted">
-        Ask a question; mem retrieves the most relevant snippets and synthesizes an answer with sources.
-      </p>
+      <p className="mt-1.5 text-sm text-fg-muted">{t('ask.subtitle')}</p>
 
       <form
         className="mt-5 flex gap-2"
@@ -64,7 +64,7 @@ export function AskPage() {
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Ask anything about your indexed files…"
+          placeholder={t('ask.placeholder')}
           className="flex-1 h-11 rounded-md border border-border bg-bg-panel px-4 text-sm outline-none focus:border-accent/60"
           autoFocus
         />
@@ -82,7 +82,7 @@ export function AskPage() {
         </select>
         <Button type="submit" disabled={busy || !q.trim()}>
           <Send className="h-4 w-4" />
-          Ask
+          {t('ask.run')}
         </Button>
       </form>
 
@@ -91,7 +91,7 @@ export function AskPage() {
           {history.items.length > 0 && (
             <div className="flex flex-wrap items-center gap-2">
               <span className="inline-flex items-center gap-1 text-xs text-fg-subtle">
-                <History className="h-3 w-3" /> 最近:
+                <History className="h-3 w-3" /> {t('common.recent')}:
               </span>
               {history.items.slice(0, 6).map((s) => (
                 <button
@@ -118,12 +118,12 @@ export function AskPage() {
                 onClick={history.clear}
                 className="text-2xs text-fg-subtle hover:text-fg underline-offset-2 hover:underline"
               >
-                清空
+                {t('common.clear')}
               </button>
             </div>
           )}
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs text-fg-subtle">Try:</span>
+            <span className="text-xs text-fg-subtle">{t('ask.try')}</span>
             {SAMPLE_QS.map((s) => (
               <button
                 key={s}
@@ -159,14 +159,14 @@ export function AskPage() {
             {split.answer ? (
               <Markdown>{split.answer}</Markdown>
             ) : (
-              <span className="text-fg-subtle">(empty answer)</span>
+              <span className="text-fg-subtle">{t('ask.emptyAnswer')}</span>
             )}
           </div>
 
           {resp.sources?.length > 0 && (
             <div className="mt-6">
               <div className="text-xs uppercase tracking-wider text-fg-muted mb-2">
-                Sources · {resp.sources.length}
+                {t('ask.sources')} · {resp.sources.length}
               </div>
               <ol className="surface divide-y divide-border">
                 {resp.sources.map((s, i) => (
@@ -197,7 +197,7 @@ export function AskPage() {
       )}
 
       {!busy && !resp && !err && q && (
-        <EmptyState icon={<Sparkles />} title="Press Ask" description="—" />
+        <EmptyState icon={<Sparkles />} title={t('ask.pressAsk')} description="—" />
       )}
     </div>
   );
@@ -205,11 +205,14 @@ export function AskPage() {
 
 /** Completed execution trace: the real RAG pipeline stages with wall-clock cost. */
 function ExecutionTrace({ steps }: { steps: AskStep[] }) {
+  const { t } = useT();
   const total = steps.reduce((a, s) => a + s.duration_ms, 0);
+  const stepLabel = (name: string, fallback: string) =>
+    name === 'retrieve' ? t('ask.stageRetrieve') : name === 'generate' ? t('ask.stageGenerate') : fallback;
   return (
     <div className="mb-3 rounded-md border border-border bg-bg-subtle/40 p-3">
       <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-wider text-fg-muted">
-        <Cpu className="h-3.5 w-3.5 text-accent" /> 执行过程
+        <Cpu className="h-3.5 w-3.5 text-accent" /> {t('ask.execution')}
         <span className="ml-auto font-mono text-2xs text-fg-subtle normal-case">{total} ms</span>
       </div>
       <ol className="space-y-1.5">
@@ -221,7 +224,7 @@ function ExecutionTrace({ steps }: { steps: AskStep[] }) {
                 <Check className="h-3 w-3" />
               </span>
               <Icon className="h-3.5 w-3.5 flex-none text-fg-muted" />
-              <span className="text-fg">{s.label}</span>
+              <span className="text-fg">{stepLabel(s.name, s.label)}</span>
               <span className="text-2xs text-fg-subtle truncate">· {s.detail}</span>
               <span className="ml-auto font-mono text-2xs text-fg-subtle">{s.duration_ms} ms</span>
             </li>
@@ -233,16 +236,17 @@ function ExecutionTrace({ steps }: { steps: AskStep[] }) {
 }
 
 const PIPELINE_STAGES = [
-  { icon: Search, label: '向量检索', hint: '把问题编码成向量，从 pgvector 召回最相关片段' },
-  { icon: Cpu, label: '生成答案', hint: 'qwen3.7-max 基于片段推理并作答（会先思考）' },
+  { icon: Search, labelKey: 'ask.stageRetrieve', hintKey: 'ask.stageRetrieveHint' },
+  { icon: Cpu, labelKey: 'ask.stageGenerate', hintKey: 'ask.stageGenerateHint' },
 ];
 
 /** Live pipeline progress: advances through retrieve → generate by elapsed time. */
 function ThinkingIndicator() {
+  const { t } = useT();
   const [sec, setSec] = React.useState(0);
   React.useEffect(() => {
-    const t = setInterval(() => setSec((s) => s + 1), 1000);
-    return () => clearInterval(t);
+    const timer = setInterval(() => setSec((s) => s + 1), 1000);
+    return () => clearInterval(timer);
   }, []);
   // First ~2s feels like retrieval; after that the LLM is generating.
   const active = sec < 2 ? 0 : 1;
@@ -250,7 +254,7 @@ function ThinkingIndicator() {
     <div className="mt-8 surface p-5">
       <div className="mb-3 flex items-center gap-2 text-sm text-fg-muted">
         <Cpu className="h-4 w-4 text-accent animate-pulse" />
-        <span>执行中…</span>
+        <span>{t('ask.running')}</span>
         <span className="ml-auto font-mono text-2xs text-fg-subtle">{sec}s</span>
       </div>
       <ol className="space-y-2">
@@ -279,24 +283,23 @@ function ThinkingIndicator() {
               </span>
               <div className="min-w-0">
                 <div className={running || done ? 'text-fg' : 'text-fg-subtle'}>
-                  {st.label}
-                  {running && <span className="ml-2 text-2xs text-accent">进行中</span>}
+                  {t(st.labelKey)}
+                  {running && <span className="ml-2 text-2xs text-accent">{t('ask.inProgress')}</span>}
                 </div>
-                <div className="text-2xs text-fg-subtle">{st.hint}</div>
+                <div className="text-2xs text-fg-subtle">{t(st.hintKey)}</div>
               </div>
             </li>
           );
         })}
       </ol>
-      <p className="mt-3 text-2xs text-fg-subtle">
-        qwen3.7-max 是推理模型，会先思考再作答，单次约 15–30 秒。
-      </p>
+      <p className="mt-3 text-2xs text-fg-subtle">{t('ask.thinkingNote')}</p>
     </div>
   );
 }
 
 /** Collapsible panel showing the model's chain-of-thought. Collapsed by default. */
 function ThinkingPanel({ text }: { text: string }) {
+  const { t } = useT();
   const [open, setOpen] = React.useState(false);
   return (
     <div className="mb-3 rounded-md border border-border bg-bg-subtle/60 overflow-hidden">
@@ -305,8 +308,8 @@ function ThinkingPanel({ text }: { text: string }) {
         className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-fg-muted hover:text-fg transition-colors"
       >
         <Brain className="h-4 w-4 text-accent" />
-        <span>思考过程</span>
-        <span className="text-2xs text-fg-subtle">（{text.length} 字）</span>
+        <span>{t('ask.thinking')}</span>
+        <span className="text-2xs text-fg-subtle">（{t('ask.thinkingChars', { n: text.length })}）</span>
         <ChevronDown
           className={`ml-auto h-4 w-4 transition-transform ${open ? 'rotate-180' : ''}`}
         />

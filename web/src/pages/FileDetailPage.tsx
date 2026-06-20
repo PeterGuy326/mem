@@ -26,12 +26,14 @@ import { useDeleteFile, useFile, useRelated } from '@/hooks/useFiles';
 import { useAuthedBlobUrl } from '@/hooks/useAuthedBlob';
 import { AuthedImage } from '@/components/ui/AuthedImage';
 import { Markdown } from '@/components/ui/Markdown';
+import { useT } from '@/i18n';
 import { downloadFile } from '@/lib/api';
 import { formatBytes, formatDateTime } from '@/lib/format';
 import { toast } from 'sonner';
 import type { FileKind, MemFile } from '@/lib/types';
 
 export function FileDetailPage() {
+  const { t } = useT();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { data: file, isLoading, error } = useFile(id);
@@ -46,7 +48,7 @@ export function FileDetailPage() {
       <div className="mx-auto max-w-5xl px-8 py-12">
         <Button variant="ghost" size="sm" onClick={() => navigate(-1)} className="mb-6">
           <ArrowLeft className="h-3.5 w-3.5" />
-          返回
+          {t('common.back')}
         </Button>
         <EmptyState
           icon={<FileQuestion />}
@@ -85,7 +87,7 @@ export function FileDetailPage() {
       <div className="flex items-center gap-3 mb-6">
         <Button variant="ghost" size="sm" onClick={() => navigate(-1)}>
           <ArrowLeft className="h-3.5 w-3.5" />
-          返回
+          {t('common.back')}
         </Button>
         <div className="flex-1 min-w-0">
           <div className="text-sm text-fg truncate">{file.name}</div>
@@ -93,7 +95,7 @@ export function FileDetailPage() {
         </div>
         <Button variant="ghost" size="sm" onClick={copyId}>
           <Copy className="h-3.5 w-3.5" />
-          复制 ID
+          {t('common.copyId')}
         </Button>
         <Button
           variant="secondary"
@@ -103,11 +105,11 @@ export function FileDetailPage() {
           }}
         >
           <Download className="h-3.5 w-3.5" />
-          下载
+          {t('common.download')}
         </Button>
         <Button variant="danger" size="sm" onClick={() => setConfirmOpen(true)}>
           <Trash2 className="h-3.5 w-3.5" />
-          删除
+          {t('common.delete')}
         </Button>
       </div>
 
@@ -122,20 +124,20 @@ export function FileDetailPage() {
         <aside className="flex flex-col gap-4">
           <Card>
             <CardHeader className="flex items-center justify-between">
-              <CardTitle>状态</CardTitle>
+              <CardTitle>{t('detail.status')}</CardTitle>
               <StatusBadge status={file.index_status} />
             </CardHeader>
             <CardBody className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
-              <MetaRow icon={<Hash className="h-3 w-3" />} label="大小" value={formatBytes(file.size)} />
+              <MetaRow icon={<Hash className="h-3 w-3" />} label={t('detail.size')} value={formatBytes(file.size)} />
               <MetaRow icon={<TagIcon className="h-3 w-3" />} label="MIME" value={file.mime} mono />
               <MetaRow
                 icon={<Clock className="h-3 w-3" />}
-                label="时间锚点"
+                label={t('detail.timeAnchor')}
                 value={formatDateTime(file.timeline_at)}
               />
               <MetaRow
                 icon={<Clock className="h-3 w-3" />}
-                label="入库时间"
+                label={t('detail.ingestedAt')}
                 value={formatDateTime(file.created_at)}
               />
               {file.geo && (
@@ -161,7 +163,7 @@ export function FileDetailPage() {
           <Card>
             <CardHeader className="flex items-center gap-2">
               <Sparkles className="h-3.5 w-3.5 text-accent" />
-              <CardTitle>AI 洞察</CardTitle>
+              <CardTitle>{t('detail.aiInsights')}</CardTitle>
             </CardHeader>
             <CardBody className="space-y-4 text-sm">
               {file.caption && (
@@ -172,7 +174,7 @@ export function FileDetailPage() {
               )}
               {file.summary && (
                 <div>
-                  <div className="text-2xs uppercase tracking-wider text-fg-subtle mb-1">摘要</div>
+                  <div className="text-2xs uppercase tracking-wider text-fg-subtle mb-1">{t('detail.summary')}</div>
                   <div className="text-fg-muted leading-relaxed">{file.summary}</div>
                 </div>
               )}
@@ -203,7 +205,7 @@ export function FileDetailPage() {
               )}
               {!file.caption && !file.summary && file.tags.length === 0 && (
                 <div className="text-xs text-fg-subtle">
-                  AI 还在处理中，稍等一下就能看到 caption 和标签。
+                  {t('detail.aiProcessing')}
                 </div>
               )}
             </CardBody>
@@ -211,7 +213,7 @@ export function FileDetailPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>相关文件</CardTitle>
+              <CardTitle>{t('detail.relatedFiles')}</CardTitle>
             </CardHeader>
             <CardBody className="p-0">
               {related?.results.length ? (
@@ -302,13 +304,14 @@ function PdfPreview({ file }: { file: MemFile }) {
 }
 
 function VideoPreview({ file }: { file: MemFile }) {
+  const { t } = useT();
   const { url, isLoading } = useAuthedBlobUrl(file.id);
   return (
     <div className="bg-black flex items-center justify-center min-h-[280px]">
       {url ? (
         <video controls src={url} className="max-h-[72vh] w-auto" />
       ) : (
-        <div className="p-12 text-2xs text-fg-subtle">{isLoading ? '加载视频…' : '视频不可用'}</div>
+        <div className="p-12 text-2xs text-fg-subtle">{isLoading ? t('detail.loadingVideo') : '—'}</div>
       )}
     </div>
   );
@@ -344,32 +347,37 @@ function TextPreview({ file }: { file: MemFile }) {
   if (err || text === null) return <UnsupportedPreview file={file} />;
 
   return (
-    <div className="p-8 max-h-[72vh] overflow-y-auto">
+    <div className="px-8 py-10 max-h-[72vh] overflow-y-auto">
       {isMarkdown ? (
-        <Markdown className="text-sm text-fg">{text}</Markdown>
+        <div className="mx-auto max-w-prose">
+          <Markdown className="text-[15px] text-fg">{text}</Markdown>
+        </div>
       ) : (
-        <pre className="font-mono text-xs text-fg-muted whitespace-pre-wrap leading-relaxed">
+        // Plain text rendered as a readable document, not gray monospace code.
+        <article className="mx-auto max-w-prose whitespace-pre-wrap text-[15px] leading-7 text-fg/90">
           {text}
-        </pre>
+        </article>
       )}
     </div>
   );
 }
 
 function UnsupportedPreview({ file }: { file: MemFile }) {
+  const { t } = useT();
   return (
     <div className="p-12 flex flex-col items-center gap-3 text-fg-muted">
       <FileQuestion className="h-10 w-10 text-fg-subtle" />
-      <div className="text-sm">无法直接预览此文件类型</div>
+      <div className="text-sm">{t('detail.unsupported')}</div>
       <div className="text-2xs text-fg-subtle">{file.mime}</div>
       <Button variant="secondary" size="sm" onClick={() => downloadFile(file.id, file.name)}>
-        <Download className="h-4 w-4" /> 下载查看
+        <Download className="h-4 w-4" /> {t('detail.downloadToView')}
       </Button>
     </div>
   );
 }
 
 function AudioPreview({ file }: { file: MemFile }) {
+  const { t } = useT();
   const { url, isLoading } = useAuthedBlobUrl(file.id);
   return (
     <div className="p-12 flex flex-col items-center gap-4">
@@ -379,7 +387,7 @@ function AudioPreview({ file }: { file: MemFile }) {
       {url ? (
         <audio controls src={url} className="w-full max-w-md" />
       ) : (
-        <div className="text-2xs text-fg-subtle">{isLoading ? '加载音频…' : '音频不可用'}</div>
+        <div className="text-2xs text-fg-subtle">{isLoading ? t('detail.loadingAudio') : '—'}</div>
       )}
       <div className="text-xs text-fg-muted text-center max-w-md">
         {file.summary ?? '音频 ASR 转写完成后会出现在 AI 洞察区。'}

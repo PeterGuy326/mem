@@ -12,14 +12,15 @@ import { AuthedImage } from '@/components/ui/AuthedImage';
 import { History, X } from 'lucide-react';
 import { useSearch } from '@/hooks/useFiles';
 import { useHistory } from '@/hooks/useHistory';
+import { useT } from '@/i18n';
 import { formatDate } from '@/lib/format';
 import type { FileKind, SearchResult, SearchTypeFilter } from '@/lib/types';
 
-const TYPE_OPTIONS: { value: SearchTypeFilter; label: string }[] = [
-  { value: 'any', label: '全部' },
-  { value: 'image', label: '图片' },
-  { value: 'doc', label: '文档' },
-  { value: 'audio', label: '音频' },
+const TYPE_OPTIONS: { value: SearchTypeFilter; labelKey: string }[] = [
+  { value: 'any', labelKey: 'search.typeAny' },
+  { value: 'image', labelKey: 'search.typeImage' },
+  { value: 'doc', labelKey: 'search.typeDoc' },
+  { value: 'audio', labelKey: 'search.typeAudio' },
 ];
 
 const SAMPLE_QUERIES = [
@@ -31,6 +32,7 @@ const SAMPLE_QUERIES = [
 ];
 
 export function SearchPage() {
+  const { t } = useT();
   const [params, setParams] = useSearchParams();
   const initialQ = params.get('q') ?? '';
   const [q, setQ] = React.useState(initialQ);
@@ -85,16 +87,16 @@ export function SearchPage() {
           to="/drive"
           className="inline-flex items-center gap-1.5 text-sm text-fg-muted hover:text-fg transition-colors mb-3"
         >
-          <ArrowLeft className="h-3.5 w-3.5" /> 返回云盘
+          <ArrowLeft className="h-3.5 w-3.5" /> {t('common.backToDrive')}
         </Link>
-        <h1 className="text-2xl font-semibold tracking-tight">搜索</h1>
-        <p className="mt-1.5 text-sm text-fg-muted">用自然语言找回任何东西。</p>
+        <h1 className="text-2xl font-semibold tracking-tight">{t('search.title')}</h1>
+        <p className="mt-1.5 text-sm text-fg-muted">{t('search.subtitle')}</p>
         <div className="mt-5 relative">
           <Input
             value={q}
             autoFocus
             onChange={(e) => setQ(e.target.value)}
-            placeholder="搜索图片、文档、人物… 比如 “2012 年和小明在云南拍的照片”"
+            placeholder={t('search.placeholder')}
             leadingIcon={<Search />}
             trailing={isFetching ? <span className="text-2xs text-fg-subtle">…</span> : <Kbd>⏎</Kbd>}
             className="h-12 text-base"
@@ -105,7 +107,7 @@ export function SearchPage() {
             {history.items.length > 0 && (
               <div className="flex flex-wrap items-center gap-2">
                 <span className="inline-flex items-center gap-1 text-xs text-fg-subtle mr-1">
-                  <History className="h-3 w-3" /> 最近搜索:
+                  <History className="h-3 w-3" /> {t('search.recent')}
                 </span>
                 {history.items.slice(0, 8).map((s) => (
                   <button
@@ -129,12 +131,12 @@ export function SearchPage() {
                   onClick={history.clear}
                   className="text-2xs text-fg-subtle hover:text-fg underline-offset-2 hover:underline"
                 >
-                  清空
+                  {t('common.clear')}
                 </button>
               </div>
             )}
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs text-fg-subtle mr-1">试试搜:</span>
+              <span className="text-xs text-fg-subtle mr-1">{t('search.try')}</span>
               {SAMPLE_QUERIES.map((s) => (
                 <button
                   key={s}
@@ -154,7 +156,7 @@ export function SearchPage() {
       <section className="mb-6 flex flex-wrap items-center gap-3 text-sm">
         <div className="flex items-center gap-1.5 text-fg-muted">
           <Filter className="h-3.5 w-3.5" />
-          <span className="text-xs uppercase tracking-wider">过滤</span>
+          <span className="text-xs uppercase tracking-wider">{t('search.filter')}</span>
         </div>
         <div className="flex items-center gap-1 rounded-md border border-border bg-bg-subtle p-0.5">
           {TYPE_OPTIONS.map((opt) => (
@@ -168,12 +170,12 @@ export function SearchPage() {
                   : 'text-fg-muted hover:text-fg',
               )}
             >
-              {opt.label}
+              {t(opt.labelKey)}
             </button>
           ))}
         </div>
-        <DateField label="自" value={since} onChange={setSince} />
-        <DateField label="至" value={until} onChange={setUntil} />
+        <DateField label={t('search.from')} value={since} onChange={setSince} />
+        <DateField label={t('search.to')} value={until} onChange={setUntil} />
         {(since || until || type !== 'any') && (
           <Button
             variant="ghost"
@@ -184,7 +186,7 @@ export function SearchPage() {
               setUntil('');
             }}
           >
-            清除
+            {t('common.clear')}
           </Button>
         )}
       </section>
@@ -205,15 +207,15 @@ export function SearchPage() {
       {!hasQuery ? (
         <EmptyState
           icon={<Search />}
-          title="开始搜索"
-          description="语义 + 视觉多路召回。支持中文自然语言、按类型和时间过滤。"
+          title={t('search.start')}
+          description={t('search.startHint')}
         />
       ) : isFetching && !data ? (
         <ResultGridSkeleton />
       ) : results.length === 0 ? (
         <EmptyState
           icon={<Search />}
-          title="没有命中"
+          title={t('search.noHits')}
           description="试试换个说法，比如把日期范围去掉，或者换成英文关键词。"
         />
       ) : (
@@ -253,6 +255,7 @@ function DateField({
 }
 
 function ResultGrid({ results }: { results: SearchResult[] }) {
+  const { t } = useT();
   // Split images vs docs/audio. Images go to a masonry-ish CSS columns layout;
   // docs/audio go to a list. Together they read like Linear's mixed views.
   const images = results.filter((r) => r.file.kind === 'image');
@@ -263,11 +266,11 @@ function ResultGrid({ results }: { results: SearchResult[] }) {
       <section>
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-xs uppercase tracking-wider text-fg-muted font-medium">
-            视觉结果 · {images.length}
+            {t('search.visualResults')} · {images.length}
           </h3>
         </div>
         {images.length === 0 ? (
-          <div className="text-xs text-fg-subtle py-6">这次搜索没有图片命中</div>
+          <div className="text-xs text-fg-subtle py-6">{t('search.noImages')}</div>
         ) : (
           <div className="columns-2 md:columns-3 gap-3 [column-fill:_balance]">
             {images.map((r) => (
@@ -278,10 +281,10 @@ function ResultGrid({ results }: { results: SearchResult[] }) {
       </section>
       <aside className="lg:sticky lg:top-20">
         <h3 className="mb-3 text-xs uppercase tracking-wider text-fg-muted font-medium">
-          文档与音频 · {others.length}
+          {t('search.docsAudio')} · {others.length}
         </h3>
         {others.length === 0 ? (
-          <div className="text-xs text-fg-subtle py-6">无</div>
+          <div className="text-xs text-fg-subtle py-6">{t('search.none')}</div>
         ) : (
           <ol className="surface divide-y divide-border">
             {others.map((r) => (
