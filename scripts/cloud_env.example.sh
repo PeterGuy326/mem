@@ -17,14 +17,19 @@ export OPENAI_BASE_URL="https://idealab.alibaba-inc.com/api/openai"
 # ---- 你的 idealab API key（替换下面这行；不要提交到 git）----
 export OPENAI_API_KEY="<在这里填你的 idealab key>"
 
-# ---- 文本 embedding：用 idealab 提供的向量模型 ----
-# 跑 scripts/probe_idealab_models.sh 列出可用的 embedding 模型 ID 再填这里。
-# 常见命名形如 openai:text-embedding-v3 / openai:gte-... 等。
-export MEM_DEFAULT_EMBEDDING="openai:<你的embedding模型ID>"
+# ---- 文本 embedding：idealab 最新文本向量模型 text-embedding-v4（1024-d）----
+# 跑 scripts/probe_idealab_models.sh 可列出网关上其它可用的 embedding 模型。
+export MEM_DEFAULT_EMBEDDING="openai:text-embedding-v4"
 
-# ---- RAG 问答的 chat LLM：idealab chat 模型（mem ask 用）----
-export MEM_DEFAULT_LLM="openai:qwen3.5-plus"
+# ---- RAG 问答的 chat LLM：qwen3.7-max（idealab 最新旗舰，thinking 模型，
+# 质量最高、推理稍慢）。想要更快可改 openai:qwen3-max。----
+export MEM_DEFAULT_LLM="openai:qwen3.7-max"
 
-# ---- 视觉：图搜图仍走本地 CLIP（512-d，与 schema embeddings_visual 对齐）----
-# CLIP 是本地视觉模型、不是 4.7GB 的 LLM，首次约 600MB 权重；如需纯云端可后续替换。
+# ---- 以文搜图：云端视觉大模型 qwen-vl-max 给图片生成描述，再由
+# text-embedding-v4 编码 -> 中文自然语言可经文本路检索图片。idealab 无 CLIP 式
+# 图文同空间多模态 embedding，故云端图片理解走「VLM 描述 + 文本向量」路线。----
+export MEM_DEFAULT_VLM="openai:qwen-vl-max"
+
+# ---- 视觉向量列仍用本地 CLIP（512-d，与 schema embeddings_visual 对齐）；
+# --route visual 靠它，--route auto/text 靠上面的云端 caption 向量。----
 export MEM_DEFAULT_VISUAL_EMBEDDING="clip:ViT-B-32"
