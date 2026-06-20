@@ -5,7 +5,7 @@
  */
 import * as React from 'react';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
-import { LogOut, FolderOpen, Sparkles, Users, Settings, Search } from 'lucide-react';
+import { LogOut, FolderOpen, Users, Settings, Search } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Logo } from './Logo';
 import { useAuth } from '@/hooks/useAuth';
@@ -13,9 +13,10 @@ import { cn } from '@/lib/cn';
 import { useT, LANGS } from '@/i18n';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 
+// Ask is no longer a page — it's the floating assistant bubble (AskWidget),
+// reachable from anywhere — so it's intentionally absent from the top nav.
 const navItems = [
   { to: '/drive', labelKey: 'nav.drive', icon: FolderOpen, match: '/drive' },
-  { to: '/ask', labelKey: 'nav.ask', icon: Sparkles, match: '/ask' },
   { to: '/faces', labelKey: 'nav.faces', icon: Users, match: '/faces' },
   { to: '/providers', labelKey: 'nav.providers', icon: Settings, match: '/providers' },
 ];

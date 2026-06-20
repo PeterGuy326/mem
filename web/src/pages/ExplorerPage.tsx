@@ -37,6 +37,7 @@ import { Toolbar } from '@/components/explorer/Toolbar';
 import { Breadcrumb } from '@/components/explorer/Breadcrumb';
 import { FolderTree } from '@/components/explorer/FolderTree';
 import { TopBar } from '@/components/layout/TopBar';
+import { AskWidget } from '@/components/ask/AskWidget';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Button } from '@/components/ui/Button';
@@ -651,6 +652,8 @@ function ExplorerLayout({ currentPath }: { currentPath: string }) {
 
       {/* Context menu portal */}
       {ctx.menu}
+
+      <AskWidget />
     </div>
   );
 }
