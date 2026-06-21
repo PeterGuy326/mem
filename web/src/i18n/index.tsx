@@ -127,6 +127,13 @@ const dict: Record<string, Partial<Record<Lang, string>>> = {
   'search.noImages': { zh: '这次搜索没有图片命中', en: 'No image hits this time' },
   'search.none': { zh: '无', en: 'None' },
   'search.detectedEntities': { zh: '检测到实体:', en: 'Detected entities:' },
+  'search.people': { zh: '人物', en: 'People' },
+  'people.unnamed': { zh: '未命名', en: 'Unnamed' },
+  'people.namePlaceholder': { zh: '给 TA 起个名…', en: 'Name this person…' },
+  'people.photosN': { zh: '{n} 张照片', en: '{n} photos' },
+  'people.nameSaved': { zh: '已命名', en: 'Named' },
+  'people.back': { zh: '返回人物', en: 'Back to people' },
+  'people.hint': { zh: '点头像看 TA 的照片；给 TA 起名后可在搜索里找“和 XX 的合照”。', en: "Click a face to see their photos; name them to search 'photos with …'." },
   'search.footer': {
     zh: '共 {total} 条结果 · 用时 {ms} ms · 多路融合（visual / text / metadata）',
     en: '{total} results · {ms} ms · fused (visual / text / metadata)',

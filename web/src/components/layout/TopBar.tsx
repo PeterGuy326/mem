@@ -5,7 +5,7 @@
  */
 import * as React from 'react';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
-import { LogOut, FolderOpen, Users, Settings, Search } from 'lucide-react';
+import { LogOut, FolderOpen, Settings, Search } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Logo } from './Logo';
 import { useAuth } from '@/hooks/useAuth';
@@ -17,7 +17,6 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 // reachable from anywhere — so it's intentionally absent from the top nav.
 const navItems = [
   { to: '/drive', labelKey: 'nav.drive', icon: FolderOpen, match: '/drive' },
-  { to: '/faces', labelKey: 'nav.faces', icon: Users, match: '/faces' },
   { to: '/providers', labelKey: 'nav.providers', icon: Settings, match: '/providers' },
 ];
 

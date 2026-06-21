@@ -12,6 +12,7 @@ import { AuthedImage } from '@/components/ui/AuthedImage';
 import { History, X } from 'lucide-react';
 import { useSearch } from '@/hooks/useFiles';
 import { useHistory } from '@/hooks/useHistory';
+import { listFaces, getFaceFiles, nameFace, type FaceCluster, type FaceFile } from '@/lib/ai';
 import { useT } from '@/i18n';
 import { formatDate } from '@/lib/format';
 import type { FileKind, SearchResult, SearchTypeFilter } from '@/lib/types';
@@ -205,11 +206,14 @@ export function SearchPage() {
 
       {/* Results */}
       {!hasQuery ? (
-        <EmptyState
-          icon={<Search />}
-          title={t('search.start')}
-          description={t('search.startHint')}
-        />
+        <div className="space-y-8">
+          <PeopleSection onSearchPerson={(name) => setQ(name)} />
+          <EmptyState
+            icon={<Search />}
+            title={t('search.start')}
+            description={t('search.startHint')}
+          />
+        </div>
       ) : isFetching && !data ? (
         <ResultGridSkeleton />
       ) : results.length === 0 ? (
@@ -226,6 +230,165 @@ export function SearchPage() {
       {hasQuery && data && (
         <div className="mt-10 text-2xs text-fg-subtle text-center">
           {t('search.footer', { total: data.total, ms: data._meta?.latency_ms ?? '?' })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** "People" — face clusters folded into Search. Click a face to see that
+ *  person's photos; name them inline so "photos with <name>" becomes searchable. */
+function PeopleSection({ onSearchPerson }: { onSearchPerson: (name: string) => void }) {
+  const { t } = useT();
+  const [clusters, setClusters] = React.useState<FaceCluster[] | null>(null);
+  const [selected, setSelected] = React.useState<FaceCluster | null>(null);
+  const [files, setFiles] = React.useState<FaceFile[] | null>(null);
+  const [nameDraft, setNameDraft] = React.useState('');
+
+  React.useEffect(() => {
+    listFaces()
+      .then((r) => setClusters(r.clusters ?? []))
+      .catch(() => setClusters([]));
+  }, []);
+
+  async function openPerson(c: FaceCluster) {
+    setSelected(c);
+    setNameDraft(c.name);
+    setFiles(null);
+    try {
+      const r = await getFaceFiles(c.id);
+      setFiles(r.files ?? []);
+    } catch {
+      setFiles([]);
+    }
+  }
+
+  async function saveName() {
+    if (!selected) return;
+    const name = nameDraft.trim();
+    await nameFace(selected.id, name).catch(() => {});
+    setClusters((cs) => (cs ?? []).map((c) => (c.id === selected.id ? { ...c, name } : c)));
+    setSelected((s) => (s ? { ...s, name } : s));
+  }
+
+  if (!clusters || clusters.length === 0) return null; // no people → nothing to show
+
+  // Detail: one person's photos.
+  if (selected) {
+    return (
+      <section>
+        <button
+          onClick={() => {
+            setSelected(null);
+            setFiles(null);
+          }}
+          className="mb-3 inline-flex items-center gap-1.5 text-sm text-fg-muted hover:text-fg"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" /> {t('people.back')}
+        </button>
+        <div className="mb-4 flex items-center gap-3">
+          <Avatar fileId={selected.cover_file_id} size={48} />
+          <div className="flex items-center gap-2">
+            <input
+              value={nameDraft}
+              onChange={(e) => setNameDraft(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && saveName()}
+              placeholder={t('people.namePlaceholder')}
+              className="h-9 w-48 rounded-md border border-border bg-bg-inset px-3 text-sm outline-none focus:border-accent/60"
+            />
+            <Button size="sm" variant="secondary" onClick={saveName}>
+              {t('people.nameSaved')}
+            </Button>
+            {selected.name && (
+              <Button size="sm" variant="ghost" onClick={() => onSearchPerson(selected.name)}>
+                <Search className="h-3.5 w-3.5" /> {t('search.title')}
+              </Button>
+            )}
+          </div>
+        </div>
+        {files === null ? (
+          <div className="columns-2 md:columns-4 gap-3">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="mb-3 h-40 w-full" />
+            ))}
+          </div>
+        ) : (
+          <div className="columns-2 md:columns-4 gap-3 [column-fill:_balance]">
+            {files.map((f) => (
+              <Link
+                key={f.file_id}
+                to={`/files/${f.file_id}`}
+                className="group mb-3 block break-inside-avoid overflow-hidden rounded-lg border border-border bg-bg-panel hover:border-border-strong"
+              >
+                <AuthedImage
+                  fileId={f.file_id}
+                  alt={f.name}
+                  className="w-full h-auto object-contain"
+                  fallback={
+                    <div className="aspect-square grid place-items-center text-fg-subtle">
+                      <ImageIcon className="h-6 w-6" />
+                    </div>
+                  }
+                />
+              </Link>
+            ))}
+          </div>
+        )}
+      </section>
+    );
+  }
+
+  // Overview: avatar row of all people.
+  return (
+    <section>
+      <div className="mb-2 flex items-baseline gap-2">
+        <h3 className="text-xs uppercase tracking-wider text-fg-muted font-medium">
+          {t('search.people')} · {clusters.length}
+        </h3>
+        <span className="text-2xs text-fg-subtle">{t('people.hint')}</span>
+      </div>
+      <div className="flex flex-wrap gap-4">
+        {clusters.map((c) => (
+          <button
+            key={c.id}
+            onClick={() => openPerson(c)}
+            className="group flex w-20 flex-col items-center gap-1.5"
+          >
+            <Avatar fileId={c.cover_file_id} size={64} ring />
+            <span className="max-w-full truncate text-xs text-fg">
+              {c.name || t('people.unnamed')}
+            </span>
+            <span className="text-2xs text-fg-subtle">{t('people.photosN', { n: c.file_count })}</span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/** Round face avatar from a representative photo (full image, cropped to circle). */
+function Avatar({ fileId, size, ring }: { fileId?: string; size: number; ring?: boolean }) {
+  return (
+    <div
+      className={cn(
+        'overflow-hidden rounded-full bg-bg-inset border border-border',
+        ring && 'ring-2 ring-transparent group-hover:ring-accent/50 transition-all',
+      )}
+      style={{ width: size, height: size }}
+    >
+      {fileId ? (
+        <AuthedImage
+          fileId={fileId}
+          className="h-full w-full object-cover"
+          fallback={
+            <div className="grid h-full w-full place-items-center text-fg-subtle">
+              <ImageIcon className="h-5 w-5" />
+            </div>
+          }
+        />
+      ) : (
+        <div className="grid h-full w-full place-items-center text-fg-subtle">
+          <ImageIcon className="h-5 w-5" />
         </div>
       )}
     </div>

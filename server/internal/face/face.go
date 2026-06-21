@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -134,18 +135,21 @@ func (s *Service) assignCluster(ctx context.Context, tx pgx.Tx, userID uuid.UUID
 
 // Cluster is one person cluster.
 type Cluster struct {
-	ID        uuid.UUID `json:"id"`
-	Name      string    `json:"name"`
-	FaceCount int       `json:"face_count"`
-	FileCount int       `json:"file_count"`
+	ID          uuid.UUID  `json:"id"`
+	Name        string     `json:"name"`
+	FaceCount   int        `json:"face_count"`
+	FileCount   int        `json:"file_count"`
+	CoverFileID *uuid.UUID `json:"cover_file_id,omitempty"` // a representative photo, for an avatar thumbnail
 }
 
-// List returns all person clusters for the user with sizes.
+// List returns all person clusters for the user with sizes + a cover photo.
 func (s *Service) List(ctx context.Context, userID uuid.UUID) ([]Cluster, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT e.id, COALESCE(NULLIF(e.name, ''), '') AS name,
 		       COUNT(ef.id) AS face_count,
-		       COUNT(DISTINCT ef.file_id) AS file_count
+		       COUNT(DISTINCT ef.file_id) AS file_count,
+		       (SELECT ef2.file_id FROM embeddings_face ef2
+		         WHERE ef2.entity_id = e.id ORDER BY ef2.id LIMIT 1) AS cover_file_id
 		  FROM entities e
 		  LEFT JOIN embeddings_face ef ON ef.entity_id = e.id
 		 WHERE e.user_id = $1 AND e.type = 'person'
@@ -159,10 +163,45 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID) ([]Cluster, error)
 	out := make([]Cluster, 0)
 	for rows.Next() {
 		var c Cluster
-		if err := rows.Scan(&c.ID, &c.Name, &c.FaceCount, &c.FileCount); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.FaceCount, &c.FileCount, &c.CoverFileID); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// FileRef is one photo in which a person cluster appears.
+type FileRef struct {
+	FileID      uuid.UUID `json:"file_id"`
+	Name        string    `json:"name"`
+	Path        string    `json:"path"`
+	MIME        string    `json:"mime"`
+	Caption     *string   `json:"caption,omitempty"`
+	IndexStatus string    `json:"index_status"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// Files returns the photos in which this person cluster appears.
+func (s *Service) Files(ctx context.Context, userID, clusterID uuid.UUID) ([]FileRef, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT f.id, f.name, f.path, f.mime, f.caption, f.index_status, f.created_at
+		  FROM embeddings_face ef
+		  JOIN files f ON f.id = ef.file_id
+		 WHERE ef.entity_id = $1 AND f.user_id = $2
+		 ORDER BY f.created_at DESC
+	`, clusterID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]FileRef, 0)
+	for rows.Next() {
+		var f FileRef
+		if err := rows.Scan(&f.FileID, &f.Name, &f.Path, &f.MIME, &f.Caption, &f.IndexStatus, &f.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
 	}
 	return out, rows.Err()
 }

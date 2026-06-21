@@ -110,6 +110,7 @@ func (s *Server) Router() http.Handler {
 
 		// Faces (SPEC §F6.1, F6.2)
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/faces", s.handleFaceList)
+		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/faces/{id}/files", s.handleFaceFiles)
 		r.With(s.requireScope(auth.ScopeWrite)).Post("/v1/faces/{id}/name", s.handleFaceName)
 		r.With(s.requireScope(auth.ScopeWrite)).Post("/v1/faces/{id}/merge", s.handleFaceMerge)
 

@@ -5,7 +5,6 @@ import { LoginPage } from '@/pages/LoginPage';
 import { ExplorerPage } from '@/pages/ExplorerPage';
 import { FileDetailPage } from '@/pages/FileDetailPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
-import { FacesPage } from '@/pages/FacesPage';
 import { ProvidersPage } from '@/pages/ProvidersPage';
 import { SearchPage } from '@/pages/SearchPage';
 
@@ -36,7 +35,8 @@ export const router = createBrowserRouter([
       // Ask is now the global floating assistant (AskWidget); keep the old
       // path working by redirecting to the drive.
       { path: '/ask', element: <Navigate to="/drive" replace /> },
-      { path: '/faces', element: <FacesPage /> },
+      // Faces folded into Search (the People row); keep the path working.
+      { path: '/faces', element: <Navigate to="/search" replace /> },
       { path: '/providers', element: <ProvidersPage /> },
     ],
   },

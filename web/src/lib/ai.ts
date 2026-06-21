@@ -135,10 +135,25 @@ export interface FaceCluster {
   name: string;
   face_count: number;
   file_count: number;
+  cover_file_id?: string;
 }
 
 export function listFaces(): Promise<{ clusters: FaceCluster[] }> {
   return api.get<{ clusters: FaceCluster[] }>('/faces');
+}
+
+export interface FaceFile {
+  file_id: string;
+  name: string;
+  path: string;
+  mime: string;
+  caption?: string | null;
+  index_status: string;
+  created_at: string;
+}
+
+export function getFaceFiles(clusterId: string): Promise<{ cluster_id: string; files: FaceFile[] }> {
+  return api.get(`/faces/${clusterId}/files`);
 }
 
 export function nameFace(id: string, name: string): Promise<{ ok: boolean }> {
