@@ -91,6 +91,7 @@ func (s *Server) Router() http.Handler {
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/files/{id}", s.handleGetFile)
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/files/{id}/content", s.handleGetContent)
 		r.With(s.requireScope(auth.ScopeWrite)).Patch("/v1/files/{id}", s.handlePatchFile)
+		r.With(s.requireScope(auth.ScopeDelete)).Delete("/v1/files/{id}", s.handleDeleteFile)
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/files/{id}/related", s.handleFileRelated)
 
 		// Search (SPEC §F3)
@@ -554,6 +555,22 @@ func (s *Server) handlePatchFile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// handleDeleteFile implements DELETE /v1/files/{id} — removes the file row
+// (cascading to its embeddings + face links) and its blob.
+func (s *Server) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
+	u := r.Context().Value(ctxUser).(*auth.User)
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_id", err.Error())
+		return
+	}
+	if err := s.File.Delete(r.Context(), u.ID, id); err != nil {
+		writeFileMutateError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // handleSearch implements POST /v1/search.
