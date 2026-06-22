@@ -65,10 +65,20 @@ export default {
         shimmer: {
           '100%': { transform: 'translateX(100%)' },
         },
+        'slide-up': {
+          from: { opacity: '0', transform: 'translateY(12px) scale(0.98)' },
+          to: { opacity: '1', transform: 'translateY(0) scale(1)' },
+        },
+        breathe: {
+          '0%, 100%': { boxShadow: '0 0 0 0 rgb(var(--accent) / 0.45), 0 10px 30px -8px rgb(var(--accent) / 0.5)' },
+          '50%': { boxShadow: '0 0 0 8px rgb(var(--accent) / 0), 0 10px 30px -8px rgb(var(--accent) / 0.5)' },
+        },
       },
       animation: {
         'fade-in': 'fade-in 200ms ease-out',
         shimmer: 'shimmer 1.6s infinite',
+        'slide-up': 'slide-up 240ms cubic-bezier(0.22, 1, 0.36, 1)',
+        breathe: 'breathe 3.5s ease-in-out infinite',
       },
     },
   },

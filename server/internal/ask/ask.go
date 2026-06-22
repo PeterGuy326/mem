@@ -58,10 +58,20 @@ type Source struct {
 	Score   float32   `json:"score"`
 }
 
+// Step records one stage of the RAG pipeline with its real wall-clock cost,
+// so the UI can show an execution trace (not just the model's thinking).
+type Step struct {
+	Name       string `json:"name"`        // machine id: "retrieve" | "generate"
+	Label      string `json:"label"`       // human label
+	Detail     string `json:"detail"`      // e.g. "命中 5 个片段" / model spec
+	DurationMS int64  `json:"duration_ms"` // wall-clock for this stage
+}
+
 // Answer is the response payload.
 type Answer struct {
 	Answer    string    `json:"answer"`
 	Sources   []Source  `json:"sources"`
+	Steps     []Step    `json:"steps"`
 	Provider  string    `json:"provider"`
 	LatencyMS int64     `json:"latency_ms"`
 	AskedAt   time.Time `json:"asked_at"`
@@ -96,9 +106,11 @@ func (s *Service) Ask(ctx context.Context, req Request) (*Answer, error) {
 	}
 
 	start := time.Now()
+	steps := make([]Step, 0, 2)
 
 	// 1. Retrieve. Use the text route — visual hits don't give the LLM
 	// reliable excerpts to ground its answer in.
+	retrieveStart := time.Now()
 	hits, err := s.search.Search(ctx, search.Query{
 		UserID: req.UserID,
 		Text:   q,
@@ -108,10 +120,17 @@ func (s *Service) Ask(ctx context.Context, req Request) (*Answer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("retrieve: %w", err)
 	}
+	steps = append(steps, Step{
+		Name:       "retrieve",
+		Label:      "向量检索",
+		Detail:     fmt.Sprintf("命中 %d 个相关片段", len(hits)),
+		DurationMS: time.Since(retrieveStart).Milliseconds(),
+	})
 	if len(hits) == 0 {
 		return &Answer{
 			Answer:    "I don't have any documents in your drive that match this question.",
 			Sources:   []Source{},
+			Steps:     steps,
 			LatencyMS: time.Since(start).Milliseconds(),
 			AskedAt:   start,
 		}, nil
@@ -146,6 +165,7 @@ func (s *Service) Ask(ctx context.Context, req Request) (*Answer, error) {
 	llmSpec := s.userLLMSpec(ctx, req.UserID)
 
 	// 4. Call worker.Chat.
+	genStart := time.Now()
 	chatCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	reply, err := s.worker.Chat(chatCtx, req.UserID.String(),
@@ -158,10 +178,21 @@ func (s *Service) Ask(ctx context.Context, req Request) (*Answer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("llm: %w", err)
 	}
+	genLabel := llmSpec
+	if genLabel == "" {
+		genLabel = "worker 默认模型"
+	}
+	steps = append(steps, Step{
+		Name:       "generate",
+		Label:      "生成答案",
+		Detail:     genLabel,
+		DurationMS: time.Since(genStart).Milliseconds(),
+	})
 
 	return &Answer{
 		Answer:    strings.TrimSpace(reply),
 		Sources:   sources,
+		Steps:     steps,
 		Provider:  llmSpec,
 		LatencyMS: time.Since(start).Milliseconds(),
 		AskedAt:   start,

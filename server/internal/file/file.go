@@ -407,6 +407,30 @@ func (s *Service) Rename(ctx context.Context, userID, fileID uuid.UUID, newName 
 	return s.Get(ctx, userID, fileID)
 }
 
+// Delete removes a file: its DB row (which cascades to embeddings + faces via
+// FK ON DELETE) and its blob in object storage. Blob removal is best-effort —
+// an orphaned object is harmless and shouldn't fail the delete.
+func (s *Service) Delete(ctx context.Context, userID, fileID uuid.UUID) error {
+	f, err := s.Get(ctx, userID, fileID) // verifies ownership + gets storage_key
+	if err != nil {
+		return err
+	}
+	tag, err := s.pool.Exec(ctx, `DELETE FROM files WHERE id = $1 AND user_id = $2`, fileID, userID)
+	if err != nil {
+		return fmt.Errorf("delete file: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	if f.StorageKey != "" {
+		if derr := s.store.Delete(ctx, f.StorageKey); derr != nil {
+			// Row is already gone; a leftover blob is acceptable.
+			_ = derr
+		}
+	}
+	return nil
+}
+
 func storageKey(userID, fileID uuid.UUID, name string) string {
 	clean := gopath.Base(name)
 	if clean == "" || clean == "." || clean == "/" {

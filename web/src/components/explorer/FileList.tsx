@@ -7,6 +7,7 @@ import { formatBytes, formatRelative } from '@/lib/format';
 import { useExplorer } from './ExplorerContext';
 import { RenameInput } from './RenameInput';
 import type { ContextMenuItem } from './ContextMenu';
+import { useT, tt } from '@/i18n';
 
 export interface FileListProps {
   folders: FolderNode[];
@@ -30,13 +31,14 @@ export interface FileListProps {
 }
 
 export function FileList(props: FileListProps) {
+  const { t } = useT();
   return (
     <div className="px-4 py-3">
       <div className="grid grid-cols-[1fr_120px_180px_120px] gap-3 px-3 py-2 text-2xs uppercase tracking-wider text-fg-subtle font-medium border-b border-border">
-        <div>名称</div>
-        <div>大小</div>
-        <div>修改时间</div>
-        <div>类型</div>
+        <div>{t('drive.colName')}</div>
+        <div>{t('drive.colSize')}</div>
+        <div>{t('drive.colModified')}</div>
+        <div>{t('drive.colType')}</div>
       </div>
 
       {props.pendingNewFolder && (
@@ -45,8 +47,8 @@ export function FileList(props: FileListProps) {
             <FolderClosed className="h-4 w-4 text-accent flex-none" />
             <div className="flex-1 min-w-0">
               <RenameInput
-                initial="未命名文件夹"
-                placeholder="文件夹名"
+                initial={tt('drive.untitledFolder')}
+                placeholder={tt('drive.folderName')}
                 preserveExtension={false}
                 onCommit={props.onCommitNewFolder}
                 onCancel={props.onCancelNewFolder}
@@ -55,7 +57,7 @@ export function FileList(props: FileListProps) {
           </div>
           <div className="text-xs text-fg-subtle">—</div>
           <div className="text-xs text-fg-subtle">—</div>
-          <div className="text-xs text-fg-subtle">文件夹</div>
+          <div className="text-xs text-fg-subtle">{tt('drive.folder')}</div>
         </div>
       )}
 
@@ -108,8 +110,8 @@ export function FileList(props: FileListProps) {
               <div className="text-xs text-fg-muted truncate">{u.name}</div>
             </div>
             <div className="text-xs text-fg-subtle">…</div>
-            <div className="text-xs text-fg-subtle">现在</div>
-            <div className="text-xs text-fg-subtle">上传中</div>
+            <div className="text-xs text-fg-subtle">{tt('drive.now')}</div>
+            <div className="text-xs text-fg-subtle">{tt('drive.uploading')}</div>
           </div>
         ))}
       </div>
@@ -213,9 +215,9 @@ function FolderRow({
           </div>
         )}
       </div>
-      <div className="text-xs text-fg-subtle tabular-nums">{folder.fileCount} 项</div>
+      <div className="text-xs text-fg-subtle tabular-nums">{tt('drive.itemsN', { n: folder.fileCount })}</div>
       <div className="text-xs text-fg-subtle">—</div>
-      <div className="text-xs text-fg-subtle">文件夹</div>
+      <div className="text-xs text-fg-subtle">{tt('drive.folder')}</div>
     </div>
   );
 }
@@ -271,7 +273,7 @@ function FileRow({
       </div>
       <div className="text-xs text-fg-muted tabular-nums">{formatBytes(file.size)}</div>
       <div className="text-xs text-fg-muted">{formatRelative(file.updated_at)}</div>
-      <div className="text-xs text-fg-subtle">{kindLabel(file.kind)}</div>
+      <div className="text-xs text-fg-subtle">{tt(`kind.${file.kind === 'pdf' ? 'doc' : file.kind}`)}</div>
     </div>
   );
 }
@@ -284,12 +286,3 @@ function KindIconSmall({ kind }: { kind: FileKind }) {
   return <FileQuestion className={cls} />;
 }
 
-function kindLabel(kind: FileKind): string {
-  if (kind === 'image') return '图片';
-  if (kind === 'audio') return '音频';
-  if (kind === 'pdf') return 'PDF';
-  if (kind === 'doc') return '文档';
-  if (kind === 'text') return '文本';
-  if (kind === 'video') return '视频';
-  return '其它';
-}

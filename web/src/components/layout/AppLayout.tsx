@@ -5,6 +5,7 @@
  */
 import { Outlet } from 'react-router-dom';
 import { TopBar } from './TopBar';
+import { AskWidget } from '@/components/ask/AskWidget';
 
 export function AppLayout() {
   return (
@@ -13,6 +14,7 @@ export function AppLayout() {
       <div className="flex-1 min-h-0 overflow-y-auto">
         <Outlet />
       </div>
+      <AskWidget />
     </div>
   );
 }

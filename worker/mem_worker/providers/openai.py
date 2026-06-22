@@ -118,7 +118,17 @@ class OpenAILLMProvider(_BaseOpenAI):
         choices = data.get("choices") or []
         if not choices:
             return ""
-        return (choices[0].get("message") or {}).get("content") or ""
+        msg = choices[0].get("message") or {}
+        content = msg.get("content") or ""
+        # Thinking models (e.g. qwen3.7-max) put their chain-of-thought in a
+        # separate ``reasoning_content`` field. Surface it to the UI by wrapping
+        # it in <think>…</think> ahead of the answer — no proto/API change needed
+        # (ChatResponse.content is a plain string); the web client splits it out
+        # and renders a collapsible "思考过程" panel.
+        reasoning = (msg.get("reasoning_content") or "").strip()
+        if reasoning:
+            return f"<think>{reasoning}</think>{content}"
+        return content
 
     def stream(self, messages: list[Message], **kwargs: Any) -> Iterator[str]:
         raise NotImplementedError("OpenAI streaming not wired yet")

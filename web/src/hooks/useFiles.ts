@@ -153,12 +153,6 @@ interface RawRelatedHit {
   summary?: string | null;
 }
 
-const RELATION_LABEL: Record<string, string> = {
-  same_topic: '同主题',
-  same_person: '同人',
-  same_event: '同事件',
-  sequel: '续作',
-};
 
 export function useRelated(id: string | undefined) {
   return useQuery({
@@ -173,7 +167,7 @@ export function useRelated(id: string | undefined) {
           mime: h.mime,
           summary: h.summary,
         }),
-        relation: RELATION_LABEL[h.type] ?? h.type,
+        relation: h.type,
         score: h.score,
       }));
       const out: RelatedResponse = { results };

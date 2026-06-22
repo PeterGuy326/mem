@@ -25,7 +25,15 @@ BIN_DIR="${DEV_DIR}/bin"
 PGDATA="${DEV_DIR}/pgdata"
 MINIO_DATA="${DEV_DIR}/miniodata"
 
-BREW_PREFIX="${BREW_PREFIX:-/home/linuxbrew/.linuxbrew}"
+# Resolve brew prefix per-platform: /opt/homebrew (Apple Silicon),
+# /usr/local (Intel mac), /home/linuxbrew/.linuxbrew (Linux). Prefer asking
+# brew itself so this works on macOS, not just the Linux default.
+BREW_PREFIX="${BREW_PREFIX:-$(command -v brew >/dev/null 2>&1 && brew --prefix || echo /home/linuxbrew/.linuxbrew)}"
+
+# setsid detaches daemons from our session on Linux, but it does not exist on
+# macOS. Use it when available; otherwise fall back to plain backgrounding (&),
+# which is sufficient for a dev box.
+SETSID="$(command -v setsid 2>/dev/null || true)"
 
 # Service config (kept in sync with server/.env.example + worker/.env.example).
 PG_PORT="${PG_PORT:-5432}"
@@ -89,11 +97,15 @@ detect_pg() {
   # Prefer the version pgvector was built for. brew pgvector ships .so files
   # under lib/postgresql@NN — pick a postgres keg that has both initdb and a
   # matching pgvector lib.
+  # brew's pgvector bottle ships the module as vector.so on Linux but
+  # vector.dylib on macOS — accept either so detection works cross-platform.
   local cand
   for cand in 17 18 16; do
     local kbin="${BREW_PREFIX}/opt/postgresql@${cand}/bin"
     if [[ -x "${kbin}/initdb" ]] && \
-       ls "${BREW_PREFIX}"/Cellar/pgvector/*/lib/postgresql@${cand}/vector.so >/dev/null 2>&1; then
+       ls "${BREW_PREFIX}"/Cellar/pgvector/*/lib/postgresql@${cand}/vector.so \
+          "${BREW_PREFIX}"/Cellar/pgvector/*/lib/postgresql@${cand}/vector.dylib \
+          >/dev/null 2>&1; then
       PG_BIN="$kbin"; PG_VER="$cand"; return 0
     fi
   done
@@ -118,7 +130,8 @@ ensure_pgvector_linked() { # make pgvector visible to the chosen postgres keg
     cp -f "$pgv_share"/vector* "$share_ext"/ 2>/dev/null || true
   fi
   if [[ -d "$lib_dir" && -n "$pgv_lib" ]]; then
-    cp -f "$pgv_lib"/vector.so "$lib_dir"/ 2>/dev/null || true
+    # macOS bottle is vector.dylib, Linux is vector.so — copy whichever exists.
+    cp -f "$pgv_lib"/vector.so "$pgv_lib"/vector.dylib "$lib_dir"/ 2>/dev/null || true
   fi
   if [[ -f "${share_ext}/vector.control" ]]; then
     ok "pgvector files linked into ${share_ext}"
@@ -202,7 +215,7 @@ start_minio() {
   else
     log "starting minio"
     MINIO_ROOT_USER="$MINIO_ROOT_USER" MINIO_ROOT_PASSWORD="$MINIO_ROOT_PASSWORD" \
-      setsid "$MINIO_BIN" server "$MINIO_DATA" \
+      $SETSID "$MINIO_BIN" server "$MINIO_DATA" \
       --address "$MINIO_ADDR" --console-address "$MINIO_CONSOLE_ADDR" \
       >"${LOG_DIR}/minio.log" 2>&1 < /dev/null &
     echo $! > "${RUN_DIR}/minio.pid"
@@ -234,11 +247,13 @@ start_worker() {
   # caption-text vector that the 512-d visual guard rejects, leaving
   # embeddings_visual empty and "image search" effectively disabled.
   if command -v uv >/dev/null 2>&1; then
-    log "syncing worker deps (uv sync --extra clip --extra test)"
+    log "syncing worker deps (uv sync --extra clip --extra test --extra face)"
     # --extra test keeps pytest in the venv across restarts; without it a sync
     # would prune the test deps and `python -m pytest` breaks after dev_up.
-    ( cd "${REPO_ROOT}/worker" && uv sync --extra clip --extra test >"${LOG_DIR}/worker_uv_sync.log" 2>&1 ) \
-      || warn "uv sync --extra clip --extra test failed — see ${LOG_DIR}/worker_uv_sync.log; image search may be unavailable"
+    # --extra face keeps insightface (buffalo_l face detection) installed;
+    # without it a sync would prune insightface and the Faces feature breaks.
+    ( cd "${REPO_ROOT}/worker" && uv sync --extra clip --extra test --extra face >"${LOG_DIR}/worker_uv_sync.log" 2>&1 ) \
+      || warn "uv sync --extra clip --extra test --extra face failed — see ${LOG_DIR}/worker_uv_sync.log; image search may be unavailable"
   else
     warn "uv not on PATH; skipping clip dependency sync (image search needs: cd worker && uv sync --extra clip)"
   fi
@@ -261,12 +276,14 @@ start_worker() {
           MEM_S3_USE_SSL=false \
           OLLAMA_BASE_URL="$OLLAMA_BASE_URL" \
           OLLAMA_TIMEOUT=300 \
-          MEM_DEFAULT_EMBEDDING="ollama:nomic-embed-text" \
-          MEM_DEFAULT_VISUAL_EMBEDDING="clip:ViT-B-32" \
-          MEM_DEFAULT_LLM="ollama:llama3.1" \
-          MEM_DEFAULT_VLM="ollama:minicpm-v" \
+          OPENAI_BASE_URL="${OPENAI_BASE_URL:-}" \
+          OPENAI_API_KEY="${OPENAI_API_KEY:-}" \
+          MEM_DEFAULT_EMBEDDING="${MEM_DEFAULT_EMBEDDING:-ollama:nomic-embed-text}" \
+          MEM_DEFAULT_VISUAL_EMBEDDING="${MEM_DEFAULT_VISUAL_EMBEDDING:-clip:ViT-B-32}" \
+          MEM_DEFAULT_LLM="${MEM_DEFAULT_LLM:-ollama:llama3.1}" \
+          MEM_DEFAULT_VLM="${MEM_DEFAULT_VLM:-ollama:minicpm-v}" \
           MEM_LOG_LEVEL=INFO \
-          setsid "$py" -m mem_worker.server >"${LOG_DIR}/worker.log" 2>&1 < /dev/null & \
+          $SETSID "$py" -m mem_worker.server >"${LOG_DIR}/worker.log" 2>&1 < /dev/null & \
       echo $! > "${RUN_DIR}/worker.pid" )
   fi
 
@@ -310,7 +327,7 @@ start_memd() {
         MEM_S3_REGION="us-east-1" \
         MEM_WORKER_GRPC="localhost:${WORKER_PORT}" \
         MEM_LOG_LEVEL="info" \
-        setsid "$memd_bin" >"${LOG_DIR}/memd.log" 2>&1 < /dev/null &
+        $SETSID "$memd_bin" >"${LOG_DIR}/memd.log" 2>&1 < /dev/null &
     echo $! > "${RUN_DIR}/memd.pid"
   fi
 

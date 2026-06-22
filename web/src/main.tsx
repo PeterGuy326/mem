@@ -4,6 +4,7 @@ import { RouterProvider } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { AuthProvider } from '@/hooks/useAuth';
+import { I18nProvider } from '@/i18n';
 import { router } from '@/routes/router';
 
 import './styles/globals.css';
@@ -31,6 +32,7 @@ void enableMocks().then(() => {
   ReactDOM.createRoot(rootEl).render(
     <React.StrictMode>
       <QueryClientProvider client={queryClient}>
+        <I18nProvider>
         <AuthProvider>
           <RouterProvider router={router} />
           <Toaster
@@ -45,6 +47,7 @@ void enableMocks().then(() => {
             }}
           />
         </AuthProvider>
+        </I18nProvider>
       </QueryClientProvider>
     </React.StrictMode>,
   );

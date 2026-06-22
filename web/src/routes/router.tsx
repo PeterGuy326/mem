@@ -5,8 +5,6 @@ import { LoginPage } from '@/pages/LoginPage';
 import { ExplorerPage } from '@/pages/ExplorerPage';
 import { FileDetailPage } from '@/pages/FileDetailPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
-import { AskPage } from '@/pages/AskPage';
-import { FacesPage } from '@/pages/FacesPage';
 import { ProvidersPage } from '@/pages/ProvidersPage';
 import { SearchPage } from '@/pages/SearchPage';
 
@@ -34,8 +32,11 @@ export const router = createBrowserRouter([
     children: [
       { path: '/files/:id', element: <FileDetailPage /> },
       { path: '/search', element: <SearchPage /> },
-      { path: '/ask', element: <AskPage /> },
-      { path: '/faces', element: <FacesPage /> },
+      // Ask is now the global floating assistant (AskWidget); keep the old
+      // path working by redirecting to the drive.
+      { path: '/ask', element: <Navigate to="/drive" replace /> },
+      // Faces folded into Search (the People row); keep the path working.
+      { path: '/faces', element: <Navigate to="/search" replace /> },
       { path: '/providers', element: <ProvidersPage /> },
     ],
   },

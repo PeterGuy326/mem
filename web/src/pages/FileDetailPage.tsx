@@ -25,12 +25,15 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { useDeleteFile, useFile, useRelated } from '@/hooks/useFiles';
 import { useAuthedBlobUrl } from '@/hooks/useAuthedBlob';
 import { AuthedImage } from '@/components/ui/AuthedImage';
+import { Markdown } from '@/components/ui/Markdown';
+import { useT, tt } from '@/i18n';
 import { downloadFile } from '@/lib/api';
 import { formatBytes, formatDateTime } from '@/lib/format';
 import { toast } from 'sonner';
 import type { FileKind, MemFile } from '@/lib/types';
 
 export function FileDetailPage() {
+  const { t } = useT();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { data: file, isLoading, error } = useFile(id);
@@ -45,15 +48,15 @@ export function FileDetailPage() {
       <div className="mx-auto max-w-5xl px-8 py-12">
         <Button variant="ghost" size="sm" onClick={() => navigate(-1)} className="mb-6">
           <ArrowLeft className="h-3.5 w-3.5" />
-          返回
+          {t('common.back')}
         </Button>
         <EmptyState
           icon={<FileQuestion />}
-          title="文件不存在"
-          description="可能已删除，或 file_id 错了。"
+          title={t('detail.notFoundTitle')}
+          description={t('detail.notFoundDesc')}
           action={
             <Link to="/">
-              <Button variant="secondary" size="sm">回到首页</Button>
+              <Button variant="secondary" size="sm">{t('action.home')}</Button>
             </Link>
           }
         />
@@ -64,17 +67,17 @@ export function FileDetailPage() {
   function copyId() {
     if (!file) return;
     navigator.clipboard.writeText(file.id).catch(() => {});
-    toast.success('已复制 file_id');
+    toast.success(tt('toast.copiedId'));
   }
 
   async function onDelete() {
     if (!file) return;
     try {
       await del.mutateAsync(file.id);
-      toast.success('已删除');
+      toast.success(tt('toast.deleted'));
       navigate('/', { replace: true });
     } catch (err) {
-      toast.error('删除失败', { description: err instanceof Error ? err.message : undefined });
+      toast.error(tt('toast.deleteFailed'), { description: err instanceof Error ? err.message : undefined });
     }
   }
 
@@ -84,7 +87,7 @@ export function FileDetailPage() {
       <div className="flex items-center gap-3 mb-6">
         <Button variant="ghost" size="sm" onClick={() => navigate(-1)}>
           <ArrowLeft className="h-3.5 w-3.5" />
-          返回
+          {t('common.back')}
         </Button>
         <div className="flex-1 min-w-0">
           <div className="text-sm text-fg truncate">{file.name}</div>
@@ -92,21 +95,21 @@ export function FileDetailPage() {
         </div>
         <Button variant="ghost" size="sm" onClick={copyId}>
           <Copy className="h-3.5 w-3.5" />
-          复制 ID
+          {t('common.copyId')}
         </Button>
         <Button
           variant="secondary"
           size="sm"
           onClick={() => {
-            downloadFile(file.id, file.name).catch(() => toast.error('下载失败'));
+            downloadFile(file.id, file.name).catch(() => toast.error(tt('toast.downloadFailed')));
           }}
         >
           <Download className="h-3.5 w-3.5" />
-          下载
+          {t('common.download')}
         </Button>
         <Button variant="danger" size="sm" onClick={() => setConfirmOpen(true)}>
           <Trash2 className="h-3.5 w-3.5" />
-          删除
+          {t('common.delete')}
         </Button>
       </div>
 
@@ -121,26 +124,26 @@ export function FileDetailPage() {
         <aside className="flex flex-col gap-4">
           <Card>
             <CardHeader className="flex items-center justify-between">
-              <CardTitle>状态</CardTitle>
+              <CardTitle>{t('detail.status')}</CardTitle>
               <StatusBadge status={file.index_status} />
             </CardHeader>
             <CardBody className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
-              <MetaRow icon={<Hash className="h-3 w-3" />} label="大小" value={formatBytes(file.size)} />
+              <MetaRow icon={<Hash className="h-3 w-3" />} label={t('detail.size')} value={formatBytes(file.size)} />
               <MetaRow icon={<TagIcon className="h-3 w-3" />} label="MIME" value={file.mime} mono />
               <MetaRow
                 icon={<Clock className="h-3 w-3" />}
-                label="时间锚点"
+                label={t('detail.timeAnchor')}
                 value={formatDateTime(file.timeline_at)}
               />
               <MetaRow
                 icon={<Clock className="h-3 w-3" />}
-                label="入库时间"
+                label={t('detail.ingestedAt')}
                 value={formatDateTime(file.created_at)}
               />
               {file.geo && (
                 <MetaRow
                   icon={<MapPin className="h-3 w-3" />}
-                  label="经纬"
+                  label={t('detail.geo')}
                   value={`${file.geo.lat.toFixed(2)}, ${file.geo.lon.toFixed(2)}`}
                   mono
                   full
@@ -160,24 +163,24 @@ export function FileDetailPage() {
           <Card>
             <CardHeader className="flex items-center gap-2">
               <Sparkles className="h-3.5 w-3.5 text-accent" />
-              <CardTitle>AI 洞察</CardTitle>
+              <CardTitle>{t('detail.aiInsights')}</CardTitle>
             </CardHeader>
             <CardBody className="space-y-4 text-sm">
               {file.caption && (
                 <div>
-                  <div className="text-2xs uppercase tracking-wider text-fg-subtle mb-1">Caption (VLM)</div>
+                  <div className="text-2xs uppercase tracking-wider text-fg-subtle mb-1">{t('detail.captionVlm')}</div>
                   <div className="text-fg leading-relaxed">{file.caption}</div>
                 </div>
               )}
               {file.summary && (
                 <div>
-                  <div className="text-2xs uppercase tracking-wider text-fg-subtle mb-1">摘要</div>
+                  <div className="text-2xs uppercase tracking-wider text-fg-subtle mb-1">{t('detail.summary')}</div>
                   <div className="text-fg-muted leading-relaxed">{file.summary}</div>
                 </div>
               )}
               {file.tags.length > 0 && (
                 <div>
-                  <div className="text-2xs uppercase tracking-wider text-fg-subtle mb-1.5">自动标签</div>
+                  <div className="text-2xs uppercase tracking-wider text-fg-subtle mb-1.5">{t('detail.autoTags')}</div>
                   <div className="flex flex-wrap gap-1.5">
                     {file.tags.map((t) => (
                       <Badge key={t} tone="neutral">{t}</Badge>
@@ -189,7 +192,7 @@ export function FileDetailPage() {
                 <div>
                   <div className="text-2xs uppercase tracking-wider text-fg-subtle mb-1.5 flex items-center gap-1.5">
                     <Users className="h-3 w-3" />
-                    识别到的实体
+                    {t('detail.entities')}
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     {file.entities.map((e) => (
@@ -202,7 +205,7 @@ export function FileDetailPage() {
               )}
               {!file.caption && !file.summary && file.tags.length === 0 && (
                 <div className="text-xs text-fg-subtle">
-                  AI 还在处理中，稍等一下就能看到 caption 和标签。
+                  {t('detail.aiProcessing')}
                 </div>
               )}
             </CardBody>
@@ -210,7 +213,7 @@ export function FileDetailPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>相关文件</CardTitle>
+              <CardTitle>{t('detail.relatedFiles')}</CardTitle>
             </CardHeader>
             <CardBody className="p-0">
               {related?.results.length ? (
@@ -224,7 +227,7 @@ export function FileDetailPage() {
                   ))}
                 </ol>
               ) : (
-                <div className="p-4 text-xs text-fg-subtle">暂无关联（mock：W3 接入后启用）</div>
+                <div className="p-4 text-xs text-fg-subtle">{t('search.none')}</div>
               )}
             </CardBody>
           </Card>
@@ -234,9 +237,9 @@ export function FileDetailPage() {
       <ConfirmDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
-        title="删除该文件？"
-        description={`将永久删除 “${file.name}” 及其所有 AI 索引（caption / embeddings / 人脸聚类）。此操作不可恢复。`}
-        confirmText="删除"
+        title={t('detail.deleteTitle')}
+        description={t('detail.deleteDesc', { name: file.name })}
+        confirmText={t('common.delete')}
         destructive
         onConfirm={onDelete}
       />
@@ -245,46 +248,136 @@ export function FileDetailPage() {
 }
 
 function PreviewArea({ file }: { file: MemFile }) {
-  if (file.kind === 'image') {
-    return (
-      <div className="bg-bg-inset/60 flex items-center justify-center min-h-[280px]">
-        <AuthedImage
-          fileId={file.id}
+  const mime = file.mime || '';
+  if (file.kind === 'image') return <ImagePreview file={file} />;
+  if (file.kind === 'pdf' || mime === 'application/pdf') return <PdfPreview file={file} />;
+  if (file.kind === 'video' || mime.startsWith('video/')) return <VideoPreview file={file} />;
+  if (file.kind === 'audio' || mime.startsWith('audio/')) return <AudioPreview file={file} />;
+  if (
+    file.kind === 'text' ||
+    file.kind === 'doc' ||
+    mime.startsWith('text/') ||
+    mime === 'application/json'
+  )
+    return <TextPreview file={file} />;
+  return <UnsupportedPreview file={file} />;
+}
+
+/** Full-bleed image, contained (no crop) — distinct from the cover-cropped grid thumb. */
+function ImagePreview({ file }: { file: MemFile }) {
+  const { url, isLoading } = useAuthedBlobUrl(file.id);
+  return (
+    <div className="bg-bg-inset/60 flex items-center justify-center min-h-[280px]">
+      {url ? (
+        <img
+          src={url}
           alt={file.caption ?? file.name}
           className="max-h-[72vh] w-auto object-contain"
-          fallback={
-            <div className="p-12 text-fg-subtle">
-              <ImageIcon className="h-10 w-10" />
-            </div>
-          }
+          draggable={false}
         />
-      </div>
-    );
-  }
-  if (file.kind === 'text' || file.kind === 'pdf' || file.kind === 'doc') {
-    return (
-      <div className="p-8 max-h-[72vh] overflow-y-auto">
-        <div className="font-mono text-xs text-fg-muted whitespace-pre-wrap leading-relaxed">
-          {file.summary
-            ? file.summary
-            : '（文本预览占位 — 后端接入后会展示分块原文或 PDF 转写。）'}
+      ) : (
+        <div className="p-12 text-fg-subtle">
+          {isLoading ? (
+            <div className="h-10 w-10 animate-pulse rounded bg-bg-inset" />
+          ) : (
+            <ImageIcon className="h-10 w-10" />
+          )}
         </div>
+      )}
+    </div>
+  );
+}
+
+/** Native browser PDF viewer via a blob URL in an iframe (renders real pages). */
+function PdfPreview({ file }: { file: MemFile }) {
+  const { url, isLoading, isError } = useAuthedBlobUrl(file.id);
+  if (isLoading)
+    return <div className="h-[72vh] w-full animate-pulse bg-bg-inset/60" />;
+  if (isError || !url) return <UnsupportedPreview file={file} />;
+  return (
+    <iframe
+      src={`${url}#view=FitH`}
+      title={file.name}
+      className="w-full h-[72vh] border-0 bg-white"
+    />
+  );
+}
+
+function VideoPreview({ file }: { file: MemFile }) {
+  const { t } = useT();
+  const { url, isLoading } = useAuthedBlobUrl(file.id);
+  return (
+    <div className="bg-black flex items-center justify-center min-h-[280px]">
+      {url ? (
+        <video controls src={url} className="max-h-[72vh] w-auto" />
+      ) : (
+        <div className="p-12 text-2xs text-fg-subtle">{isLoading ? t('detail.loadingVideo') : '—'}</div>
+      )}
+    </div>
+  );
+}
+
+/** Fetch the file's real text via its blob URL and render it (Markdown for .md). */
+function TextPreview({ file }: { file: MemFile }) {
+  const { url, isLoading } = useAuthedBlobUrl(file.id);
+  const [text, setText] = React.useState<string | null>(null);
+  const [err, setErr] = React.useState(false);
+  React.useEffect(() => {
+    if (!url) return;
+    let alive = true;
+    fetch(url)
+      .then((r) => r.text())
+      .then((t) => alive && setText(t))
+      .catch(() => alive && setErr(true));
+    return () => {
+      alive = false;
+    };
+  }, [url]);
+
+  const isMarkdown = /\.(md|markdown)$/i.test(file.name) || file.mime === 'text/markdown';
+
+  if (isLoading || (text === null && !err))
+    return (
+      <div className="p-8 space-y-3 max-h-[72vh]">
+        <Skeleton className="h-4 w-5/6" />
+        <Skeleton className="h-4 w-4/6" />
+        <Skeleton className="h-4 w-3/4" />
       </div>
     );
-  }
-  if (file.kind === 'audio') {
-    return <AudioPreview file={file} />;
-  }
+  if (err || text === null) return <UnsupportedPreview file={file} />;
+
+  return (
+    <div className="px-8 py-10 max-h-[72vh] overflow-y-auto">
+      {isMarkdown ? (
+        <div className="mx-auto max-w-prose">
+          <Markdown className="text-[15px] text-fg">{text}</Markdown>
+        </div>
+      ) : (
+        // Plain text rendered as a readable document, not gray monospace code.
+        <article className="mx-auto max-w-prose whitespace-pre-wrap text-[15px] leading-7 text-fg/90">
+          {text}
+        </article>
+      )}
+    </div>
+  );
+}
+
+function UnsupportedPreview({ file }: { file: MemFile }) {
+  const { t } = useT();
   return (
     <div className="p-12 flex flex-col items-center gap-3 text-fg-muted">
       <FileQuestion className="h-10 w-10 text-fg-subtle" />
-      <div className="text-sm">无法预览此文件类型</div>
+      <div className="text-sm">{t('detail.unsupported')}</div>
       <div className="text-2xs text-fg-subtle">{file.mime}</div>
+      <Button variant="secondary" size="sm" onClick={() => downloadFile(file.id, file.name)}>
+        <Download className="h-4 w-4" /> {t('detail.downloadToView')}
+      </Button>
     </div>
   );
 }
 
 function AudioPreview({ file }: { file: MemFile }) {
+  const { t } = useT();
   const { url, isLoading } = useAuthedBlobUrl(file.id);
   return (
     <div className="p-12 flex flex-col items-center gap-4">
@@ -294,10 +387,10 @@ function AudioPreview({ file }: { file: MemFile }) {
       {url ? (
         <audio controls src={url} className="w-full max-w-md" />
       ) : (
-        <div className="text-2xs text-fg-subtle">{isLoading ? '加载音频…' : '音频不可用'}</div>
+        <div className="text-2xs text-fg-subtle">{isLoading ? t('detail.loadingAudio') : '—'}</div>
       )}
       <div className="text-xs text-fg-muted text-center max-w-md">
-        {file.summary ?? '音频 ASR 转写完成后会出现在 AI 洞察区。'}
+        {file.summary ?? ''}
       </div>
     </div>
   );
@@ -371,7 +464,7 @@ function RelatedRow({
         </div>
         <div className="text-2xs text-fg-subtle">{file.caption ?? file.summary ?? '—'}</div>
       </div>
-      <Badge tone="muted">{relation}</Badge>
+      <Badge tone="muted">{tt(`related.${relation}`)}</Badge>
     </Link>
   );
 }

@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Search, Filter, Image as ImageIcon, FileText, Music, FileQuestion, Sparkles, ArrowLeft } from 'lucide-react';
+import { Search, Filter, Image as ImageIcon, FileText, Music, FileQuestion, ArrowLeft } from 'lucide-react';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
@@ -9,15 +9,19 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Kbd } from '@/components/ui/Kbd';
 import { cn } from '@/lib/cn';
 import { AuthedImage } from '@/components/ui/AuthedImage';
+import { History, X } from 'lucide-react';
 import { useSearch } from '@/hooks/useFiles';
+import { useHistory } from '@/hooks/useHistory';
+import { listFaces, getFaceFiles, nameFace, type FaceCluster, type FaceFile } from '@/lib/ai';
+import { useT } from '@/i18n';
 import { formatDate } from '@/lib/format';
 import type { FileKind, SearchResult, SearchTypeFilter } from '@/lib/types';
 
-const TYPE_OPTIONS: { value: SearchTypeFilter; label: string }[] = [
-  { value: 'any', label: '全部' },
-  { value: 'image', label: '图片' },
-  { value: 'doc', label: '文档' },
-  { value: 'audio', label: '音频' },
+const TYPE_OPTIONS: { value: SearchTypeFilter; labelKey: string }[] = [
+  { value: 'any', labelKey: 'search.typeAny' },
+  { value: 'image', labelKey: 'search.typeImage' },
+  { value: 'doc', labelKey: 'search.typeDoc' },
+  { value: 'audio', labelKey: 'search.typeAudio' },
 ];
 
 const SAMPLE_QUERIES = [
@@ -29,6 +33,7 @@ const SAMPLE_QUERIES = [
 ];
 
 export function SearchPage() {
+  const { t } = useT();
   const [params, setParams] = useSearchParams();
   const initialQ = params.get('q') ?? '';
   const [q, setQ] = React.useState(initialQ);
@@ -68,6 +73,13 @@ export function SearchPage() {
   const hasQuery = debouncedQ.trim().length > 0;
   const results = data?.results ?? [];
 
+  // Record successful searches into history (once results land for a query).
+  const history = useHistory('mem.history.search');
+  React.useEffect(() => {
+    if (hasQuery && data) history.push(debouncedQ);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, hasQuery, debouncedQ]);
+
   return (
     <div className="mx-auto max-w-6xl px-8 py-10">
       {/* Hero search */}
@@ -76,34 +88,67 @@ export function SearchPage() {
           to="/drive"
           className="inline-flex items-center gap-1.5 text-sm text-fg-muted hover:text-fg transition-colors mb-3"
         >
-          <ArrowLeft className="h-3.5 w-3.5" /> 返回云盘
+          <ArrowLeft className="h-3.5 w-3.5" /> {t('common.backToDrive')}
         </Link>
-        <h1 className="text-2xl font-semibold tracking-tight">搜索</h1>
-        <p className="mt-1.5 text-sm text-fg-muted">用自然语言找回任何东西。</p>
+        <h1 className="text-2xl font-semibold tracking-tight">{t('search.title')}</h1>
+        <p className="mt-1.5 text-sm text-fg-muted">{t('search.subtitle')}</p>
         <div className="mt-5 relative">
           <Input
             value={q}
             autoFocus
             onChange={(e) => setQ(e.target.value)}
-            placeholder="搜索图片、文档、人物… 比如 “2012 年和小明在云南拍的照片”"
+            placeholder={t('search.placeholder')}
             leadingIcon={<Search />}
             trailing={isFetching ? <span className="text-2xs text-fg-subtle">…</span> : <Kbd>⏎</Kbd>}
             className="h-12 text-base"
           />
         </div>
         {!hasQuery && (
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            <span className="text-xs text-fg-subtle mr-1">试试搜:</span>
-            {SAMPLE_QUERIES.map((s) => (
-              <button
-                key={s}
-                onClick={() => setQ(s)}
-                className="rounded-full border border-border bg-bg-subtle hover:bg-bg-inset hover:border-border-strong
-                           px-3 py-1 text-xs text-fg-muted hover:text-fg transition-colors"
-              >
-                {s}
-              </button>
-            ))}
+          <div className="mt-4 space-y-3">
+            {history.items.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="inline-flex items-center gap-1 text-xs text-fg-subtle mr-1">
+                  <History className="h-3 w-3" /> {t('search.recent')}
+                </span>
+                {history.items.slice(0, 8).map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => setQ(s)}
+                    className="group inline-flex items-center gap-1 rounded-full border border-border bg-bg-subtle
+                               hover:bg-bg-inset hover:border-border-strong px-3 py-1 text-xs text-fg-muted
+                               hover:text-fg transition-colors max-w-[16rem]"
+                  >
+                    <span className="truncate">{s}</span>
+                    <X
+                      className="h-3 w-3 opacity-0 group-hover:opacity-60 hover:!opacity-100"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        history.remove(s);
+                      }}
+                    />
+                  </button>
+                ))}
+                <button
+                  onClick={history.clear}
+                  className="text-2xs text-fg-subtle hover:text-fg underline-offset-2 hover:underline"
+                >
+                  {t('common.clear')}
+                </button>
+              </div>
+            )}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-fg-subtle mr-1">{t('search.try')}</span>
+              {SAMPLE_QUERIES.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setQ(s)}
+                  className="rounded-full border border-border bg-bg-subtle hover:bg-bg-inset hover:border-border-strong
+                             px-3 py-1 text-xs text-fg-muted hover:text-fg transition-colors"
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
           </div>
         )}
       </section>
@@ -112,7 +157,7 @@ export function SearchPage() {
       <section className="mb-6 flex flex-wrap items-center gap-3 text-sm">
         <div className="flex items-center gap-1.5 text-fg-muted">
           <Filter className="h-3.5 w-3.5" />
-          <span className="text-xs uppercase tracking-wider">过滤</span>
+          <span className="text-xs uppercase tracking-wider">{t('search.filter')}</span>
         </div>
         <div className="flex items-center gap-1 rounded-md border border-border bg-bg-subtle p-0.5">
           {TYPE_OPTIONS.map((opt) => (
@@ -126,12 +171,12 @@ export function SearchPage() {
                   : 'text-fg-muted hover:text-fg',
               )}
             >
-              {opt.label}
+              {t(opt.labelKey)}
             </button>
           ))}
         </div>
-        <DateField label="自" value={since} onChange={setSince} />
-        <DateField label="至" value={until} onChange={setUntil} />
+        <DateField label={t('search.from')} value={since} onChange={setSince} />
+        <DateField label={t('search.to')} value={until} onChange={setUntil} />
         {(since || until || type !== 'any') && (
           <Button
             variant="ghost"
@@ -142,20 +187,15 @@ export function SearchPage() {
               setUntil('');
             }}
           >
-            清除
+            {t('common.clear')}
           </Button>
         )}
-        <div className="ml-auto text-2xs text-fg-subtle inline-flex items-center gap-2">
-          <span className="inline-flex items-center gap-1 rounded-md border border-dashed border-border px-2 py-0.5">
-            <Sparkles className="h-3 w-3" /> 人脸过滤 W2 上线
-          </span>
-        </div>
       </section>
 
       {/* Query plan / meta */}
       {hasQuery && data?.query_plan?.entities && data.query_plan.entities.length > 0 && (
         <div className="mb-4 text-xs text-fg-muted flex items-center gap-2">
-          <span>检测到实体:</span>
+          <span>{t('search.detectedEntities')}</span>
           {data.query_plan.entities.map((e) => (
             <Badge key={e} tone="accent">
               {e}
@@ -166,18 +206,21 @@ export function SearchPage() {
 
       {/* Results */}
       {!hasQuery ? (
-        <EmptyState
-          icon={<Search />}
-          title="开始搜索"
-          description="语义 + 视觉 + 元数据多路召回。支持中文、按时间过滤、按人物过滤（W2）。"
-        />
+        <div className="space-y-8">
+          <PeopleSection onSearchPerson={(name) => setQ(name)} />
+          <EmptyState
+            icon={<Search />}
+            title={t('search.start')}
+            description={t('search.startHint')}
+          />
+        </div>
       ) : isFetching && !data ? (
         <ResultGridSkeleton />
       ) : results.length === 0 ? (
         <EmptyState
           icon={<Search />}
-          title="没有命中"
-          description="试试换个说法，比如把日期范围去掉，或者换成英文关键词。"
+          title={t('search.noHits')}
+          description={t('search.noHitsHint')}
         />
       ) : (
         <ResultGrid results={results} />
@@ -186,7 +229,166 @@ export function SearchPage() {
       {/* Footer meta */}
       {hasQuery && data && (
         <div className="mt-10 text-2xs text-fg-subtle text-center">
-          共 {data.total} 条结果 · 用时 {data._meta?.latency_ms ?? '?'} ms · 多路融合（visual / text / metadata）
+          {t('search.footer', { total: data.total, ms: data._meta?.latency_ms ?? '?' })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** "People" — face clusters folded into Search. Click a face to see that
+ *  person's photos; name them inline so "photos with <name>" becomes searchable. */
+function PeopleSection({ onSearchPerson }: { onSearchPerson: (name: string) => void }) {
+  const { t } = useT();
+  const [clusters, setClusters] = React.useState<FaceCluster[] | null>(null);
+  const [selected, setSelected] = React.useState<FaceCluster | null>(null);
+  const [files, setFiles] = React.useState<FaceFile[] | null>(null);
+  const [nameDraft, setNameDraft] = React.useState('');
+
+  React.useEffect(() => {
+    listFaces()
+      .then((r) => setClusters(r.clusters ?? []))
+      .catch(() => setClusters([]));
+  }, []);
+
+  async function openPerson(c: FaceCluster) {
+    setSelected(c);
+    setNameDraft(c.name);
+    setFiles(null);
+    try {
+      const r = await getFaceFiles(c.id);
+      setFiles(r.files ?? []);
+    } catch {
+      setFiles([]);
+    }
+  }
+
+  async function saveName() {
+    if (!selected) return;
+    const name = nameDraft.trim();
+    await nameFace(selected.id, name).catch(() => {});
+    setClusters((cs) => (cs ?? []).map((c) => (c.id === selected.id ? { ...c, name } : c)));
+    setSelected((s) => (s ? { ...s, name } : s));
+  }
+
+  if (!clusters || clusters.length === 0) return null; // no people → nothing to show
+
+  // Detail: one person's photos.
+  if (selected) {
+    return (
+      <section>
+        <button
+          onClick={() => {
+            setSelected(null);
+            setFiles(null);
+          }}
+          className="mb-3 inline-flex items-center gap-1.5 text-sm text-fg-muted hover:text-fg"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" /> {t('people.back')}
+        </button>
+        <div className="mb-4 flex items-center gap-3">
+          <Avatar fileId={selected.cover_file_id} size={48} />
+          <div className="flex items-center gap-2">
+            <input
+              value={nameDraft}
+              onChange={(e) => setNameDraft(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && saveName()}
+              placeholder={t('people.namePlaceholder')}
+              className="h-9 w-48 rounded-md border border-border bg-bg-inset px-3 text-sm outline-none focus:border-accent/60"
+            />
+            <Button size="sm" variant="secondary" onClick={saveName}>
+              {t('people.nameSaved')}
+            </Button>
+            {selected.name && (
+              <Button size="sm" variant="ghost" onClick={() => onSearchPerson(selected.name)}>
+                <Search className="h-3.5 w-3.5" /> {t('search.title')}
+              </Button>
+            )}
+          </div>
+        </div>
+        {files === null ? (
+          <div className="columns-2 md:columns-4 gap-3">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="mb-3 h-40 w-full" />
+            ))}
+          </div>
+        ) : (
+          <div className="columns-2 md:columns-4 gap-3 [column-fill:_balance]">
+            {files.map((f) => (
+              <Link
+                key={f.file_id}
+                to={`/files/${f.file_id}`}
+                className="group mb-3 block break-inside-avoid overflow-hidden rounded-lg border border-border bg-bg-panel hover:border-border-strong"
+              >
+                <AuthedImage
+                  fileId={f.file_id}
+                  alt={f.name}
+                  className="w-full h-auto object-contain"
+                  fallback={
+                    <div className="aspect-square grid place-items-center text-fg-subtle">
+                      <ImageIcon className="h-6 w-6" />
+                    </div>
+                  }
+                />
+              </Link>
+            ))}
+          </div>
+        )}
+      </section>
+    );
+  }
+
+  // Overview: avatar row of all people.
+  return (
+    <section>
+      <div className="mb-2 flex items-baseline gap-2">
+        <h3 className="text-xs uppercase tracking-wider text-fg-muted font-medium">
+          {t('search.people')} · {clusters.length}
+        </h3>
+        <span className="text-2xs text-fg-subtle">{t('people.hint')}</span>
+      </div>
+      <div className="flex flex-wrap gap-4">
+        {clusters.map((c) => (
+          <button
+            key={c.id}
+            onClick={() => openPerson(c)}
+            className="group flex w-20 flex-col items-center gap-1.5"
+          >
+            <Avatar fileId={c.cover_file_id} size={64} ring />
+            <span className="max-w-full truncate text-xs text-fg">
+              {c.name || t('people.unnamed')}
+            </span>
+            <span className="text-2xs text-fg-subtle">{t('people.photosN', { n: c.file_count })}</span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/** Round face avatar from a representative photo (full image, cropped to circle). */
+function Avatar({ fileId, size, ring }: { fileId?: string; size: number; ring?: boolean }) {
+  return (
+    <div
+      className={cn(
+        'overflow-hidden rounded-full bg-bg-inset border border-border',
+        ring && 'ring-2 ring-transparent group-hover:ring-accent/50 transition-all',
+      )}
+      style={{ width: size, height: size }}
+    >
+      {fileId ? (
+        <AuthedImage
+          fileId={fileId}
+          className="h-full w-full object-cover"
+          fallback={
+            <div className="grid h-full w-full place-items-center text-fg-subtle">
+              <ImageIcon className="h-5 w-5" />
+            </div>
+          }
+        />
+      ) : (
+        <div className="grid h-full w-full place-items-center text-fg-subtle">
+          <ImageIcon className="h-5 w-5" />
         </div>
       )}
     </div>
@@ -216,6 +418,7 @@ function DateField({
 }
 
 function ResultGrid({ results }: { results: SearchResult[] }) {
+  const { t } = useT();
   // Split images vs docs/audio. Images go to a masonry-ish CSS columns layout;
   // docs/audio go to a list. Together they read like Linear's mixed views.
   const images = results.filter((r) => r.file.kind === 'image');
@@ -226,11 +429,11 @@ function ResultGrid({ results }: { results: SearchResult[] }) {
       <section>
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-xs uppercase tracking-wider text-fg-muted font-medium">
-            视觉结果 · {images.length}
+            {t('search.visualResults')} · {images.length}
           </h3>
         </div>
         {images.length === 0 ? (
-          <div className="text-xs text-fg-subtle py-6">这次搜索没有图片命中</div>
+          <div className="text-xs text-fg-subtle py-6">{t('search.noImages')}</div>
         ) : (
           <div className="columns-2 md:columns-3 gap-3 [column-fill:_balance]">
             {images.map((r) => (
@@ -241,10 +444,10 @@ function ResultGrid({ results }: { results: SearchResult[] }) {
       </section>
       <aside className="lg:sticky lg:top-20">
         <h3 className="mb-3 text-xs uppercase tracking-wider text-fg-muted font-medium">
-          文档与音频 · {others.length}
+          {t('search.docsAudio')} · {others.length}
         </h3>
         {others.length === 0 ? (
-          <div className="text-xs text-fg-subtle py-6">无</div>
+          <div className="text-xs text-fg-subtle py-6">{t('search.none')}</div>
         ) : (
           <ol className="surface divide-y divide-border">
             {others.map((r) => (
