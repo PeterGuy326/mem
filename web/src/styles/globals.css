@@ -156,18 +156,66 @@
   animation: shimmer 1.6s infinite;
 }
 
-/* mem assistant mascot (BotFace) — idle blink + antenna pulse */
-@keyframes bot-blink {
-  0%, 92%, 100% { transform: scaleY(1); }
-  96% { transform: scaleY(0.1); }
+
+/* ── mem assistant "AI orb" avatar ───────────────────────────── */
+.mem-orb {
+  position: relative;
+  display: inline-block;
+  border-radius: 9999px;
+  overflow: hidden;
+  isolation: isolate;
+  /* base sphere with a top-left light source for a 3D read */
+  background:
+    radial-gradient(circle at 32% 28%,
+      rgb(196 181 253) 0%,
+      rgb(129 140 248) 38%,
+      rgb(79 70 229) 70%,
+      rgb(49 46 129) 100%);
+  box-shadow:
+    inset 0 1px 3px rgb(255 255 255 / 0.45),
+    inset 0 -6px 10px rgb(30 27 75 / 0.55);
 }
-.bot-eyes {
-  animation: bot-blink 4.5s ease-in-out infinite;
+.mem-orb__core,
+.mem-orb__swirl,
+.mem-orb__highlight {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  content: '';
 }
-@keyframes bot-antenna {
-  0%, 100% { opacity: 0.55; }
-  50% { opacity: 1; }
+/* flowing energy swirl */
+.mem-orb__swirl {
+  background: conic-gradient(from 0deg,
+    rgb(167 139 250 / 0.0),
+    rgb(96 165 250 / 0.55),
+    rgb(216 180 254 / 0.0),
+    rgb(129 140 248 / 0.6),
+    rgb(167 139 250 / 0.0));
+  mix-blend-mode: screen;
+  filter: blur(2px);
+  opacity: 0.85;
 }
-.bot-antenna {
-  animation: bot-antenna 2.2s ease-in-out infinite;
+/* drifting specular highlight */
+.mem-orb__highlight {
+  background: radial-gradient(circle at 30% 24%,
+    rgb(255 255 255 / 0.9) 0%,
+    rgb(255 255 255 / 0.25) 12%,
+    transparent 32%);
+}
+.mem-orb--active .mem-orb__swirl {
+  animation: mem-orb-spin 7s linear infinite;
+}
+.mem-orb--active .mem-orb__highlight {
+  animation: mem-orb-drift 6s ease-in-out infinite;
+}
+@keyframes mem-orb-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes mem-orb-drift {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(8%, 10%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mem-orb--active .mem-orb__swirl,
+  .mem-orb--active .mem-orb__highlight { animation: none; }
 }
