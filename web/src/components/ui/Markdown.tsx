@@ -8,7 +8,11 @@
 import * as React from 'react';
 
 /** Inline: **bold**, *italic* / _italic_, `code`, and [N] citations. */
-function renderInline(text: string, keyBase: string): React.ReactNode[] {
+function renderInline(
+  text: string,
+  keyBase: string,
+  onCitation?: (n: number) => void,
+): React.ReactNode[] {
   const out: React.ReactNode[] = [];
   // Order matters: code first (so ** inside code is literal), then bold, italic, citation.
   const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*]+\*|_[^_]+_)|(\[\d+\])/g;
@@ -38,10 +42,23 @@ function renderInline(text: string, keyBase: string): React.ReactNode[] {
         </em>,
       );
     } else if (m[4]) {
+      const n = parseInt(tok.slice(1, -1), 10);
       out.push(
-        <span key={k} className="text-accent font-medium">
-          {tok}
-        </span>,
+        onCitation ? (
+          <button
+            key={k}
+            type="button"
+            onClick={() => onCitation(n)}
+            className="mx-0.5 rounded bg-accent/15 px-1 font-medium text-accent hover:bg-accent/25 transition-colors"
+            title="跳转到来源 / open source"
+          >
+            {tok}
+          </button>
+        ) : (
+          <span key={k} className="text-accent font-medium">
+            {tok}
+          </span>
+        ),
       );
     }
     last = m.index + tok.length;
@@ -50,8 +67,17 @@ function renderInline(text: string, keyBase: string): React.ReactNode[] {
   return out;
 }
 
-export function Markdown({ children, className }: { children: string; className?: string }) {
+export function Markdown({
+  children,
+  className,
+  onCitation,
+}: {
+  children: string;
+  className?: string;
+  onCitation?: (n: number) => void;
+}) {
   const blocks = React.useMemo(() => parseBlocks(children ?? ''), [children]);
+  const inline = (txt: string, key: string) => renderInline(txt, key, onCitation);
   return (
     <div className={className}>
       {blocks.map((b, i) => {
@@ -69,7 +95,7 @@ export function Markdown({ children, className }: { children: string; className?
           const Tag = (`h${Math.min(b.level ?? 3, 4)}` as 'h1');
           return (
             <Tag key={i} className="mt-3 mb-1 font-semibold text-fg">
-              {renderInline(b.content, `h${i}`)}
+              {inline(b.content, `h${i}`)}
             </Tag>
           );
         }
@@ -79,7 +105,7 @@ export function Markdown({ children, className }: { children: string; className?
               key={i}
               className="my-2 border-l-2 border-border-strong pl-3 text-fg-muted italic"
             >
-              {renderInline(b.content, `q${i}`)}
+              {inline(b.content, `q${i}`)}
             </blockquote>
           );
         }
@@ -92,7 +118,7 @@ export function Markdown({ children, className }: { children: string; className?
             >
               {(b.items ?? []).map((it, j) => (
                 <li key={j} className="leading-relaxed">
-                  {renderInline(it, `li${i}-${j}`)}
+                  {inline(it, `li${i}-${j}`)}
                 </li>
               ))}
             </List>
@@ -100,7 +126,7 @@ export function Markdown({ children, className }: { children: string; className?
         }
         return (
           <p key={i} className="my-2 leading-relaxed first:mt-0 last:mb-0">
-            {renderInline(b.content, `p${i}`)}
+            {inline(b.content, `p${i}`)}
           </p>
         );
       })}

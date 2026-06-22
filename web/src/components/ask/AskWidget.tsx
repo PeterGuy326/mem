@@ -4,6 +4,7 @@
  * what you're doing. Replaces the dedicated full-page Ask.
  */
 import * as React from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Sparkles,
   Send,
@@ -59,6 +60,7 @@ export function AskWidget() {
 
 function AskPanel({ onClose }: { onClose: () => void }) {
   const { t } = useT();
+  const navigate = useNavigate();
   const [q, setQ] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [steps, setSteps] = React.useState<AskStep[]>([]);
@@ -121,6 +123,17 @@ function AskPanel({ onClose }: { onClose: () => void }) {
   React.useEffect(() => () => abortRef.current?.abort(), []);
 
   const hasContent = busy || steps.length > 0 || !!thinking || !!answer;
+
+  // Jump to a cited/source file's detail page (SPA nav, closes the panel).
+  const openFile = (fileId: string) => {
+    onClose();
+    navigate(`/files/${fileId}`);
+  };
+  // Inline [N] citation → the N-th source.
+  const openCitation = (n: number) => {
+    const s = sources[n - 1];
+    if (s) openFile(s.file_id);
+  };
 
   return (
     <div
@@ -185,19 +198,17 @@ function AskPanel({ onClose }: { onClose: () => void }) {
           <div className="space-y-3">
             {steps.length > 0 && <ExecutionTrace steps={steps} />}
 
-            {/* Waiting for the first token after retrieval. */}
-            {busy && steps.length > 0 && !thinking && !answer && (
-              <div className="flex items-center gap-2 text-xs text-fg-muted">
-                <Cpu className="h-3.5 w-3.5 animate-pulse text-accent" />
-                {t('ask.running')}
-              </div>
-            )}
+            {/* Waiting for the first token after retrieval — a rich pending
+                state so the panel never looks empty during the model's think. */}
+            {busy && steps.length > 0 && !thinking && !answer && <PendingAnswer />}
 
             {thinking && <ThinkingPanel text={thinking} streaming={busy && !answer} />}
 
             {answer && (
               <div className="rounded-xl border border-border/60 bg-gradient-to-b from-bg-subtle/60 to-bg-subtle/20 p-3.5 text-fg shadow-sm">
-                <Markdown className="text-[13px] leading-relaxed">{answer}</Markdown>
+                <Markdown className="text-[13px] leading-relaxed" onCitation={openCitation}>
+                  {answer}
+                </Markdown>
                 {busy && <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-accent align-middle" />}
               </div>
             )}
@@ -207,14 +218,21 @@ function AskPanel({ onClose }: { onClose: () => void }) {
                 <div className="mb-1 text-2xs uppercase tracking-wider text-fg-muted">
                   {t('ask.sources')} · {sources.length}
                 </div>
-                <ol className="space-y-1">
+                <ol className="space-y-0.5">
                   {sources.map((s, i) => (
-                    <li key={s.file_id} className="flex items-center gap-1.5 text-2xs">
-                      <span className="font-mono text-fg-subtle">[{i + 1}]</span>
-                      <a href={`/files/${s.file_id}`} className="truncate text-fg hover:text-accent">
-                        {s.name}
-                      </a>
-                      <span className="ml-auto font-mono text-fg-subtle">{s.score.toFixed(2)}</span>
+                    <li key={s.file_id}>
+                      <button
+                        type="button"
+                        onClick={() => openFile(s.file_id)}
+                        className="group flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-2xs
+                                   hover:bg-bg-inset transition-colors"
+                        title="跳转到文件 / open file"
+                      >
+                        <span className="font-mono text-fg-subtle">[{i + 1}]</span>
+                        <span className="truncate text-fg group-hover:text-accent">{s.name}</span>
+                        <span className="ml-auto font-mono text-fg-subtle">{s.score.toFixed(2)}</span>
+                        <ChevronDown className="h-3 w-3 flex-none -rotate-90 text-fg-subtle opacity-0 group-hover:opacity-100" />
+                      </button>
                     </li>
                   ))}
                 </ol>
@@ -252,6 +270,33 @@ function AskPanel({ onClose }: { onClose: () => void }) {
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
         </button>
       </form>
+    </div>
+  );
+}
+
+/** Rich "generating…" placeholder shown between retrieval and the first token,
+ *  so the long reasoning wait reads as alive, not empty. */
+function PendingAnswer() {
+  const { t } = useT();
+  const [sec, setSec] = React.useState(0);
+  React.useEffect(() => {
+    const timer = setInterval(() => setSec((s) => s + 1), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  return (
+    <div className="rounded-xl border border-border/60 bg-bg-subtle/30 p-3.5">
+      <div className="flex items-center gap-2 text-xs text-fg-muted">
+        <Cpu className="h-3.5 w-3.5 animate-pulse text-accent" />
+        <span>{t('ask.stageGenerate')} · </span>
+        <span className="text-accent">{t('ask.inProgress')}</span>
+        <span className="ml-auto font-mono text-2xs text-fg-subtle">{sec}s</span>
+      </div>
+      <div className="mt-3 space-y-2">
+        <div className="h-2.5 w-[88%] skeleton rounded" />
+        <div className="h-2.5 w-[72%] skeleton rounded" />
+        <div className="h-2.5 w-[60%] skeleton rounded" />
+      </div>
+      <p className="mt-3 text-2xs leading-relaxed text-fg-subtle">{t('ask.thinkingNote')}</p>
     </div>
   );
 }
