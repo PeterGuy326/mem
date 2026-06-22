@@ -443,7 +443,7 @@ func rewritePrefixTx(ctx context.Context, tx pgx.Tx, userID, srcID uuid.UUID, ol
 	cutLen := len(oldPrefix)
 	_, err = tx.Exec(ctx,
 		`UPDATE folders
-		 SET path = $1 || substring(path FROM $2),
+		 SET path = $1 || substring(path FROM $2::int),
 		     updated_at = $3
 		 WHERE user_id = $4 AND path LIKE $5`,
 		newPrefix, cutLen+1, now, userID, likePrefix)
@@ -458,7 +458,7 @@ func rewritePrefixTx(ctx context.Context, tx pgx.Tx, userID, srcID uuid.UUID, ol
 		`UPDATE files
 		 SET path = CASE
 		              WHEN path = $1 THEN $2
-		              ELSE $2 || substring(path FROM $3)
+		              ELSE $2 || substring(path FROM $3::int)
 		            END,
 		     updated_at = $4
 		 WHERE user_id = $5 AND (path = $1 OR path LIKE $6)`,
