@@ -16,6 +16,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { Markdown } from '@/components/ui/Markdown';
+import { BotFace } from './BotFace';
 import { askQuestion, streamAsk, type AskStep, type AskSource } from '@/lib/ai';
 import { ApiException } from '@/lib/api';
 import { useHistory, splitThinking } from '@/hooks/useHistory';
@@ -36,13 +37,17 @@ export function AskWidget() {
       <button
         onClick={() => setOpen((o) => !o)}
         aria-label={t('ask.title')}
-        className={`fixed bottom-5 right-5 z-40 grid place-items-center rounded-full text-white
-                    bg-gradient-to-br from-accent-hover to-accent-muted
-                    transition-all duration-200 hover:scale-105 active:scale-95
-                    ${open ? 'rotate-90' : 'animate-breathe'}`}
-        style={{ height: 54, width: 54 }}
+        className={`group fixed bottom-5 right-5 z-40 grid place-items-center rounded-2xl text-white
+                    bg-gradient-to-br from-accent-hover via-accent to-accent-muted
+                    transition-all duration-300 hover:scale-105 active:scale-95
+                    ${open ? 'rotate-3' : 'animate-breathe'}`}
+        style={{ height: 56, width: 56 }}
       >
-        {open ? <X className="h-5 w-5" /> : <Sparkles className="h-5 w-5 drop-shadow" />}
+        {open ? (
+          <X className="h-5 w-5" />
+        ) : (
+          <BotFace size={34} awake className="drop-shadow transition-transform group-hover:scale-110" />
+        )}
       </button>
     </>
   );
@@ -123,8 +128,8 @@ function AskPanel({ onClose }: { onClose: () => void }) {
       {/* Header */}
       <div className="relative flex items-center gap-2.5 px-4 py-3
                       bg-gradient-to-r from-accent/15 via-accent/5 to-transparent border-b border-border/70">
-        <div className="grid h-7 w-7 place-items-center rounded-lg bg-gradient-to-br from-accent-hover to-accent-muted text-white shadow-sm">
-          <Sparkles className="h-4 w-4" />
+        <div className="grid h-8 w-8 place-items-center rounded-xl bg-gradient-to-br from-accent-hover to-accent-muted text-white shadow-sm">
+          <BotFace size={22} awake />
         </div>
         <div className="leading-tight">
           <div className="text-sm font-semibold">{t('ask.title')}</div>
@@ -143,9 +148,9 @@ function AskPanel({ onClose }: { onClose: () => void }) {
       <div ref={bodyRef} className="flex-1 overflow-y-auto px-4 py-3.5 text-sm">
         {!hasContent && !err && (
           <div className="space-y-3 py-2">
-            <div className="flex flex-col items-center gap-2 py-3 text-center">
-              <div className="grid h-11 w-11 place-items-center rounded-2xl bg-gradient-to-br from-accent-hover to-accent-muted text-white shadow-glow">
-                <Sparkles className="h-5 w-5" />
+            <div className="flex flex-col items-center gap-2.5 py-3 text-center">
+              <div className="grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-accent-hover via-accent to-accent-muted text-white shadow-glow">
+                <BotFace size={40} awake />
               </div>
               <p className="max-w-[16rem] text-xs leading-relaxed text-fg-muted">{t('ask.subtitle')}</p>
             </div>

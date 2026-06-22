@@ -155,3 +155,19 @@
   );
   animation: shimmer 1.6s infinite;
 }
+
+/* mem assistant mascot (BotFace) — idle blink + antenna pulse */
+@keyframes bot-blink {
+  0%, 92%, 100% { transform: scaleY(1); }
+  96% { transform: scaleY(0.1); }
+}
+.bot-eyes {
+  animation: bot-blink 4.5s ease-in-out infinite;
+}
+@keyframes bot-antenna {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+.bot-antenna {
+  animation: bot-antenna 2.2s ease-in-out infinite;
+}
