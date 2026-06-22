@@ -108,13 +108,14 @@ func (s *Service) Ask(ctx context.Context, req Request) (*Answer, error) {
 	start := time.Now()
 	steps := make([]Step, 0, 2)
 
-	// 1. Retrieve. Use the text route — visual hits don't give the LLM
-	// reliable excerpts to ground its answer in.
+	// 1. Retrieve. Use the auto route (text + visual) so the model can also
+	// answer about images: an image's VLM caption rides along as the snippet,
+	// e.g. "do I have a dog photo?" surfaces golden_retriever.jpg.
 	retrieveStart := time.Now()
 	hits, err := s.search.Search(ctx, search.Query{
 		UserID: req.UserID,
 		Text:   q,
-		Route:  search.RouteText,
+		Route:  search.RouteAuto,
 		Limit:  topK,
 	})
 	if err != nil {

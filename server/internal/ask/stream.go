@@ -59,12 +59,13 @@ func (s *Service) AskStream(ctx context.Context, req Request, emit func(StreamEv
 		topK = 20
 	}
 
-	// 1. Retrieve.
+	// 1. Retrieve — auto route (text + visual) so images (via their caption)
+	// can ground answers about photos too.
 	retrieveStart := time.Now()
 	hits, err := s.search.Search(ctx, search.Query{
 		UserID: req.UserID,
 		Text:   q,
-		Route:  search.RouteText,
+		Route:  search.RouteAuto,
 		Limit:  topK,
 	})
 	if err != nil {
