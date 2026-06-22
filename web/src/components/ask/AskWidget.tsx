@@ -14,7 +14,8 @@ import {
   Cpu,
   Search,
   Check,
-  Loader2,
+  Square,
+  Copy,
 } from 'lucide-react';
 import { Markdown } from '@/components/ui/Markdown';
 import { Orb } from './Orb';
@@ -135,6 +136,33 @@ function AskPanel({ onClose }: { onClose: () => void }) {
     if (s) openFile(s.file_id);
   };
 
+  // Stop an in-flight generation (the stream is aborted; partial output stays).
+  const stop = () => {
+    abortRef.current?.abort();
+    setBusy(false);
+  };
+
+  // Copy the finished answer to the clipboard.
+  const [copied, setCopied] = React.useState(false);
+  const copyAnswer = () => {
+    navigator.clipboard.writeText(answer).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      },
+      () => {},
+    );
+  };
+
+  // Esc closes the panel.
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
   return (
     <div
       className="fixed bottom-[5.5rem] right-5 z-40 flex w-[min(390px,calc(100vw-2.5rem))] flex-col
@@ -205,11 +233,23 @@ function AskPanel({ onClose }: { onClose: () => void }) {
             {thinking && <ThinkingPanel text={thinking} streaming={busy && !answer} />}
 
             {answer && (
-              <div className="rounded-xl border border-border/60 bg-gradient-to-b from-bg-subtle/60 to-bg-subtle/20 p-3.5 text-fg shadow-sm">
+              <div className="group relative rounded-xl border border-border/60 bg-gradient-to-b from-bg-subtle/60 to-bg-subtle/20 p-3.5 text-fg shadow-sm">
                 <Markdown className="text-[13px] leading-relaxed" onCitation={openCitation}>
                   {answer}
                 </Markdown>
                 {busy && <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-accent align-middle" />}
+                {!busy && (
+                  <button
+                    type="button"
+                    onClick={copyAnswer}
+                    className="absolute right-2 top-2 grid h-6 w-6 place-items-center rounded-md text-fg-subtle
+                               opacity-0 transition-opacity hover:bg-bg-inset hover:text-fg group-hover:opacity-100"
+                    aria-label={t('ask.copy')}
+                    title={t('ask.copy')}
+                  >
+                    {copied ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
+                  </button>
+                )}
               </div>
             )}
 
@@ -256,19 +296,34 @@ function AskPanel({ onClose }: { onClose: () => void }) {
           onChange={(e) => setQ(e.target.value)}
           placeholder={t('ask.placeholder')}
           autoFocus
+          disabled={busy}
           className="h-10 flex-1 rounded-full border border-border bg-bg-inset px-4 text-[13px]
-                     outline-none transition-colors focus:border-accent/60 focus:ring-2 focus:ring-accent/15"
+                     outline-none transition-colors focus:border-accent/60 focus:ring-2 focus:ring-accent/15
+                     disabled:opacity-60"
         />
-        <button
-          type="submit"
-          disabled={busy || !q.trim()}
-          className="grid h-10 w-10 flex-none place-items-center rounded-full text-white shadow-sm
-                     bg-gradient-to-br from-accent-hover to-accent-muted transition-all
-                     hover:scale-105 active:scale-95 disabled:opacity-40 disabled:hover:scale-100"
-          aria-label={t('ask.run')}
-        >
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-        </button>
+        {busy ? (
+          <button
+            type="button"
+            onClick={stop}
+            className="grid h-10 w-10 flex-none place-items-center rounded-full border border-border
+                       bg-bg-inset text-fg-muted transition-all hover:text-fg hover:scale-105 active:scale-95"
+            aria-label={t('ask.stop')}
+            title={t('ask.stop')}
+          >
+            <Square className="h-3.5 w-3.5 fill-current" />
+          </button>
+        ) : (
+          <button
+            type="submit"
+            disabled={!q.trim()}
+            className="grid h-10 w-10 flex-none place-items-center rounded-full text-white shadow-sm
+                       bg-gradient-to-br from-accent-hover to-accent-muted transition-all
+                       hover:scale-105 active:scale-95 disabled:opacity-40 disabled:hover:scale-100"
+            aria-label={t('ask.run')}
+          >
+            <Send className="h-4 w-4" />
+          </button>
+        )}
       </form>
     </div>
   );

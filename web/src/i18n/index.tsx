@@ -95,6 +95,8 @@ const dict: Record<string, Partial<Record<Lang, string>>> = {
   'ask.sources': { zh: '出处', en: 'Sources' },
   'ask.emptyAnswer': { zh: '（空答案）', en: '(empty answer)' },
   'ask.pressAsk': { zh: '点击提问', en: 'Press Ask' },
+  'ask.stop': { zh: '停止生成', en: 'Stop' },
+  'ask.copy': { zh: '复制答案', en: 'Copy answer' },
 
   // ---- search ----
   'search.title': { zh: '搜索', en: 'Search' },
