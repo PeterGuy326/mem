@@ -197,7 +197,7 @@ function AskPanel({ onClose }: { onClose: () => void }) {
               </div>
             )}
 
-            {sources.length > 0 && (
+            {answer && sources.length > 0 && (
               <div>
                 <div className="mb-1 text-2xs uppercase tracking-wider text-fg-muted">
                   {t('ask.sources')} · {sources.length}
@@ -277,8 +277,9 @@ function ExecutionTrace({ steps }: { steps: AskStep[] }) {
   );
 }
 
-/** Thinking panel — auto-expands while the reasoning is still streaming in,
- *  and stays collapsible afterward. */
+/** Thinking panel — a quiet accessory, not the star. While the model is
+ *  reasoning it shows a compact, dimmed live transcript; the moment the answer
+ *  starts it folds into a one-line "thought for N" pill (expand to revisit). */
 function ThinkingPanel({ text, streaming }: { text: string; streaming?: boolean }) {
   const { t } = useT();
   const [open, setOpen] = React.useState(false);
@@ -290,30 +291,35 @@ function ThinkingPanel({ text, streaming }: { text: string; streaming?: boolean 
     if (streaming && innerRef.current) innerRef.current.scrollTop = innerRef.current.scrollHeight;
   }, [text, streaming]);
   return (
-    <div className="overflow-hidden rounded-md border border-border bg-bg-subtle/60">
+    <div className="overflow-hidden rounded-lg border border-border/60 bg-bg-subtle/30">
       <button
         onClick={() => {
           setUserToggled(true);
           setOpen(!expanded);
         }}
-        className="flex w-full items-center gap-1.5 px-3 py-2 text-2xs text-fg-muted hover:text-fg"
+        className="flex w-full items-center gap-1.5 px-3 py-1.5 text-2xs text-fg-subtle hover:text-fg transition-colors"
       >
-        <Brain className={`h-3.5 w-3.5 text-accent ${streaming ? 'animate-pulse' : ''}`} />
-        {t('ask.thinking')}
+        <Brain className={`h-3 w-3 ${streaming ? 'text-accent animate-pulse' : 'text-fg-subtle'}`} />
         {streaming ? (
-          <span className="text-accent">· {t('ask.inProgress')}</span>
+          <span className="text-fg-muted">{t('ask.thinking')} · {t('ask.inProgress')}</span>
         ) : (
-          <span className="text-fg-subtle">（{t('ask.thinkingChars', { n: text.length })}）</span>
+          <span>
+            {t('ask.thinking')} <span className="opacity-60">（{t('ask.thinkingChars', { n: text.length })}）</span>
+          </span>
         )}
-        <ChevronDown className={`ml-auto h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+        <ChevronDown className={`ml-auto h-3 w-3 transition-transform ${expanded ? 'rotate-180' : ''}`} />
       </button>
       {expanded && (
-        <div
-          ref={innerRef}
-          className="max-h-40 overflow-y-auto border-t border-border px-3 py-2 text-2xs leading-relaxed text-fg-muted whitespace-pre-wrap"
-        >
-          {text}
-          {streaming && <span className="ml-0.5 inline-block h-3 w-1 animate-pulse bg-accent align-middle" />}
+        <div className="relative border-t border-border/50">
+          {/* top fade so the scrolling reasoning bleeds out gently */}
+          <div className="pointer-events-none absolute inset-x-0 top-0 h-4 bg-gradient-to-b from-bg-panel/80 to-transparent" />
+          <div
+            ref={innerRef}
+            className="max-h-28 overflow-y-auto px-3 py-2 text-2xs leading-relaxed text-fg-subtle/80 whitespace-pre-wrap"
+          >
+            {text}
+            {streaming && <span className="ml-0.5 inline-block h-2.5 w-1 animate-pulse bg-accent/70 align-middle" />}
+          </div>
         </div>
       )}
     </div>
