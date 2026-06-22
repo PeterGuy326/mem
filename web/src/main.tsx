@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { AuthProvider } from '@/hooks/useAuth';
 import { I18nProvider } from '@/i18n';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { router } from '@/routes/router';
 
 import './styles/globals.css';
@@ -31,6 +32,7 @@ void enableMocks().then(() => {
   if (!rootEl) throw new Error('root element missing');
   ReactDOM.createRoot(rootEl).render(
     <React.StrictMode>
+      <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <I18nProvider>
         <AuthProvider>
@@ -49,6 +51,7 @@ void enableMocks().then(() => {
         </AuthProvider>
         </I18nProvider>
       </QueryClientProvider>
+      </ErrorBoundary>
     </React.StrictMode>,
   );
 });

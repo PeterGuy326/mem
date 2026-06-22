@@ -1,0 +1,74 @@
+/**
+ * App-wide crash fallback. Without this, any render error white-screens the
+ * whole app. Catches it and shows a calm branded page with a reload + a
+ * "back to drive" escape hatch, plus the error text (collapsed) for debugging.
+ */
+import * as React from 'react';
+import { Orb } from '@/components/ask/Orb';
+import { Button } from '@/components/ui/Button';
+import { RotateCw, Home } from 'lucide-react';
+
+interface Props {
+  children: React.ReactNode;
+}
+interface State {
+  error: Error | null;
+}
+
+export class ErrorBoundary extends React.Component<Props, State> {
+  state: State = { error: null };
+
+  static getDerivedStateFromError(error: Error): State {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    // Surface to the console for debugging; no telemetry by design (local app).
+    console.error('[mem] render crash:', error, info.componentStack);
+  }
+
+  render() {
+    const { error } = this.state;
+    if (!error) return this.props.children;
+
+    return (
+      <div className="grid min-h-screen place-items-center bg-bg px-6 text-fg">
+        <div className="flex max-w-md flex-col items-center text-center">
+          <div className="mb-5 opacity-90 grayscale-[0.2]">
+            <Orb size={64} active={false} />
+          </div>
+          <h1 className="text-lg font-semibold">出错了 · Something went wrong</h1>
+          <p className="mt-2 text-sm leading-relaxed text-fg-muted">
+            页面遇到了一个意外错误。刷新通常能恢复；如果反复出现，把下面的信息发给我们。
+            <br />
+            The page hit an unexpected error. A reload usually fixes it.
+          </p>
+
+          <div className="mt-6 flex items-center gap-2">
+            <Button onClick={() => window.location.reload()}>
+              <RotateCw className="h-4 w-4" /> 刷新 / Reload
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                window.location.href = '/drive';
+              }}
+            >
+              <Home className="h-4 w-4" /> 回到网盘 / Drive
+            </Button>
+          </div>
+
+          <details className="mt-6 w-full text-left">
+            <summary className="cursor-pointer text-2xs uppercase tracking-wider text-fg-subtle hover:text-fg">
+              错误详情 / Details
+            </summary>
+            <pre className="mt-2 max-h-40 overflow-auto rounded-md border border-border bg-bg-inset p-3 text-2xs text-fg-muted">
+              {error.message}
+              {error.stack ? `\n\n${error.stack}` : ''}
+            </pre>
+          </details>
+        </div>
+      </div>
+    );
+  }
+}
