@@ -90,5 +90,56 @@ Relation types currently supported:
 	cmd.Flags().StringVar(&typ, "type", "", "filter: same_topic|same_event|same_person|sequel")
 	cmd.Flags().IntVar(&limit, "limit", 0, "max results (default 10)")
 	cmd.Flags().StringVar(&format, "format", "text", "text|json")
+
+	cmd.AddCommand(newRelatedRebuildCmd())
+	return cmd
+}
+
+type rebuildReq struct {
+	FileID string `json:"file_id,omitempty"`
+}
+
+type rebuildResp struct {
+	Files    int `json:"files"`
+	Failures int `json:"failures"`
+}
+
+func newRelatedRebuildCmd() *cobra.Command {
+	var (
+		file   string
+		format string
+	)
+	cmd := &cobra.Command{
+		Use:   "rebuild",
+		Short: "Recompute file_relations for every file (or one --file)",
+		Long: `Backfills file_relations after a new relation type comes online
+(e.g. same_person). Safe to run repeatedly — the relator wipes each file's
+outgoing rows before recomputing.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := resolveConfig("")
+			if err != nil {
+				return err
+			}
+			if cfg.Token == "" {
+				return newCliError(3, "not logged in", "run `mem login` first")
+			}
+			c := newHTTPClient(cfg)
+			body := rebuildReq{FileID: file}
+			var resp rebuildResp
+			if err := c.doJSON("POST", "/v1/relations/rebuild", body, &resp); err != nil {
+				return err
+			}
+			if format == "json" {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(resp)
+			}
+			fmt.Printf("rebuilt %d file(s), %d failure(s)\n", resp.Files, resp.Failures)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&file, "file", "", "scope to a single file_id (default: all files)")
+	cmd.Flags().StringVar(&format, "format", "text", "text|json")
 	return cmd
 }

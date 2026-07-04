@@ -1,17 +1,19 @@
-// Package relator computes file ↔ file relations via embedding KNN.
+// Package relator computes file ↔ file relations via embedding KNN
+// and entity overlap.
 //
-// SPEC §F4 — four relation types are defined; Phase 1 lands two:
-//   * same_topic — derived from text embedding cosine similarity
-//   * same_event — derived from visual embedding cosine similarity
+// SPEC §F4 — four relation types are defined; Phase 1 lands three:
+//   * same_topic  — text embedding cosine similarity
+//   * same_event  — visual embedding cosine similarity (images only)
+//   * same_person — shared `person` entities from face clustering / NER
 //
-// (same_person comes online with Phase G face clustering; sequel needs
-// timeline + entity overlap heuristics, also future.)
+// (sequel needs timeline + narrative heuristics, still future.)
 //
 // Relations are computed at indexing time for the *new* file only — the
 // resulting (src_id, dst_id) rows are NOT mirrored to (dst_id, src_id).
 // Bidirectional semantics emerge naturally as later uploads run their own
-// KNN against the earlier ones. This keeps re-index idempotent (we wipe
-// only the new file's outgoing rows on each run).
+// pass against the earlier ones. This keeps re-index idempotent (we wipe
+// only the new file's outgoing rows on each run). RebuildForUser exists
+// for backfilling historical data after new relation types come online.
 package relator
 
 import (
@@ -68,6 +70,9 @@ func (s *Service) ComputeForFile(ctx context.Context, fileID uuid.UUID) error {
 		if err := s.recomputeVisual(ctx, fileID, userID, defaultTopK); err != nil {
 			s.log.Warn("relator.visual_failed", "file_id", fileID, "err", err)
 		}
+	}
+	if err := s.recomputePerson(ctx, fileID, userID, defaultTopK); err != nil {
+		s.log.Warn("relator.person_failed", "file_id", fileID, "err", err)
 	}
 	return nil
 }
@@ -278,6 +283,159 @@ func (s *Service) recomputeVisual(ctx context.Context, srcID, userID uuid.UUID, 
 
 func isImageMIME(mime string) bool {
 	return len(mime) >= 6 && mime[:6] == "image/"
+}
+
+// recomputePerson finds files that share at least one `person`-typed entity
+// with srcID. score = shared_count / min(src_person_count, dst_person_count),
+// giving a value in (0, 1] — 1 means one file's person-set is a subset of the
+// other's. Top-K by score, ties broken by shared_count.
+//
+// If the src file has zero person entities we still wipe old rows (idempotent
+// rebuild) but insert nothing.
+func (s *Service) recomputePerson(ctx context.Context, srcID, userID uuid.UUID, topK int) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM file_relations WHERE src_id = $1 AND type = $2`,
+		srcID, TypeSamePerson,
+	); err != nil {
+		return fmt.Errorf("clear: %w", err)
+	}
+
+	rows, err := tx.Query(ctx, `
+		WITH src_persons AS (
+		  SELECT fe.entity_id
+		    FROM file_entities fe
+		    JOIN entities e ON e.id = fe.entity_id
+		   WHERE fe.file_id = $1
+		     AND e.user_id  = $2
+		     AND e.type     = 'person'
+		),
+		src_count AS (
+		  SELECT COUNT(*)::int AS n FROM src_persons
+		),
+		dst_shared AS (
+		  SELECT fe.file_id, COUNT(*)::int AS shared
+		    FROM file_entities fe
+		    JOIN files f ON f.id = fe.file_id
+		   WHERE fe.entity_id IN (SELECT entity_id FROM src_persons)
+		     AND fe.file_id != $1
+		     AND f.user_id  = $2
+		   GROUP BY fe.file_id
+		),
+		dst_total AS (
+		  SELECT fe.file_id, COUNT(*)::int AS n
+		    FROM file_entities fe
+		    JOIN entities e ON e.id = fe.entity_id
+		   WHERE e.type = 'person'
+		     AND fe.file_id IN (SELECT file_id FROM dst_shared)
+		   GROUP BY fe.file_id
+		)
+		SELECT d.file_id,
+		       (d.shared::real / GREATEST(LEAST((SELECT n FROM src_count), t.n), 1))::real AS score,
+		       d.shared
+		  FROM dst_shared d
+		  JOIN dst_total  t ON t.file_id = d.file_id
+		 WHERE (SELECT n FROM src_count) > 0
+		 ORDER BY score DESC, d.shared DESC
+		 LIMIT $3
+	`, srcID, userID, topK)
+	if err != nil {
+		return fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	batch := &pgx.Batch{}
+	count := 0
+	for rows.Next() {
+		var dstID uuid.UUID
+		var score float32
+		var shared int
+		if err := rows.Scan(&dstID, &score, &shared); err != nil {
+			return fmt.Errorf("scan: %w", err)
+		}
+		batch.Queue(`
+			INSERT INTO file_relations (src_id, dst_id, type, score, computed_at)
+			VALUES ($1, $2, $3, $4, now())
+			ON CONFLICT (src_id, dst_id, type)
+			  DO UPDATE SET score = EXCLUDED.score, computed_at = EXCLUDED.computed_at
+		`, srcID, dstID, TypeSamePerson, score)
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if count > 0 {
+		br := tx.SendBatch(ctx, batch)
+		for i := 0; i < count; i++ {
+			if _, err := br.Exec(); err != nil {
+				_ = br.Close()
+				return fmt.Errorf("insert: %w", err)
+			}
+		}
+		if err := br.Close(); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+// RebuildResult reports what a backfill pass touched.
+type RebuildResult struct {
+	Files    int `json:"files"`
+	Failures int `json:"failures"`
+}
+
+// RebuildForUser recomputes relations for every file owned by userID. Used
+// after a new relation type comes online (e.g. same_person) so historical
+// uploads pick it up without re-ingesting the file bytes. Optionally scoped
+// to a single fileID.
+//
+// Failures per file are counted but not fatal — the pass returns a summary
+// so callers can decide whether to alert.
+func (s *Service) RebuildForUser(ctx context.Context, userID uuid.UUID, onlyFileID *uuid.UUID) (RebuildResult, error) {
+	var (
+		rows pgx.Rows
+		err  error
+	)
+	if onlyFileID != nil {
+		rows, err = s.pool.Query(ctx,
+			`SELECT id FROM files WHERE user_id = $1 AND id = $2`,
+			userID, *onlyFileID)
+	} else {
+		rows, err = s.pool.Query(ctx,
+			`SELECT id FROM files WHERE user_id = $1 ORDER BY created_at ASC`,
+			userID)
+	}
+	if err != nil {
+		return RebuildResult{}, fmt.Errorf("list files: %w", err)
+	}
+	defer rows.Close()
+
+	ids := make([]uuid.UUID, 0, 64)
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return RebuildResult{}, fmt.Errorf("scan: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return RebuildResult{}, err
+	}
+
+	res := RebuildResult{Files: len(ids)}
+	for _, id := range ids {
+		if err := s.ComputeForFile(ctx, id); err != nil {
+			s.log.Warn("relator.rebuild_file_failed", "file_id", id, "err", err)
+			res.Failures++
+		}
+	}
+	return res, nil
 }
 
 func joinAnd(xs []string) string {

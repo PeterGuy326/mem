@@ -93,6 +93,7 @@ func (s *Server) Router() http.Handler {
 		r.With(s.requireScope(auth.ScopeWrite)).Patch("/v1/files/{id}", s.handlePatchFile)
 		r.With(s.requireScope(auth.ScopeDelete)).Delete("/v1/files/{id}", s.handleDeleteFile)
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/files/{id}/related", s.handleFileRelated)
+		r.With(s.requireScope(auth.ScopeWrite)).Post("/v1/relations/rebuild", s.handleRebuildRelations)
 
 		// Search (SPEC §F3)
 		r.With(s.requireScope(auth.ScopeSearch)).Post("/v1/search", s.handleSearch)
@@ -677,6 +678,47 @@ func (s *Server) handleFileRelated(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"file_id": id,
 		"related": hits,
+	})
+}
+
+// handleRebuildRelations → POST /v1/relations/rebuild
+// Body (optional): { "file_id": "<uuid>" } — scope to one file. Otherwise
+// recomputes every file owned by the caller. Returns a summary.
+func (s *Server) handleRebuildRelations(w http.ResponseWriter, r *http.Request) {
+	u := r.Context().Value(ctxUser).(*auth.User)
+	if s.Relator == nil {
+		writeError(w, http.StatusServiceUnavailable, "no_relator", "relator not configured")
+		return
+	}
+	var req struct {
+		FileID string `json:"file_id"`
+	}
+	// Body is optional — a bare POST rebuilds everything.
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+			return
+		}
+	}
+	var only *uuid.UUID
+	if req.FileID != "" {
+		id, err := uuid.Parse(req.FileID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_id", err.Error())
+			return
+		}
+		only = &id
+	}
+	start := time.Now()
+	res, err := s.Relator.RebuildForUser(r.Context(), u.ID, only)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"files":    res.Files,
+		"failures": res.Failures,
+		"_meta":    map[string]any{"latency_ms": time.Since(start).Milliseconds()},
 	})
 }
 
