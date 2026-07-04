@@ -38,7 +38,7 @@ func newRelatedCmd() *cobra.Command {
 Relation types currently supported:
   same_topic  — text embedding similarity (any document)
   same_event  — visual embedding similarity (images only)
-  same_person — face overlap (coming in Phase G)
+  same_person — shared person entities (face/text overlap)
   sequel      — narrative continuation (future)`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
