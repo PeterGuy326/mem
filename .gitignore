@@ -66,6 +66,7 @@ worker/mem_worker/proto/*_pb2.pyi
 # Root-anchored so we don't accidentally swallow Go packages named "storage".
 /data/
 /storage/
+/dws-media/
 .scratch/
 *.log
 
