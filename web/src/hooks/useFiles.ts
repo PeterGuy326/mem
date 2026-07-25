@@ -59,6 +59,7 @@ export function useFilesByPath(path: string) {
  * `file_count`, leaf nodes omit `children`, the root carries an empty `name`.
  */
 interface RawFolderNode {
+  id?: string;
   name: string;
   path: string;
   file_count?: number;
@@ -68,6 +69,7 @@ interface RawFolderNode {
 
 function toFolderNode(n: RawFolderNode): FolderNode {
   return {
+    id: n.id,
     name: n.name || ROOT_NAME,
     path: n.path,
     fileCount: n.file_count ?? n.fileCount ?? 0,
@@ -251,8 +253,8 @@ export function useUpload() {
         fd.append('file', file);
         fd.append('name', file.name);
         fd.append('path', path);
-        const res = await api.upload<MemFile>('/files', fd);
-        results.push(res);
+        const res = await api.upload<{ file: MemFile; deduped: boolean }>('/files', fd);
+        results.push(normalizeFile(res.file));
       }
       return results;
     },
@@ -301,7 +303,7 @@ export function useCreateFolder() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ path, name }: { path: string; name: string }) =>
-      api.post<{ path: string; name: string }>('/folders', { path, name }),
+      api.post<FolderNode>('/folders', { path: path === '/' ? `/${name}` : `${path}/${name}` }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: fileKeys.all });
     },
@@ -312,8 +314,8 @@ export function useCreateFolder() {
 export function useRenameFolder() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ path, name }: { path: string; name: string }) =>
-      api.apiPatch<{ ok: true; new_path: string }>('/folders', { path, name }),
+    mutationFn: ({ id, name }: { id: string; name: string }) =>
+      api.apiPatch<FolderNode>(`/folders/${id}`, { name }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: fileKeys.all });
     },
@@ -324,20 +326,20 @@ export function useRenameFolder() {
 export function useMoveFolder() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ path, newParent }: { path: string; newParent: string }) =>
-      api.put<{ ok: true; new_path: string }>('/folders', { path, new_parent: newParent }),
+    mutationFn: ({ id, newParent }: { id: string; newParent: string }) =>
+      api.apiPatch<FolderNode>(`/folders/${id}`, { parent_path: newParent }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: fileKeys.all });
     },
   });
 }
 
-/** Delete a folder (recursive). */
+/** Delete a folder recursively. */
 export function useDeleteFolder() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ path }: { path: string }) =>
-      api.del<{ ok: true }>(`/folders?path=${encodeURIComponent(path)}`),
+    mutationFn: ({ id }: { id: string }) =>
+      api.del<void>(`/folders/${id}`, { query: { recursive: true } }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: fileKeys.all });
     },

@@ -16,6 +16,7 @@
 import type { MemFile } from './types';
 
 export interface FolderNode {
+  id?: string;
   name: string;
   path: string;
   children: FolderNode[];

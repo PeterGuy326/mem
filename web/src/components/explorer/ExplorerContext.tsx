@@ -9,6 +9,7 @@ export interface InternalDragPayload {
   // What's being dragged
   fileIds: string[];
   folderPaths: string[];
+  folderIds: Record<string, string>;
   // For UI hint
   label: string;
   // Folder this drag originated from (so we can disable dropping onto self)

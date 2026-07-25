@@ -21,7 +21,7 @@ const queryClient = new QueryClient({
 });
 
 async function enableMocks(): Promise<void> {
-  const useMock = (import.meta.env.VITE_USE_MOCK ?? 'true') !== 'false';
+  const useMock = import.meta.env.VITE_USE_MOCK === 'true';
   if (!useMock) return;
   const { startMockWorker } = await import('@/mocks/browser');
   await startMockWorker();

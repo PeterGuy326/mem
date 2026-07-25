@@ -1,7 +1,8 @@
 import type { ApiError } from './types';
 
 const TOKEN_KEY = 'mem.token';
-const API_BASE = '/v1';
+const WORKSPACE_KEY = 'mem.workspace.current';
+const API_BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '') + '/v1';
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
@@ -13,6 +14,15 @@ export function setToken(token: string): void {
 
 export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY);
+}
+
+export function getCurrentWorkspaceID(): string | null {
+  return localStorage.getItem(WORKSPACE_KEY);
+}
+
+export function setCurrentWorkspaceID(id: string | null): void {
+  if (id) localStorage.setItem(WORKSPACE_KEY, id);
+  else localStorage.removeItem(WORKSPACE_KEY);
 }
 
 export class ApiException extends Error {
@@ -57,6 +67,8 @@ export async function apiFetch<T>(path: string, opts: RequestOptions = {}): Prom
   if (token) {
     finalHeaders['Authorization'] = `Bearer ${token}`;
   }
+  const workspaceID = getCurrentWorkspaceID();
+  if (workspaceID) finalHeaders['X-Workspace-ID'] = workspaceID;
 
   let payload: BodyInit | undefined;
   if (formData) {
@@ -112,6 +124,8 @@ export async function apiBlob(path: string, opts: RequestOptions = {}): Promise<
   };
   const token = getToken();
   if (token) finalHeaders['Authorization'] = `Bearer ${token}`;
+  const workspaceID = getCurrentWorkspaceID();
+  if (workspaceID) finalHeaders['X-Workspace-ID'] = workspaceID;
 
   const url = `${API_BASE}${path}${buildQuery(query)}`;
   const res = await fetch(url, { ...rest, headers: finalHeaders });

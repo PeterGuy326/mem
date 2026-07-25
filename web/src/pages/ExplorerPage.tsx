@@ -207,9 +207,16 @@ function ExplorerLayout({ currentPath }: { currentPath: string }) {
       }
       const fileIds: string[] = [];
       const folderPaths: string[] = [];
+      const folderIds: Record<string, string> = {};
       for (const k of keys) {
         if (isFileKey(k)) fileIds.push(k);
-        else if (isFolderKey(k)) folderPaths.push(k);
+        else {
+          const folder = isFolderKey(k);
+          if (folder) {
+            folderPaths.push(k);
+            if (folder.id) folderIds[k] = folder.id;
+          }
+        }
       }
       const label =
         keys.length === 1
@@ -218,6 +225,7 @@ function ExplorerLayout({ currentPath }: { currentPath: string }) {
       const payload: InternalDragPayload = {
         fileIds,
         folderPaths,
+        folderIds,
         label,
         sourceFolder: currentPath,
       };
@@ -260,7 +268,10 @@ function ExplorerLayout({ currentPath }: { currentPath: string }) {
       try {
         await Promise.all([
           ...drag.fileIds.map((id) => moveFile.mutateAsync({ id, targetPath })),
-          ...drag.folderPaths.map((p) => moveFolder.mutateAsync({ path: p, newParent: targetPath })),
+          ...drag.folderPaths.flatMap((p) => {
+            const id = drag.folderIds[p];
+            return id ? [moveFolder.mutateAsync({ id, newParent: targetPath })] : [];
+          }),
         ]);
         toast.success(
           tt('toast.movedN', { n: drag.fileIds.length + drag.folderPaths.length, path: pretty(targetPath) }),
@@ -364,8 +375,8 @@ function ExplorerLayout({ currentPath }: { currentPath: string }) {
       const file = isFileKey(key);
       setRenameKey(null);
       try {
-        if (folder) {
-          await renameFolder.mutateAsync({ path: folder.path, name: next });
+        if (folder?.id) {
+          await renameFolder.mutateAsync({ id: folder.id, name: next });
           toast.success(tt('toast.renamedFolder'));
         } else if (file) {
           await renameFile.mutateAsync({ id: file.id, name: next });
@@ -401,7 +412,10 @@ function ExplorerLayout({ currentPath }: { currentPath: string }) {
     try {
       await Promise.all([
         ...confirmDelete.files.map((id) => deleteFile.mutateAsync(id)),
-        ...confirmDelete.folders.map((p) => deleteFolder.mutateAsync({ path: p })),
+        ...confirmDelete.folders.flatMap((p) => {
+          const id = isFolderKey(p)?.id;
+          return id ? [deleteFolder.mutateAsync({ id })] : [];
+        }),
       ]);
       toast.success(tt('toast.deleted'));
       selection.clear();
@@ -412,7 +426,7 @@ function ExplorerLayout({ currentPath }: { currentPath: string }) {
     } finally {
       setConfirmDelete(null);
     }
-  }, [confirmDelete, deleteFile, deleteFolder, selection]);
+  }, [confirmDelete, deleteFile, deleteFolder, isFolderKey, selection]);
 
   // ---------- keyboard ----------
   React.useEffect(() => {
