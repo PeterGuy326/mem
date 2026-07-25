@@ -35,8 +35,10 @@ type Config struct {
 	// Worker gRPC (Phase 1 W2+)
 	WorkerGRPC string
 
-	// Auth
-	SessionTTL time.Duration
+	// Deployment / Auth
+	DeploymentMode   string // private|saas
+	RegistrationMode string // open|first_user|disabled
+	SessionTTL       time.Duration
 
 	// Dev knobs
 	LogLevel string // debug|info|warn|error
@@ -58,14 +60,16 @@ func Load() (*Config, error) {
 		//   - set & non-empty -> that URL
 		//   - set & EMPTY     -> "" => queue disabled, inline goroutine fallback
 		// The empty case is the bare-metal/no-redis dev path (scripts/dev_up.sh).
-		RedisURL:    getenvRedis(),
-		S3Endpoint:  getenv("MEM_S3_ENDPOINT", "http://localhost:9100"),
-		S3Bucket:    getenv("MEM_S3_BUCKET", "mem"),
-		S3AccessKey: getenv("MEM_S3_ACCESS_KEY", "mem"),
-		S3SecretKey: getenv("MEM_S3_SECRET_KEY", "mem-minio-password"),
-		S3Region:    getenv("MEM_S3_REGION", "us-east-1"),
-		WorkerGRPC:  getenv("MEM_WORKER_GRPC", "localhost:50051"),
-		LogLevel:    getenv("MEM_LOG_LEVEL", "info"),
+		RedisURL:         getenvRedis(),
+		S3Endpoint:       getenv("MEM_S3_ENDPOINT", "http://localhost:9100"),
+		S3Bucket:         getenv("MEM_S3_BUCKET", "mem"),
+		S3AccessKey:      getenv("MEM_S3_ACCESS_KEY", "mem"),
+		S3SecretKey:      getenv("MEM_S3_SECRET_KEY", "mem-minio-password"),
+		S3Region:         getenv("MEM_S3_REGION", "us-east-1"),
+		WorkerGRPC:       getenv("MEM_WORKER_GRPC", "localhost:50051"),
+		DeploymentMode:   getenv("MEM_DEPLOYMENT_MODE", "private"),
+		RegistrationMode: getenv("MEM_REGISTRATION_MODE", "open"),
+		LogLevel:         getenv("MEM_LOG_LEVEL", "info"),
 	}
 
 	if v := os.Getenv("MEM_S3_USE_SSL"); v != "" {
@@ -90,6 +94,15 @@ func Load() (*Config, error) {
 
 	if cfg.DBURL == "" {
 		return nil, errors.New("MEM_DB_URL is required")
+	}
+	if cfg.DeploymentMode != "private" && cfg.DeploymentMode != "saas" {
+		return nil, fmt.Errorf("MEM_DEPLOYMENT_MODE must be private or saas, got %q", cfg.DeploymentMode)
+	}
+	if cfg.RegistrationMode != "open" && cfg.RegistrationMode != "first_user" && cfg.RegistrationMode != "disabled" {
+		return nil, fmt.Errorf("MEM_REGISTRATION_MODE must be open, first_user, or disabled, got %q", cfg.RegistrationMode)
+	}
+	if cfg.SessionTTL <= 0 {
+		return nil, errors.New("MEM_SESSION_TTL must be positive")
 	}
 	return cfg, nil
 }
