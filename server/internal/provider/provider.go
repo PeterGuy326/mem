@@ -6,7 +6,7 @@
 //
 //   - List / Get / Set settings
 //   - Test (probe the worker → confirm it works and record output dim)
-//   - On embedding-dim change: schedule a full reindex via the queue
+//   - Validate embedding dim against the fixed schema and queue tenant reindex
 //
 // Defaults: when no row exists, falls back to the worker process defaults
 // (MEM_DEFAULT_EMBEDDING / _LLM / _VLM).
@@ -29,20 +29,21 @@ import (
 
 // Kind enumerates the provider categories.
 const (
-	KindEmbedding = "embedding"
-	KindLLM       = "llm"
-	KindVLM       = "vlm"
+	KindEmbedding       = "embedding"
+	KindVisualEmbedding = "visual_embedding"
+	KindLLM             = "llm"
+	KindVLM             = "vlm"
 )
 
 // ValidKinds is the canonical ordered list.
-var ValidKinds = []string{KindEmbedding, KindLLM, KindVLM}
+var ValidKinds = []string{KindEmbedding, KindVisualEmbedding, KindLLM, KindVLM}
 
 // Setting is one row of provider_settings.
 type Setting struct {
 	UserID    uuid.UUID `json:"user_id"`
 	Kind      string    `json:"kind"`
-	Spec      string    `json:"spec"`             // "<vendor>:<model>"
-	Dim       *int      `json:"dim,omitempty"`    // embedding output dim (NULL for LLM/VLM)
+	Spec      string    `json:"spec"`          // "<vendor>:<model>"
+	Dim       *int      `json:"dim,omitempty"` // embedding output dim (NULL for LLM/VLM)
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
@@ -50,7 +51,7 @@ type Setting struct {
 type Service struct {
 	pool   *pgxpool.Pool
 	worker *workerclient.Client
-	queue  *queue.Client // for reindex enqueue on dim change
+	queue  *queue.Client // for tenant reindex enqueue after embedding provider changes
 	log    *slog.Logger
 }
 
@@ -62,8 +63,11 @@ func New(pool *pgxpool.Pool, worker *workerclient.Client, q *queue.Client, log *
 	return &Service{pool: pool, worker: worker, queue: q, log: log}
 }
 
-// ErrNotFound is returned by Get when no row exists.
-var ErrNotFound = errors.New("provider setting not found")
+// Service sentinel errors.
+var (
+	ErrNotFound             = errors.New("provider setting not found")
+	ErrEmbeddingDimConflict = errors.New("embedding dimension cannot be changed online")
+)
 
 // List returns all settings for the user (one row per kind, possibly empty).
 func (s *Service) List(ctx context.Context, userID uuid.UUID) ([]Setting, error) {
@@ -117,12 +121,12 @@ type SetResult struct {
 	DimMigrationOK bool    `json:"dim_migration_ok"`
 }
 
-// Set persists a new provider spec. For embedding providers it also probes
-// the worker for output dim, runs the schema migration if dim changed, and
-// enqueues a full reindex.
+// Set persists a new provider spec. For text embedding providers it probes the
+// output dim, rejects dimensions incompatible with the fixed table schema, and
+// enqueues reindexing only for the selected resource owner.
 //
-// The dim probe happens BEFORE writing the row, so a broken provider spec
-// fails fast and we don't leave inconsistent state behind.
+// The dim probe happens BEFORE writing the row, so a broken provider spec or
+// incompatible dimension fails without changing settings or shared data.
 func (s *Service) Set(ctx context.Context, userID uuid.UUID, kind, spec string) (*SetResult, error) {
 	if !validKind(kind) {
 		return nil, fmt.Errorf("invalid kind %q", kind)
@@ -149,16 +153,14 @@ func (s *Service) Set(ctx context.Context, userID uuid.UUID, kind, spec string) 
 		}
 		res.PreviousDim = prevDim
 
-		// If dim changed, run schema migration first — then upsert + enqueue
-		// reindex. We do this before writing the row so a failed migration
-		// leaves the old setting effective.
-		needsMigration := prevDim == nil || (newDim != nil && *prevDim != *newDim)
-		if needsMigration {
-			if err := s.migrateEmbeddingDim(ctx, dim); err != nil {
-				return nil, fmt.Errorf("migrate dim %d: %w", dim, err)
-			}
-			res.DimMigrationOK = true
+		schemaDim, err := s.embeddingSchemaDim(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("read embedding schema dim: %w", err)
 		}
+		if err := checkEmbeddingDimension(dim, schemaDim); err != nil {
+			return nil, err
+		}
+		res.DimMigrationOK = true
 	}
 
 	upd := time.Now().UTC()
@@ -225,6 +227,13 @@ func validKind(k string) bool {
 	return false
 }
 
+func checkEmbeddingDimension(providerDim, schemaDim int) error {
+	if providerDim != schemaDim {
+		return fmt.Errorf("%w: provider returned %d, schema requires %d; migrate offline and reindex explicitly", ErrEmbeddingDimConflict, providerDim, schemaDim)
+	}
+	return nil
+}
+
 // probeEmbeddingDim asks the worker to embed a 1-token sentinel using the
 // supplied provider override and reports the output vector length.
 func (s *Service) probeEmbeddingDim(ctx context.Context, spec string) (int, error) {
@@ -243,33 +252,20 @@ func (s *Service) probeEmbeddingDim(ctx context.Context, spec string) (int, erro
 	return len(vec), nil
 }
 
-// migrateEmbeddingDim ALTERs embeddings_text.embedding to the new dim. Existing
-// rows are dropped (they would be wrong-shape).
-func (s *Service) migrateEmbeddingDim(ctx context.Context, dim int) error {
-	if dim <= 0 || dim > 16000 {
-		return fmt.Errorf("refusing dim=%d (out of sane range)", dim)
+// embeddingSchemaDim reads the table-level pgvector dimension without changing
+// shared schema or another tenant's data.
+func (s *Service) embeddingSchemaDim(ctx context.Context) (int, error) {
+	var formatted string
+	if err := s.pool.QueryRow(ctx, `SELECT format_type(a.atttypid, a.atttypmod)
+		FROM pg_attribute a
+		WHERE a.attrelid = 'embeddings_text'::regclass AND a.attname = 'embedding' AND NOT a.attisdropped`).Scan(&formatted); err != nil {
+		return 0, err
 	}
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin: %w", err)
+	var dim int
+	if _, err := fmt.Sscanf(formatted, "vector(%d)", &dim); err != nil || dim <= 0 {
+		return 0, fmt.Errorf("unexpected embedding column type %q", formatted)
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck
-
-	// 1. Wipe old embeddings — wrong shape after re-type.
-	if _, err := tx.Exec(ctx, `TRUNCATE embeddings_text`); err != nil {
-		return fmt.Errorf("truncate: %w", err)
-	}
-	// 2. Re-type the column. pgvector allows ALTER TYPE when table is empty.
-	if _, err := tx.Exec(ctx,
-		fmt.Sprintf(`ALTER TABLE embeddings_text ALTER COLUMN embedding TYPE vector(%d)`, dim),
-	); err != nil {
-		return fmt.Errorf("alter: %w", err)
-	}
-	// 3. Mark all files as pending so callers see reindex progress.
-	if _, err := tx.Exec(ctx, `UPDATE files SET index_status = 'pending'`); err != nil {
-		return fmt.Errorf("reset status: %w", err)
-	}
-	return tx.Commit(ctx)
+	return dim, nil
 }
 
 // queueReindexAll enqueues an IndexFile task for every file belonging to the

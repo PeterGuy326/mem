@@ -53,6 +53,10 @@ func (s *Server) handleSetProvider(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := s.Provider.Set(r.Context(), u.ID, kind, body.Spec)
 	if err != nil {
+		if errors.Is(err, provider.ErrEmbeddingDimConflict) {
+			writeError(w, http.StatusConflict, "embedding_dimension_conflict", err.Error())
+			return
+		}
 		writeError(w, http.StatusBadRequest, "set_failed", err.Error())
 		return
 	}
