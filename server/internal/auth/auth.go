@@ -62,23 +62,67 @@ type Service struct {
 // New constructs a Service.
 func New(pool *pgxpool.Pool) *Service { return &Service{pool: pool} }
 
-// CreateUser provisions a new user with bcrypt-hashed password. Dev-only.
+// CreateUser provisions a user and personal workspace. It preserves the
+// historical open-registration behavior for existing callers.
 func (s *Service) CreateUser(ctx context.Context, email, password string) (*User, error) {
+	return s.CreateUserWithRegistration(ctx, email, password, "open")
+}
+
+// CreateUserWithRegistration atomically creates the user, their personal
+// workspace, and owner membership under the requested registration policy.
+func (s *Service) CreateUserWithRegistration(ctx context.Context, email, password, mode string) (*User, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
 	if email == "" || password == "" {
 		return nil, errors.New("email and password are required")
+	}
+	if mode == "disabled" {
+		return nil, ErrRegistrationDisabled
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return nil, fmt.Errorf("bcrypt: %w", err)
 	}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("begin registration: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if mode == "first_user" {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(72466301)`); err != nil {
+			return nil, fmt.Errorf("lock registration: %w", err)
+		}
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM users)`).Scan(&exists); err != nil {
+			return nil, fmt.Errorf("check registration: %w", err)
+		}
+		if exists {
+			return nil, ErrRegistrationDisabled
+		}
+	} else if mode != "open" {
+		return nil, fmt.Errorf("invalid registration mode %q", mode)
+	}
+
 	id := uuid.New()
 	created := time.Now().UTC()
-	_, err = s.pool.Exec(ctx,
+	if _, err = tx.Exec(ctx,
 		`INSERT INTO users (id, email, password_hash, created_at) VALUES ($1, $2, $3, $4)`,
-		id, email, string(hash), created)
-	if err != nil {
+		id, email, string(hash), created); err != nil {
 		return nil, fmt.Errorf("insert user: %w", err)
+	}
+	workspaceID := uuid.New()
+	name := strings.SplitN(email, "@", 2)[0] + "'s workspace"
+	if _, err = tx.Exec(ctx,
+		`INSERT INTO workspaces (id, name, resource_owner_user_id, created_at) VALUES ($1, $2, $3, $4)`,
+		workspaceID, name, id, created); err != nil {
+		return nil, fmt.Errorf("insert workspace: %w", err)
+	}
+	if _, err = tx.Exec(ctx,
+		`INSERT INTO workspace_memberships (workspace_id, user_id, role, created_at) VALUES ($1, $2, 'owner', $3)`,
+		workspaceID, id, created); err != nil {
+		return nil, fmt.Errorf("insert workspace membership: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit registration: %w", err)
 	}
 	return &User{ID: id, Email: email, CreatedAt: created}, nil
 }
@@ -246,9 +290,10 @@ func validScope(s string) bool {
 
 // Sentinel errors for the auth layer.
 var (
-	ErrInvalidCredentials = errors.New("invalid credentials")
-	ErrInvalidToken       = errors.New("invalid token")
-	ErrTokenExpired       = errors.New("token expired")
-	ErrTokenNotFound      = errors.New("token not found")
-	ErrForbidden          = errors.New("forbidden")
+	ErrInvalidCredentials   = errors.New("invalid credentials")
+	ErrInvalidToken         = errors.New("invalid token")
+	ErrTokenExpired         = errors.New("token expired")
+	ErrTokenNotFound        = errors.New("token not found")
+	ErrForbidden            = errors.New("forbidden")
+	ErrRegistrationDisabled = errors.New("registration is disabled")
 )

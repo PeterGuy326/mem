@@ -23,11 +23,12 @@ import (
 	"github.com/PeterGuy326/mem/server/internal/folder"
 	"github.com/PeterGuy326/mem/server/internal/indexer"
 	"github.com/PeterGuy326/mem/server/internal/provider"
-	"github.com/PeterGuy326/mem/server/internal/relator"
 	"github.com/PeterGuy326/mem/server/internal/queue"
+	"github.com/PeterGuy326/mem/server/internal/relator"
 	"github.com/PeterGuy326/mem/server/internal/search"
 	"github.com/PeterGuy326/mem/server/internal/storage"
 	"github.com/PeterGuy326/mem/server/internal/workerclient"
+	"github.com/PeterGuy326/mem/server/internal/workspace"
 )
 
 func main() {
@@ -78,6 +79,7 @@ func run() error {
 	logger.Info("storage ready", "bucket", store.Bucket())
 
 	authSvc := auth.New(database.Pool)
+	workspaceSvc := workspace.New(database.Pool)
 	folderSvc := folder.New(database.Pool)
 	fileSvc := file.New(database.Pool, store, folderSvc)
 
@@ -112,17 +114,21 @@ func run() error {
 	askSvc := ask.New(database.Pool, searchSvc, workerCli, logger)
 
 	srv := &api.Server{
-		Auth:     authSvc,
-		File:     fileSvc,
-		Folder:   folderSvc,
-		Indexer:  idxSvc,
-		Queue:    queueCli,
-		Search:   searchSvc,
-		Ask:      askSvc,
-		Provider: providerSvc,
-		Relator:  relatorSvc,
-		Face:     faceSvc,
-		Log:      logger,
+		Auth:             authSvc,
+		File:             fileSvc,
+		Folder:           folderSvc,
+		Indexer:          idxSvc,
+		Queue:            queueCli,
+		Search:           searchSvc,
+		Ask:              askSvc,
+		Provider:         providerSvc,
+		Relator:          relatorSvc,
+		Face:             faceSvc,
+		Workspace:        workspaceSvc,
+		DeploymentMode:   cfg.DeploymentMode,
+		RegistrationMode: cfg.RegistrationMode,
+		SessionTTL:       cfg.SessionTTL,
+		Log:              logger,
 	}
 
 	// Boot the queue consumer in-process. Promotion to a separate binary is a

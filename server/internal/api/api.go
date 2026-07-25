@@ -38,6 +38,7 @@ import (
 	"github.com/PeterGuy326/mem/server/internal/queue"
 	"github.com/PeterGuy326/mem/server/internal/relator"
 	"github.com/PeterGuy326/mem/server/internal/search"
+	"github.com/PeterGuy326/mem/server/internal/workspace"
 )
 
 // Version is overridden by ldflags at release-build time.
@@ -45,17 +46,21 @@ var Version = "dev"
 
 // Server bundles the dependencies a handler needs.
 type Server struct {
-	Auth     *auth.Service
-	File     *file.Service
-	Folder   *folder.Service
-	Indexer  *indexer.Service  // legacy inline path (only used if Queue is nil)
-	Queue    *queue.Client     // preferred: async indexing via Asynq
-	Search   *search.Service   // optional; nil disables /v1/search
-	Ask      *ask.Service      // optional; nil disables /v1/ask
-	Provider *provider.Service // optional; nil disables /v1/providers
-	Relator  *relator.Service  // optional; nil falls back to stub response
-	Face     *face.Service     // optional; nil disables /v1/faces
-	Log      *slog.Logger
+	Auth             *auth.Service
+	File             *file.Service
+	Folder           *folder.Service
+	Indexer          *indexer.Service  // legacy inline path (only used if Queue is nil)
+	Queue            *queue.Client     // preferred: async indexing via Asynq
+	Search           *search.Service   // optional; nil disables /v1/search
+	Ask              *ask.Service      // optional; nil disables /v1/ask
+	Provider         *provider.Service // optional; nil disables /v1/providers
+	Relator          *relator.Service  // optional; nil falls back to stub response
+	Face             *face.Service     // optional; nil disables /v1/faces
+	Workspace        *workspace.Service
+	DeploymentMode   string
+	RegistrationMode string
+	SessionTTL       time.Duration
+	Log              *slog.Logger
 }
 
 // Router returns a chi.Router with all v1 routes wired.
@@ -81,6 +86,11 @@ func (s *Server) Router() http.Handler {
 	// Token-authenticated routes
 	r.Group(func(r chi.Router) {
 		r.Use(s.authMiddleware)
+		r.Use(s.workspaceMiddleware)
+
+		r.Get("/v1/capabilities", s.handleCapabilities)
+		r.Get("/v1/workspaces", s.handleListWorkspaces)
+		r.Get("/v1/workspaces/current", s.handleCurrentWorkspace)
 
 		r.With(s.requireScope(auth.ScopeAdmin)).Post("/v1/auth/tokens", s.handleCreateToken)
 		r.With(s.requireScope(auth.ScopeAdmin)).Get("/v1/auth/tokens", s.handleListTokens)
@@ -91,7 +101,7 @@ func (s *Server) Router() http.Handler {
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/files/{id}", s.handleGetFile)
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/files/{id}/content", s.handleGetContent)
 		r.With(s.requireScope(auth.ScopeWrite)).Patch("/v1/files/{id}", s.handlePatchFile)
-		r.With(s.requireScope(auth.ScopeDelete)).Delete("/v1/files/{id}", s.handleDeleteFile)
+		r.With(s.requireScope(auth.ScopeDelete), s.requireWorkspaceDelete).Delete("/v1/files/{id}", s.handleDeleteFile)
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/files/{id}/related", s.handleFileRelated)
 		r.With(s.requireScope(auth.ScopeWrite)).Post("/v1/relations/rebuild", s.handleRebuildRelations)
 
@@ -104,8 +114,8 @@ func (s *Server) Router() http.Handler {
 
 		// Providers (SPEC §F8)
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/providers", s.handleListProviders)
-		r.With(s.requireScope(auth.ScopeAdmin)).Put("/v1/providers/{kind}", s.handleSetProvider)
-		r.With(s.requireScope(auth.ScopeAdmin)).Post("/v1/providers/{kind}/test", s.handleTestProvider)
+		r.With(s.requireScope(auth.ScopeAdmin), s.requireWorkspaceProviderWrite).Put("/v1/providers/{kind}", s.handleSetProvider)
+		r.With(s.requireScope(auth.ScopeRead)).Post("/v1/providers/{kind}/test", s.handleTestProvider)
 
 		// Timeline (SPEC §F6.3)
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/timeline", s.handleTimeline)
@@ -121,7 +131,7 @@ func (s *Server) Router() http.Handler {
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/folders", s.handleListFolders)
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/folders/tree", s.handleFolderTree)
 		r.With(s.requireScope(auth.ScopeWrite)).Patch("/v1/folders/{id}", s.handlePatchFolder)
-		r.With(s.requireScope(auth.ScopeDelete)).Delete("/v1/folders/{id}", s.handleDeleteFolder)
+		r.With(s.requireScope(auth.ScopeDelete), s.requireWorkspaceDelete).Delete("/v1/folders/{id}", s.handleDeleteFolder)
 	})
 
 	return r
@@ -132,8 +142,10 @@ func (s *Server) Router() http.Handler {
 type ctxKey string
 
 const (
-	ctxUser  ctxKey = "user"
-	ctxToken ctxKey = "token"
+	ctxActor     ctxKey = "actor"
+	ctxUser      ctxKey = "user"
+	ctxToken     ctxKey = "token"
+	ctxWorkspace ctxKey = "workspace"
 )
 
 func (s *Server) logRequest(next http.Handler) http.Handler {
@@ -172,7 +184,8 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			writeError(w, status, code, hint)
 			return
 		}
-		ctx := context.WithValue(r.Context(), ctxUser, u)
+		ctx := context.WithValue(r.Context(), ctxActor, u)
+		ctx = context.WithValue(ctx, ctxUser, u)
 		ctx = context.WithValue(ctx, ctxToken, t)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -189,6 +202,68 @@ func (s *Server) requireScope(scope string) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func (s *Server) workspaceMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.Workspace == nil {
+			writeError(w, http.StatusServiceUnavailable, "workspace_disabled", "workspace service not configured")
+			return
+		}
+		actor := r.Context().Value(ctxActor).(*auth.User)
+		var requested *uuid.UUID
+		if raw := strings.TrimSpace(r.Header.Get("X-Workspace-ID")); raw != "" {
+			id, err := uuid.Parse(raw)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "bad_workspace_id", "X-Workspace-ID must be a UUID")
+				return
+			}
+			requested = &id
+		}
+		ws, err := s.Workspace.Resolve(r.Context(), actor.ID, requested)
+		if err != nil {
+			if errors.Is(err, workspace.ErrForbidden) {
+				writeError(w, http.StatusForbidden, "workspace_forbidden", "workspace membership required")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "workspace_resolve_failed", err.Error())
+			return
+		}
+		owner := &auth.User{ID: ws.ResourceOwnerUserID}
+		ctx := context.WithValue(r.Context(), ctxWorkspace, ws)
+		ctx = context.WithValue(ctx, ctxUser, owner)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func (s *Server) requireWorkspaceDelete(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws := currentWorkspace(r)
+		if !workspace.CanDelete(ws.Role) {
+			writeError(w, http.StatusForbidden, "forbidden", "workspace role does not allow delete")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) requireWorkspaceProviderWrite(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws := currentWorkspace(r)
+		if !workspace.CanModifyProvider(ws.Role) {
+			writeError(w, http.StatusForbidden, "forbidden", "workspace role does not allow provider changes")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func currentWorkspace(r *http.Request) *workspace.Workspace {
+	return r.Context().Value(ctxWorkspace).(*workspace.Workspace)
+}
+
+func resourceOwnerID(r *http.Request) uuid.UUID {
+	return currentWorkspace(r).ResourceOwnerUserID
 }
 
 // --- handlers ---
@@ -230,8 +305,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "weak_password", "password must be at least 6 characters")
 		return
 	}
-	u, err := s.Auth.CreateUser(r.Context(), req.Email, req.Password)
+	u, err := s.Auth.CreateUserWithRegistration(r.Context(), req.Email, req.Password, s.RegistrationMode)
 	if err != nil {
+		if errors.Is(err, auth.ErrRegistrationDisabled) {
+			writeError(w, http.StatusForbidden, "registration_disabled", "registration is disabled by MEM_REGISTRATION_MODE")
+			return
+		}
 		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "23505") {
 			writeError(w, http.StatusConflict, "email_taken", "an account with this email already exists")
 			return
@@ -242,10 +321,14 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	s.issueSession(w, u, http.StatusCreated)
 }
 
-// issueSession mints a 24h admin-scope session token for u and writes the
-// standard {user, token, token_meta} envelope. Shared by login + register.
+// issueSession mints an admin-scope session token using the configured TTL and
+// writes the standard {user, token, token_meta} envelope.
 func (s *Server) issueSession(w http.ResponseWriter, u *auth.User, status int) {
-	exp := time.Now().Add(24 * time.Hour)
+	ttl := s.SessionTTL
+	if ttl <= 0 {
+		ttl = 24 * time.Hour
+	}
+	exp := time.Now().Add(ttl)
 	plain, tok, err := s.Auth.CreateToken(context.Background(), u.ID, "session-"+time.Now().Format("20060102-150405"),
 		auth.AllScopes, nil, &exp, false)
 	if err != nil {
@@ -273,7 +356,7 @@ type createTokenReq struct {
 }
 
 func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
-	u := r.Context().Value(ctxUser).(*auth.User)
+	u := r.Context().Value(ctxActor).(*auth.User)
 	var req createTokenReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
@@ -305,7 +388,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
-	u := r.Context().Value(ctxUser).(*auth.User)
+	u := r.Context().Value(ctxActor).(*auth.User)
 	tokens, err := s.Auth.ListTokens(r.Context(), u.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", err.Error())
@@ -315,7 +398,7 @@ func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
-	u := r.Context().Value(ctxUser).(*auth.User)
+	u := r.Context().Value(ctxActor).(*auth.User)
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_id", err.Error())
@@ -576,7 +659,9 @@ func (s *Server) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 
 // handleSearch implements POST /v1/search.
 // Body: { "query": "...", "type": "image|doc|...", "since": "2012-01-01",
-//         "until": "2012-12-31", "limit": 10 }
+//
+//	"until": "2012-12-31", "limit": 10 }
+//
 // Returns: { "results": [Hit, ...], "_meta": { "latency_ms": N } }
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	u := r.Context().Value(ctxUser).(*auth.User)
