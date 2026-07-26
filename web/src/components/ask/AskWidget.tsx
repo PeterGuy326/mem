@@ -124,6 +124,20 @@ function AskPanel({ onClose }: { onClose: () => void }) {
   React.useEffect(() => () => abortRef.current?.abort(), []);
 
   const hasContent = busy || steps.length > 0 || !!thinking || !!answer;
+  // Once an answer is complete, show only the sources it actually cites. The
+  // retrieval pool can include weak fallback matches, which should not be
+  // presented as evidence for the final answer.
+  const visibleSources = React.useMemo(() => {
+    const cited = new Set(
+      [...answer.matchAll(/\[(\d+)]/g)]
+        .map((m) => Number(m[1]))
+        .filter((n) => Number.isInteger(n) && n > 0),
+    );
+    // Keep the retrieval candidates visible while generation is in progress;
+    // once finished, evidence must be an explicit citation in the answer.
+    if (busy) return sources.map((source, index) => ({ source, index }));
+    return sources.flatMap((source, index) => (cited.has(index + 1) ? [{ source, index }] : []));
+  }, [answer, busy, sources]);
 
   // Jump to a cited/source file's detail page (SPA nav, closes the panel).
   const openFile = (fileId: string) => {
@@ -226,9 +240,12 @@ function AskPanel({ onClose }: { onClose: () => void }) {
           <div className="space-y-3">
             {steps.length > 0 && <ExecutionTrace steps={steps} />}
 
-            {/* Waiting for the first token after retrieval — a rich pending
-                state so the panel never looks empty during the model's think. */}
-            {busy && steps.length > 0 && !thinking && !answer && <PendingAnswer />}
+            {/* Render feedback immediately after submit, before the backend has
+                returned its first retrieval event. Without this the panel is
+                visibly blank for the whole first-request/network interval. */}
+            {busy && !thinking && !answer && (
+              <PendingAnswer stage={steps.length > 0 ? 'generate' : 'retrieve'} />
+            )}
 
             {thinking && <ThinkingPanel text={thinking} streaming={busy && !answer} />}
 
@@ -253,13 +270,13 @@ function AskPanel({ onClose }: { onClose: () => void }) {
               </div>
             )}
 
-            {answer && sources.length > 0 && (
+            {answer && visibleSources.length > 0 && (
               <div>
                 <div className="mb-1 text-2xs uppercase tracking-wider text-fg-muted">
-                  {t('ask.sources')} · {sources.length}
+                  {t('ask.sources')} · {visibleSources.length}
                 </div>
                 <ol className="space-y-0.5">
-                  {sources.map((s, i) => (
+                  {visibleSources.map(({ source: s, index }) => (
                     <li key={s.file_id}>
                       <button
                         type="button"
@@ -268,7 +285,7 @@ function AskPanel({ onClose }: { onClose: () => void }) {
                                    hover:bg-bg-inset transition-colors"
                         title="跳转到文件 / open file"
                       >
-                        <span className="font-mono text-fg-subtle">[{i + 1}]</span>
+                        <span className="font-mono text-fg-subtle">[{index + 1}]</span>
                         <span className="truncate text-fg group-hover:text-accent">{s.name}</span>
                         <span className="ml-auto font-mono text-fg-subtle">{s.score.toFixed(2)}</span>
                         <ChevronDown className="h-3 w-3 flex-none -rotate-90 text-fg-subtle opacity-0 group-hover:opacity-100" />
@@ -329,9 +346,9 @@ function AskPanel({ onClose }: { onClose: () => void }) {
   );
 }
 
-/** Rich "generating…" placeholder shown between retrieval and the first token,
- *  so the long reasoning wait reads as alive, not empty. */
-function PendingAnswer() {
+/** Animated placeholder shown from the instant a question is submitted until
+ * the first model token arrives, so the panel never looks inert. */
+function PendingAnswer({ stage }: { stage: 'retrieve' | 'generate' }) {
   const { t } = useT();
   const [sec, setSec] = React.useState(0);
   React.useEffect(() => {
@@ -342,7 +359,7 @@ function PendingAnswer() {
     <div className="rounded-xl border border-border/60 bg-bg-subtle/30 p-3.5">
       <div className="flex items-center gap-2 text-xs text-fg-muted">
         <Cpu className="h-3.5 w-3.5 animate-pulse text-accent" />
-        <span>{t('ask.stageGenerate')} · </span>
+        <span>{stage === 'retrieve' ? t('ask.stageRetrieve') : t('ask.stageGenerate')} · </span>
         <span className="text-accent">{t('ask.inProgress')}</span>
         <span className="ml-auto font-mono text-2xs text-fg-subtle">{sec}s</span>
       </div>

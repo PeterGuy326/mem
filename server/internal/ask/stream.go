@@ -10,8 +10,6 @@ import (
 	"os"
 	"strings"
 	"time"
-
-	"github.com/PeterGuy326/mem/server/internal/search"
 )
 
 // StreamEvent is one server-sent event in the streaming-ask protocol. The web
@@ -25,30 +23,31 @@ type StreamEvent struct {
 }
 
 // AskStream runs the RAG flow but streams the LLM output token-by-token via the
-// `emit` callback, so the UI can show the model's reasoning + answer in real
-// time. It talks to the OpenAI-compatible gateway directly (stream:true) rather
-// than the worker, because the worker's gRPC Chat is unary.
-//
-// Requires OPENAI_BASE_URL + OPENAI_API_KEY in memd's environment and the
-// user's llm provider set to an `openai:<model>` spec. Returns an error if
-// streaming isn't available so the caller can fall back to the unary /v1/ask.
+// `emit` callback, so the UI can show the answer in real time. It supports the
+// project's local default (ollama:<model>) as well as OpenAI-compatible models.
 func (s *Service) AskStream(ctx context.Context, req Request, emit func(StreamEvent) error) error {
 	q := strings.TrimSpace(req.Question)
 	if q == "" {
 		return fmt.Errorf("question is empty")
 	}
-	base := strings.TrimRight(os.Getenv("OPENAI_BASE_URL"), "/")
-	key := os.Getenv("OPENAI_API_KEY")
-	if base == "" || key == "" {
-		return fmt.Errorf("streaming unavailable: OPENAI_BASE_URL/OPENAI_API_KEY not set")
-	}
 	spec := s.userLLMSpec(ctx, req.UserID)
 	if spec == "" {
 		spec = os.Getenv("MEM_DEFAULT_LLM")
 	}
-	model := strings.TrimPrefix(spec, "openai:")
-	if model == "" || !strings.HasPrefix(spec, "openai:") {
-		return fmt.Errorf("streaming requires an openai:* llm provider, got %q", spec)
+	// The bare-metal development stack delegates default selection to the worker
+	// and therefore does not set MEM_DEFAULT_LLM on memd. Keep streaming aligned
+	// with that local default instead of forcing callers to configure a provider.
+	if spec == "" {
+		spec = "ollama:llama3.1"
+	}
+	vendor, model, ok := strings.Cut(spec, ":")
+	if !ok || model == "" {
+		return fmt.Errorf("streaming requires a provider spec like ollama:model or openai:model, got %q", spec)
+	}
+	vendor = strings.ToLower(strings.TrimSpace(vendor))
+	model = strings.TrimSpace(model)
+	if vendor != "ollama" && vendor != "openai" {
+		return fmt.Errorf("streaming is not implemented for provider %q", vendor)
 	}
 
 	topK := req.TopK
@@ -62,12 +61,7 @@ func (s *Service) AskStream(ctx context.Context, req Request, emit func(StreamEv
 	// 1. Retrieve — auto route (text + visual) so images (via their caption)
 	// can ground answers about photos too.
 	retrieveStart := time.Now()
-	hits, err := s.search.Search(ctx, search.Query{
-		UserID: req.UserID,
-		Text:   q,
-		Route:  search.RouteAuto,
-		Limit:  topK,
-	})
+	hits, err := s.retrieveHits(ctx, req.UserID, q, topK)
 	if err != nil {
 		return fmt.Errorf("retrieve: %w", err)
 	}
@@ -80,19 +74,16 @@ func (s *Service) AskStream(ctx context.Context, req Request, emit func(StreamEv
 		return err
 	}
 	if len(hits) == 0 {
-		_ = emit(StreamEvent{Type: "answer", Delta: "I don't have any documents in your drive that match this question."})
+		_ = emit(StreamEvent{Type: "answer", Delta: "我的网盘中没有找到与此问题相关的文件。"})
 		return emit(StreamEvent{Type: "done"})
 	}
 
 	// 2. Build prompt + sources.
-	systemPrompt := "You are mem, the user's personal AI drive. Answer their " +
-		"question using ONLY the snippets below. If the snippets don't " +
-		"contain the answer, say so honestly. Cite sources by their [N] tag " +
-		"inline (e.g. \"[1]\")."
+	systemPrompt := ragSystemPrompt()
 	var ctxBlock strings.Builder
 	sources := make([]Source, 0, len(hits))
 	for i, h := range hits {
-		fmt.Fprintf(&ctxBlock, "\n[%d] %s\n%s\n", i+1, h.Name, h.Snippet)
+		fmt.Fprintf(&ctxBlock, "\n[%d] %s\n%s\n", i+1, h.Name, ragEvidence(h))
 		sources = append(sources, Source{
 			FileID: h.FileID, Name: h.Name, Path: h.Path, MIME: h.MIME,
 			Excerpt: h.Snippet, Score: h.Score,
@@ -103,23 +94,36 @@ func (s *Service) AskStream(ctx context.Context, req Request, emit func(StreamEv
 	}
 	userMsg := fmt.Sprintf("Snippets from my drive:\n%s\n\nQuestion: %s", ctxBlock.String(), q)
 
-	// 3. Stream the chat completion from the gateway.
+	// 3. Stream the chat completion from the selected provider.
 	genStart := time.Now()
-	err = streamChat(ctx, base, key, model,
-		[]chatMsg{{Role: "system", Content: systemPrompt}, {Role: "user", Content: userMsg}},
-		func(reasoning, content string) error {
-			if reasoning != "" {
-				if e := emit(StreamEvent{Type: "thinking", Delta: reasoning}); e != nil {
-					return e
-				}
+	messages := []chatMsg{{Role: "system", Content: systemPrompt}, {Role: "user", Content: userMsg}}
+	onDelta := func(reasoning, content string) error {
+		if reasoning != "" {
+			if e := emit(StreamEvent{Type: "thinking", Delta: reasoning}); e != nil {
+				return e
 			}
-			if content != "" {
-				if e := emit(StreamEvent{Type: "answer", Delta: content}); e != nil {
-					return e
-				}
+		}
+		if content != "" {
+			if e := emit(StreamEvent{Type: "answer", Delta: content}); e != nil {
+				return e
 			}
-			return nil
-		})
+		}
+		return nil
+	}
+	if vendor == "ollama" {
+		base := strings.TrimRight(os.Getenv("OLLAMA_BASE_URL"), "/")
+		if base == "" {
+			base = "http://localhost:11434"
+		}
+		err = streamOllamaChat(ctx, base, model, messages, onDelta)
+	} else {
+		base := strings.TrimRight(os.Getenv("OPENAI_BASE_URL"), "/")
+		key := os.Getenv("OPENAI_API_KEY")
+		if base == "" || key == "" {
+			return fmt.Errorf("streaming unavailable: OPENAI_BASE_URL/OPENAI_API_KEY not set")
+		}
+		err = streamChat(ctx, base, key, model, messages, onDelta)
+	}
 	if err != nil {
 		return fmt.Errorf("llm stream: %w", err)
 	}
@@ -130,6 +134,62 @@ func (s *Service) AskStream(ctx context.Context, req Request, emit func(StreamEv
 		DurationMS: time.Since(genStart).Milliseconds(),
 	}})
 	return emit(StreamEvent{Type: "done"})
+}
+
+// streamOllamaChat translates Ollama's newline-delimited JSON stream into the
+// same delta callback used by OpenAI-compatible providers. Ollama exposes
+// assistant text in message.content and signals completion with done: true.
+func streamOllamaChat(ctx context.Context, base, model string, messages []chatMsg, onDelta func(reasoning, content string) error) error {
+	body, _ := json.Marshal(map[string]any{
+		"model":    model,
+		"messages": messages,
+		"stream":   true,
+		// Thinking-capable models (for example qwen3) otherwise spend several
+		// seconds emitting a separate thinking field before message.content.
+		// The RAG UI needs a concise grounded answer, not hidden reasoning.
+		"think": false,
+	})
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/chat", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/x-ndjson")
+
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close() //nolint:errcheck
+	if resp.StatusCode != http.StatusOK {
+		buf := new(bytes.Buffer)
+		_, _ = buf.ReadFrom(resp.Body)
+		return fmt.Errorf("ollama %d: %s", resp.StatusCode, strings.TrimSpace(buf.String()))
+	}
+
+	sc := bufio.NewScanner(resp.Body)
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for sc.Scan() {
+		var chunk struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+			Done bool `json:"done"`
+		}
+		if err := json.Unmarshal(sc.Bytes(), &chunk); err != nil {
+			return fmt.Errorf("decode ollama stream: %w", err)
+		}
+		if chunk.Message.Content != "" {
+			if err := onDelta("", chunk.Message.Content); err != nil {
+				return err
+			}
+		}
+		if chunk.Done {
+			break
+		}
+	}
+	return sc.Err()
 }
 
 type chatMsg struct {

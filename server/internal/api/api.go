@@ -105,6 +105,7 @@ func (s *Server) Router() http.Handler {
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/files/{id}", s.handleGetFile)
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/files/{id}/content", s.handleGetContent)
 		r.With(s.requireScope(auth.ScopeWrite)).Patch("/v1/files/{id}", s.handlePatchFile)
+		r.With(s.requireScope(auth.ScopeWrite)).Post("/v1/files/{id}/reindex", s.handleReindexFile)
 		r.With(s.requireScope(auth.ScopeDelete), s.requireWorkspaceDelete).Delete("/v1/files/{id}", s.handleDeleteFile)
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/files/{id}/related", s.handleFileRelated)
 		r.With(s.requireScope(auth.ScopeWrite)).Post("/v1/relations/rebuild", s.handleRebuildRelations)
@@ -673,6 +674,43 @@ func (s *Server) handlePatchFile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// handleReindexFile reruns the AI pipeline for an existing file. This is
+// needed after changing LLM/VLM providers because upload dedup intentionally
+// skips indexing files whose bytes are already present.
+func (s *Server) handleReindexFile(w http.ResponseWriter, r *http.Request) {
+	u := r.Context().Value(ctxUser).(*auth.User)
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_id", err.Error())
+		return
+	}
+	f, err := s.File.Get(r.Context(), u.ID, id)
+	if err != nil {
+		writeFileMutateError(w, err)
+		return
+	}
+
+	switch {
+	case s.Queue != nil && s.Queue.Enabled():
+		if err := s.Queue.EnqueueIndexFile(r.Context(), queue.IndexFilePayload{
+			FileID: f.ID, UserID: f.UserID,
+		}); err != nil {
+			writeError(w, http.StatusServiceUnavailable, "enqueue_failed", err.Error())
+			return
+		}
+	case s.Indexer != nil:
+		go s.Indexer.IndexFile(context.Background(), f)
+	default:
+		writeError(w, http.StatusServiceUnavailable, "indexer_disabled", "indexer is not configured")
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"file_id": f.ID,
+		"status":  "queued",
+	})
 }
 
 // handleDeleteFile implements DELETE /v1/files/{id} — removes the file row

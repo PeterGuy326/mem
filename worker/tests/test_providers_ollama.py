@@ -201,8 +201,9 @@ def test_vlm_caption_sends_base64_image(capture):
     assert body["model"] == "minicpm-v"
     msg = body["messages"][0]
     assert msg["role"] == "user"
-    assert msg["content"].lower().startswith("describe")
+    assert msg["content"].startswith("请只用简体中文")
     assert msg["images"] == [base64.b64encode(image).decode("ascii")]
+    assert body["options"]["temperature"] == 0.1
 
 
 def test_vlm_vqa_uses_question_as_prompt(capture):

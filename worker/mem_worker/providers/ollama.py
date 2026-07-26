@@ -186,8 +186,8 @@ class OllamaVLMProvider:
     """
 
     DEFAULT_CAPTION_PROMPT = (
-        "Describe this image in one concise sentence. "
-        "Focus on subject, action, setting, and notable objects."
+        "请只用简体中文准确描述这张图片中直接可见的内容，包括主要对象、"
+        "动作、场景和显著物体。不要根据季节、地点、身份或画面外信息进行推测。"
     )
 
     def __init__(
@@ -207,6 +207,7 @@ class OllamaVLMProvider:
         payload = {
             "model": self.model,
             "stream": False,
+            "options": {"temperature": 0.1},
             "messages": [
                 {"role": "user", "content": prompt, "images": [b64]},
             ],
