@@ -60,6 +60,7 @@ type Server struct {
 	DeploymentMode   string
 	RegistrationMode string
 	SessionTTL       time.Duration
+	CORSOrigins      []string // allowed browser origins; empty disables CORS
 	Log              *slog.Logger
 }
 
@@ -68,6 +69,9 @@ func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
+	if len(s.CORSOrigins) > 0 {
+		r.Use(s.corsMiddleware)
+	}
 	r.Use(s.logRequest)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(60 * time.Second))
@@ -147,6 +151,36 @@ const (
 	ctxToken     ctxKey = "token"
 	ctxWorkspace ctxKey = "workspace"
 )
+
+// corsMiddleware allows browser clients served from a different origin (split
+// front/back deployment) to call the API. Auth is Bearer-token based — no
+// cookies — so Access-Control-Allow-Credentials is intentionally not set.
+func (s *Server) corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin != "" && s.corsOriginAllowed(origin) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Add("Vary", "Origin")
+			if r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Workspace-ID")
+				w.Header().Set("Access-Control-Max-Age", "600")
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) corsOriginAllowed(origin string) bool {
+	for _, o := range s.CORSOrigins {
+		if o == "*" || strings.EqualFold(o, origin) {
+			return true
+		}
+	}
+	return false
+}
 
 func (s *Server) logRequest(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

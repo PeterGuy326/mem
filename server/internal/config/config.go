@@ -39,6 +39,7 @@ type Config struct {
 	DeploymentMode   string // private|saas
 	RegistrationMode string // open|first_user|disabled
 	SessionTTL       time.Duration
+	CORSOrigins      []string // allowed browser origins; empty disables CORS (same-origin only)
 
 	// Dev knobs
 	LogLevel string // debug|info|warn|error
@@ -103,6 +104,21 @@ func Load() (*Config, error) {
 	}
 	if cfg.SessionTTL <= 0 {
 		return nil, errors.New("MEM_SESSION_TTL must be positive")
+	}
+	if v := os.Getenv("MEM_CORS_ORIGINS"); v != "" {
+		for _, o := range strings.Split(v, ",") {
+			o = strings.TrimSpace(o)
+			if o == "" {
+				continue
+			}
+			if o != "*" && !strings.HasPrefix(o, "http://") && !strings.HasPrefix(o, "https://") {
+				return nil, fmt.Errorf("MEM_CORS_ORIGINS: origin %q must be * or start with http:// or https://", o)
+			}
+			if o != "*" && strings.HasSuffix(o, "/") {
+				return nil, fmt.Errorf("MEM_CORS_ORIGINS: origin %q must not have a trailing slash", o)
+			}
+			cfg.CORSOrigins = append(cfg.CORSOrigins, o)
+		}
 	}
 	return cfg, nil
 }

@@ -128,6 +128,7 @@ func run() error {
 		DeploymentMode:   cfg.DeploymentMode,
 		RegistrationMode: cfg.RegistrationMode,
 		SessionTTL:       cfg.SessionTTL,
+		CORSOrigins:      cfg.CORSOrigins,
 		Log:              logger,
 	}
 
