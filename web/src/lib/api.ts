@@ -25,6 +25,20 @@ export function setCurrentWorkspaceID(id: string | null): void {
   else localStorage.removeItem(WORKSPACE_KEY);
 }
 
+/**
+ * The stored token is missing/invalid/expired server-side. Drop the whole
+ * session and land on /login — otherwise every page renders eternal loading
+ * skeletons on top of 401s.
+ */
+function forceLogout(): void {
+  clearToken();
+  localStorage.removeItem('mem.user');
+  localStorage.removeItem(WORKSPACE_KEY);
+  if (window.location.pathname !== '/login') {
+    window.location.assign('/login');
+  }
+}
+
 export class ApiException extends Error {
   status: number;
   hint?: string;
@@ -94,6 +108,11 @@ export async function apiFetch<T>(path: string, opts: RequestOptions = {}): Prom
       hint: data && typeof data === 'object' && 'hint' in data ? String(data.hint) : undefined,
       status: res.status,
     };
+    // invalid_credentials is a wrong-password 401 from /auth/login — the form
+    // shows it inline; every other 401 means the stored token is dead.
+    if (res.status === 401 && err.error !== 'invalid_credentials') {
+      forceLogout();
+    }
     throw new ApiException(err);
   }
 
@@ -130,6 +149,7 @@ export async function apiBlob(path: string, opts: RequestOptions = {}): Promise<
   const url = `${API_BASE}${path}${buildQuery(query)}`;
   const res = await fetch(url, { ...rest, headers: finalHeaders });
   if (!res.ok) {
+    if (res.status === 401) forceLogout();
     throw new ApiException({ error: res.statusText || 'blob fetch failed', status: res.status });
   }
   return res.blob();
