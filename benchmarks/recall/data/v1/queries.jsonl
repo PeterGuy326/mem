@@ -1,0 +1,10 @@
+{"id":"q-zh-structured-exact","text":"高铁出差 偏好 靠窗座位","language":"zh","slice":"exact","filters":{"workspace":"alpha","source_kind":"structured"},"expected_source_kind":"structured"}
+{"id":"q-en-structured-paraphrase","text":"How should Jordan open the weekly update?","language":"en","slice":"paraphrase","filters":{"workspace":"alpha","source_kind":"structured"},"expected_source_kind":"structured"}
+{"id":"q-en-text-exact","text":"Cassini Saturn hexagonal north-pole storm rings","language":"en","slice":"exact","filters":{"workspace":"alpha","source_kind":"text"},"expected_source_kind":"text"}
+{"id":"q-zh-text-paraphrase","text":"哪份兰花记录说旧版本继续使用、不再逐步上线？","language":"zh","slice":"paraphrase","filters":{"workspace":"alpha","source_kind":"text"},"expected_source_kind":"text"}
+{"id":"q-en-image-exact","text":"golden retriever red frisbee wet grass","language":"en","slice":"exact","filters":{"workspace":"alpha","source_kind":"image_caption"},"expected_source_kind":"image_caption"}
+{"id":"q-zh-image-paraphrase","text":"竹子旁树枝上的红褐色动物照片","language":"zh","slice":"paraphrase","filters":{"workspace":"alpha","source_kind":"image_caption"},"expected_source_kind":"image_caption"}
+{"id":"q-en-workspace-filter","text":"Project Atlas budget ceiling 42000 credits","language":"en","slice":"filters","filters":{"workspace":"alpha","path_prefix":"/finance/","source_kind":"text"},"expected_source_kind":"text"}
+{"id":"q-zh-path-filter","text":"后端组 文档代号 青松七号","language":"zh","slice":"filters","filters":{"workspace":"alpha","path_prefix":"/memories/team/backend/","source_kind":"structured"},"expected_source_kind":"structured"}
+{"id":"q-en-hard-negative","text":"weekly status report three-bullet summary, not the incident postmortem","language":"en","slice":"hard-negative","filters":{"workspace":"alpha","source_kind":"structured"},"expected_source_kind":"structured"}
+{"id":"q-zh-hard-negative","text":"兰花项目明确取消而不是批准灰度发布","language":"zh","slice":"hard-negative","filters":{"workspace":"alpha","source_kind":"text"},"expected_source_kind":"text"}

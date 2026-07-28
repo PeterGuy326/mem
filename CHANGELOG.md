@@ -9,6 +9,9 @@ The project is not yet publishing stable semantic-versioned releases.
 
 ### Added
 
+- A versioned, synthetic Chinese/English recall benchmark with a deterministic
+  lexical reference, provider-agnostic ranking import, checked-in baseline,
+  per-slice quality/latency metrics and a fail-closed forbidden-source gate.
 - Versioned `mem.handoff` v1 checkpoints, optimistic head comparison,
   deterministic `resume`, and task/checkpoint list/get inspection across API,
   CLI and MCP.

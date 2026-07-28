@@ -1,0 +1,536 @@
+{
+  "configuration": {
+    "dimension": null,
+    "index": {
+      "kind": "in-memory",
+      "tokenizer": "unicode-words+cjk-unigrams+bigrams"
+    },
+    "mode": "lexical",
+    "model": null,
+    "provider": null,
+    "search": {
+      "kind": "deterministic-tfidf-overlap",
+      "tie_break": "document_id_ascending",
+      "top_k": 10
+    }
+  },
+  "dataset": {
+    "checksum": "sha256:64317d7cde0194f76cf90fea6b7d2f6186348df0801c34b6be6fadfaddc5ca65",
+    "document_count": 16,
+    "license": "CC0-1.0",
+    "provenance": "hand-authored synthetic data",
+    "query_count": 10,
+    "schema_version": "mem.recall-dataset.v1",
+    "version": "synthetic-multilingual-v1"
+  },
+  "disclaimer": "not production recall",
+  "engine": "lexical-reference",
+  "failures": [],
+  "generated_at": "2026-07-28T15:52:11.303152+00:00",
+  "metric_rules": {
+    "citation_denominator": "all deduplicated returned results through rank 10; empty is zero",
+    "dedupe": "first occurrence of a document id wins before scoring",
+    "latency_percentile": "nearest-rank over every query status",
+    "leakage": "unknown document ids or documents forbidden by query filters",
+    "macro_denominator": "all dataset queries, equally weighted; error and partial queries remain in the denominator",
+    "ranking": "external order is authoritative; lexical ties use document id ascending",
+    "recall_denominator": "all qrels with relevance > 0 for that query",
+    "source_denominator": "one per query; the first relevant result must have the expected source kind, and no relevant result scores zero"
+  },
+  "metrics": {
+    "by_language": {
+      "en": {
+        "citation_accuracy": 1.0,
+        "error_rate": 0.0,
+        "latency_ms": {
+          "p50": 0.0,
+          "p95": 0.0
+        },
+        "leakage_count": 0,
+        "leakage_rate": 0.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 1.0,
+        "partial_rate": 0.0,
+        "query_count": 5,
+        "recall_at_1": 1.0,
+        "recall_at_10": 1.0,
+        "recall_at_5": 1.0,
+        "source_accuracy": 1.0
+      },
+      "zh": {
+        "citation_accuracy": 1.0,
+        "error_rate": 0.0,
+        "latency_ms": {
+          "p50": 0.0,
+          "p95": 0.0
+        },
+        "leakage_count": 0,
+        "leakage_rate": 0.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 1.0,
+        "partial_rate": 0.0,
+        "query_count": 5,
+        "recall_at_1": 1.0,
+        "recall_at_10": 1.0,
+        "recall_at_5": 1.0,
+        "source_accuracy": 1.0
+      }
+    },
+    "by_slice": {
+      "exact": {
+        "citation_accuracy": 1.0,
+        "error_rate": 0.0,
+        "latency_ms": {
+          "p50": 0.0,
+          "p95": 0.0
+        },
+        "leakage_count": 0,
+        "leakage_rate": 0.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 1.0,
+        "partial_rate": 0.0,
+        "query_count": 3,
+        "recall_at_1": 1.0,
+        "recall_at_10": 1.0,
+        "recall_at_5": 1.0,
+        "source_accuracy": 1.0
+      },
+      "filters": {
+        "citation_accuracy": 1.0,
+        "error_rate": 0.0,
+        "latency_ms": {
+          "p50": 0.0,
+          "p95": 0.0
+        },
+        "leakage_count": 0,
+        "leakage_rate": 0.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 1.0,
+        "partial_rate": 0.0,
+        "query_count": 2,
+        "recall_at_1": 1.0,
+        "recall_at_10": 1.0,
+        "recall_at_5": 1.0,
+        "source_accuracy": 1.0
+      },
+      "hard-negative": {
+        "citation_accuracy": 1.0,
+        "error_rate": 0.0,
+        "latency_ms": {
+          "p50": 0.0,
+          "p95": 0.0
+        },
+        "leakage_count": 0,
+        "leakage_rate": 0.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 1.0,
+        "partial_rate": 0.0,
+        "query_count": 2,
+        "recall_at_1": 1.0,
+        "recall_at_10": 1.0,
+        "recall_at_5": 1.0,
+        "source_accuracy": 1.0
+      },
+      "paraphrase": {
+        "citation_accuracy": 1.0,
+        "error_rate": 0.0,
+        "latency_ms": {
+          "p50": 0.0,
+          "p95": 0.0
+        },
+        "leakage_count": 0,
+        "leakage_rate": 0.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 1.0,
+        "partial_rate": 0.0,
+        "query_count": 3,
+        "recall_at_1": 1.0,
+        "recall_at_10": 1.0,
+        "recall_at_5": 1.0,
+        "source_accuracy": 1.0
+      }
+    },
+    "by_source_kind": {
+      "image_caption": {
+        "citation_accuracy": 1.0,
+        "error_rate": 0.0,
+        "latency_ms": {
+          "p50": 0.0,
+          "p95": 0.0
+        },
+        "leakage_count": 0,
+        "leakage_rate": 0.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 1.0,
+        "partial_rate": 0.0,
+        "query_count": 2,
+        "recall_at_1": 1.0,
+        "recall_at_10": 1.0,
+        "recall_at_5": 1.0,
+        "source_accuracy": 1.0
+      },
+      "structured": {
+        "citation_accuracy": 1.0,
+        "error_rate": 0.0,
+        "latency_ms": {
+          "p50": 0.0,
+          "p95": 0.0
+        },
+        "leakage_count": 0,
+        "leakage_rate": 0.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 1.0,
+        "partial_rate": 0.0,
+        "query_count": 4,
+        "recall_at_1": 1.0,
+        "recall_at_10": 1.0,
+        "recall_at_5": 1.0,
+        "source_accuracy": 1.0
+      },
+      "text": {
+        "citation_accuracy": 1.0,
+        "error_rate": 0.0,
+        "latency_ms": {
+          "p50": 0.0,
+          "p95": 0.0
+        },
+        "leakage_count": 0,
+        "leakage_rate": 0.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 1.0,
+        "partial_rate": 0.0,
+        "query_count": 4,
+        "recall_at_1": 1.0,
+        "recall_at_10": 1.0,
+        "recall_at_5": 1.0,
+        "source_accuracy": 1.0
+      }
+    },
+    "overall": {
+      "citation_accuracy": 1.0,
+      "error_rate": 0.0,
+      "latency_ms": {
+        "p50": 0.0,
+        "p95": 0.0
+      },
+      "leakage_count": 0,
+      "leakage_rate": 0.0,
+      "mrr": 1.0,
+      "ndcg_at_10": 1.0,
+      "partial_rate": 0.0,
+      "query_count": 10,
+      "recall_at_1": 1.0,
+      "recall_at_10": 1.0,
+      "recall_at_5": 1.0,
+      "source_accuracy": 1.0
+    }
+  },
+  "queries": [
+    {
+      "citation_accuracy": 1.0,
+      "language": "zh",
+      "latency_ms": 0.0,
+      "leakage_count": 0,
+      "leakage_doc_ids": [],
+      "mrr": 1.0,
+      "ndcg_at_10": 1.0,
+      "query_id": "q-zh-structured-exact",
+      "recall_at_1": 1.0,
+      "recall_at_10": 1.0,
+      "recall_at_5": 1.0,
+      "results": [
+        {
+          "citation": "mem://memories/mem-zh-window",
+          "doc_id": "mem-zh-window",
+          "score": 60.91084310435303
+        },
+        {
+          "citation": "mem://memories/mem-zh-aisle",
+          "doc_id": "mem-zh-aisle",
+          "score": 28.898739302391
+        }
+      ],
+      "returned_count": 2,
+      "slice": "exact",
+      "source_accuracy": 1.0,
+      "source_kind": "structured",
+      "status": "ok"
+    },
+    {
+      "citation_accuracy": 1.0,
+      "language": "en",
+      "latency_ms": 0.0,
+      "leakage_count": 0,
+      "leakage_doc_ids": [],
+      "mrr": 1.0,
+      "ndcg_at_10": 1.0,
+      "query_id": "q-en-structured-paraphrase",
+      "recall_at_1": 1.0,
+      "recall_at_10": 1.0,
+      "recall_at_5": 1.0,
+      "results": [
+        {
+          "citation": "mem://memories/mem-en-weekly",
+          "doc_id": "mem-en-weekly",
+          "score": 14.633027691763477
+        },
+        {
+          "citation": "mem://memories/mem-en-postmortem",
+          "doc_id": "mem-en-postmortem",
+          "score": 7.004509154607906
+        }
+      ],
+      "returned_count": 2,
+      "slice": "paraphrase",
+      "source_accuracy": 1.0,
+      "source_kind": "structured",
+      "status": "ok"
+    },
+    {
+      "citation_accuracy": 1.0,
+      "language": "en",
+      "latency_ms": 0.0,
+      "leakage_count": 0,
+      "leakage_doc_ids": [],
+      "mrr": 1.0,
+      "ndcg_at_10": 1.0,
+      "query_id": "q-en-text-exact",
+      "recall_at_1": 1.0,
+      "recall_at_10": 1.0,
+      "recall_at_5": 1.0,
+      "results": [
+        {
+          "citation": "mem://files/file-en-cassini",
+          "doc_id": "file-en-cassini",
+          "score": 22.126767939092964
+        },
+        {
+          "citation": "mem://files/file-en-cassino",
+          "doc_id": "file-en-cassino",
+          "score": 11.46698950015237
+        }
+      ],
+      "returned_count": 2,
+      "slice": "exact",
+      "source_accuracy": 1.0,
+      "source_kind": "text",
+      "status": "ok"
+    },
+    {
+      "citation_accuracy": 1.0,
+      "language": "zh",
+      "latency_ms": 0.0,
+      "leakage_count": 0,
+      "leakage_doc_ids": [],
+      "mrr": 1.0,
+      "ndcg_at_10": 1.0,
+      "query_id": "q-zh-text-paraphrase",
+      "recall_at_1": 1.0,
+      "recall_at_10": 1.0,
+      "recall_at_5": 1.0,
+      "results": [
+        {
+          "citation": "mem://files/file-zh-orchid-cancelled",
+          "doc_id": "file-zh-orchid-cancelled",
+          "score": 68.56053908770821
+        },
+        {
+          "citation": "mem://files/file-zh-magnolia-approved",
+          "doc_id": "file-zh-magnolia-approved",
+          "score": 40.134463250533294
+        }
+      ],
+      "returned_count": 2,
+      "slice": "paraphrase",
+      "source_accuracy": 1.0,
+      "source_kind": "text",
+      "status": "ok"
+    },
+    {
+      "citation_accuracy": 1.0,
+      "language": "en",
+      "latency_ms": 0.0,
+      "leakage_count": 0,
+      "leakage_doc_ids": [],
+      "mrr": 1.0,
+      "ndcg_at_10": 1.0,
+      "query_id": "q-en-image-exact",
+      "recall_at_1": 1.0,
+      "recall_at_10": 1.0,
+      "recall_at_5": 1.0,
+      "results": [
+        {
+          "citation": "mem://files/image-en-dog",
+          "doc_id": "image-en-dog",
+          "score": 18.09434928961774
+        },
+        {
+          "citation": "mem://files/image-en-robot",
+          "doc_id": "image-en-robot",
+          "score": 5.116100290394216
+        }
+      ],
+      "returned_count": 2,
+      "slice": "exact",
+      "source_accuracy": 1.0,
+      "source_kind": "image_caption",
+      "status": "ok"
+    },
+    {
+      "citation_accuracy": 1.0,
+      "language": "zh",
+      "latency_ms": 0.0,
+      "leakage_count": 0,
+      "leakage_doc_ids": [],
+      "mrr": 1.0,
+      "ndcg_at_10": 1.0,
+      "query_id": "q-zh-image-paraphrase",
+      "recall_at_1": 1.0,
+      "recall_at_10": 1.0,
+      "recall_at_5": 1.0,
+      "results": [
+        {
+          "citation": "mem://files/image-zh-red-panda",
+          "doc_id": "image-zh-red-panda",
+          "score": 42.60389804911133
+        },
+        {
+          "citation": "mem://files/image-zh-giant-panda",
+          "doc_id": "image-zh-giant-panda",
+          "score": 12.790250725985539
+        }
+      ],
+      "returned_count": 2,
+      "slice": "paraphrase",
+      "source_accuracy": 1.0,
+      "source_kind": "image_caption",
+      "status": "ok"
+    },
+    {
+      "citation_accuracy": 1.0,
+      "language": "en",
+      "latency_ms": 0.0,
+      "leakage_count": 0,
+      "leakage_doc_ids": [],
+      "mrr": 1.0,
+      "ndcg_at_10": 1.0,
+      "query_id": "q-en-workspace-filter",
+      "recall_at_1": 1.0,
+      "recall_at_10": 1.0,
+      "recall_at_5": 1.0,
+      "results": [
+        {
+          "citation": "mem://files/file-en-budget-alpha",
+          "doc_id": "file-en-budget-alpha",
+          "score": 10.158883083359672
+        }
+      ],
+      "returned_count": 1,
+      "slice": "filters",
+      "source_accuracy": 1.0,
+      "source_kind": "text",
+      "status": "ok"
+    },
+    {
+      "citation_accuracy": 1.0,
+      "language": "zh",
+      "latency_ms": 0.0,
+      "leakage_count": 0,
+      "leakage_doc_ids": [],
+      "mrr": 1.0,
+      "ndcg_at_10": 1.0,
+      "query_id": "q-zh-path-filter",
+      "recall_at_1": 1.0,
+      "recall_at_10": 1.0,
+      "recall_at_5": 1.0,
+      "results": [
+        {
+          "citation": "mem://memories/mem-zh-backend-code",
+          "doc_id": "mem-zh-backend-code",
+          "score": 32.98072664685531
+        }
+      ],
+      "returned_count": 1,
+      "slice": "filters",
+      "source_accuracy": 1.0,
+      "source_kind": "structured",
+      "status": "ok"
+    },
+    {
+      "citation_accuracy": 1.0,
+      "language": "en",
+      "latency_ms": 0.0,
+      "leakage_count": 0,
+      "leakage_doc_ids": [],
+      "mrr": 1.0,
+      "ndcg_at_10": 1.0,
+      "query_id": "q-en-hard-negative",
+      "recall_at_1": 1.0,
+      "recall_at_10": 1.0,
+      "recall_at_5": 1.0,
+      "results": [
+        {
+          "citation": "mem://memories/mem-en-weekly",
+          "doc_id": "mem-en-weekly",
+          "score": 24.702781288279294
+        },
+        {
+          "citation": "mem://memories/mem-en-postmortem",
+          "doc_id": "mem-en-postmortem",
+          "score": 24.70278128827929
+        }
+      ],
+      "returned_count": 2,
+      "slice": "hard-negative",
+      "source_accuracy": 1.0,
+      "source_kind": "structured",
+      "status": "ok"
+    },
+    {
+      "citation_accuracy": 1.0,
+      "language": "zh",
+      "latency_ms": 0.0,
+      "leakage_count": 0,
+      "leakage_doc_ids": [],
+      "mrr": 1.0,
+      "ndcg_at_10": 1.0,
+      "query_id": "q-zh-hard-negative",
+      "recall_at_1": 1.0,
+      "recall_at_10": 1.0,
+      "recall_at_5": 1.0,
+      "results": [
+        {
+          "citation": "mem://files/file-zh-orchid-cancelled",
+          "doc_id": "file-zh-orchid-cancelled",
+          "score": 70.6200754015345
+        },
+        {
+          "citation": "mem://files/file-zh-magnolia-approved",
+          "doc_id": "file-zh-magnolia-approved",
+          "score": 45.747259044006476
+        }
+      ],
+      "returned_count": 2,
+      "slice": "hard-negative",
+      "source_accuracy": 1.0,
+      "source_kind": "text",
+      "status": "ok"
+    }
+  ],
+  "repository": {
+    "commit": "82bfefaf5fbff9354a0bc943e69b99a2c8ce82a0",
+    "dirty": true
+  },
+  "runtime": {
+    "cpu_count": 12,
+    "hardware": {
+      "note": "reference quality run; not a performance benchmark",
+      "timing_mode": "deterministic-zero"
+    },
+    "implementation": "CPython",
+    "machine": "arm64",
+    "platform": "Darwin",
+    "python": "3.11.14"
+  },
+  "schema_version": "mem.recall-benchmark.v1"
+}
