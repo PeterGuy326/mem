@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Badge, StatusBadge } from '@/components/ui/Badge';
+import type { BadgeProps } from '@/components/ui/Badge';
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
@@ -217,15 +218,7 @@ export function FileDetailPage() {
             </CardHeader>
             <CardBody className="p-0">
               {related?.results.length ? (
-                <ol className="divide-y divide-border">
-                  {related.results.map((r) => (
-                    <RelatedRow
-                      key={r.file.id}
-                      file={r.file}
-                      relation={r.relation}
-                    />
-                  ))}
-                </ol>
+                <RelatedGrouped results={related.results} />
               ) : (
                 <div className="p-4 text-xs text-fg-subtle">{t('search.none')}</div>
               )}
@@ -438,12 +431,86 @@ function kindIcon(kind: FileKind) {
   return FileQuestion;
 }
 
+/** Badge configuration per relation type. */
+function getBadgeProps(relation: string): { tone: BadgeProps['tone']; className?: string } {
+  switch (relation) {
+    case 'same_topic':
+      return { tone: 'accent' };
+    case 'same_event':
+      return { tone: 'neutral', className: 'bg-purple-500/10 text-purple-500 border-purple-500/30' };
+    case 'same_person':
+      return { tone: 'warn' };
+    default:
+      return { tone: 'muted' };
+  }
+}
+
+/** Groups related file cards by relation type into colour-coded sections. */
+function RelatedGrouped({
+  results,
+}: {
+  results: Array<{ file: MemFile; relation: string }>;
+}) {
+  const { t } = useT();
+
+  const groups = React.useMemo(() => {
+    const map = new Map<string, Array<{ file: MemFile; relation: string }>>();
+    for (const r of results) {
+      const group = map.get(r.relation) ?? [];
+      group.push(r);
+      map.set(r.relation, group);
+    }
+    return map;
+  }, [results]);
+
+  const preferredOrder = ['same_topic', 'same_event', 'same_person', 'sequel'];
+  const sections = [
+    ...preferredOrder.filter((type) => (groups.get(type)?.length ?? 0) > 0),
+    ...Array.from(groups.keys()).filter((type) => !preferredOrder.includes(type)),
+  ];
+
+  if (sections.length === 0) {
+    return <div className="p-4 text-xs text-fg-subtle">{t('search.none')}</div>;
+  }
+
+  return (
+    <div className="divide-y divide-border">
+      {sections.map((type) => {
+        const items = groups.get(type)!;
+        const { tone: badgeTone, className: badgeClassName } = getBadgeProps(type);
+        return (
+          <div key={type}>
+            <div className="px-4 py-2 text-2xs uppercase tracking-wider text-fg-subtle font-medium bg-bg-inset/30">
+              {t(`related.${type}`)}
+            </div>
+            <ol className="divide-y divide-border">
+              {items.map((r) => (
+                <RelatedRow
+                  key={r.file.id}
+                  file={r.file}
+                  relation={r.relation}
+                  badgeTone={badgeTone}
+                  badgeClassName={badgeClassName}
+                />
+              ))}
+            </ol>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function RelatedRow({
   file,
   relation,
+  badgeTone,
+  badgeClassName,
 }: {
   file: MemFile;
   relation: string;
+  badgeTone: BadgeProps['tone'];
+  badgeClassName?: string;
 }) {
   const Icon = kindIcon(file.kind);
   return (
@@ -464,7 +531,7 @@ function RelatedRow({
         </div>
         <div className="text-2xs text-fg-subtle">{file.caption ?? file.summary ?? '—'}</div>
       </div>
-      <Badge tone="muted">{tt(`related.${relation}`)}</Badge>
+      <Badge tone={badgeTone} className={badgeClassName}>{tt(`related.${relation}`)}</Badge>
     </Link>
   );
 }
