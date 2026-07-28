@@ -13,6 +13,12 @@ import (
 	"time"
 )
 
+const (
+	DefaultWorkspaceTransferTimeout             = 30 * time.Minute
+	DefaultWorkspaceBundleMaxBytes        int64 = 8 << 30
+	DefaultWorkspaceTransferMaxConcurrent       = 2
+)
+
 // Config is the resolved memd runtime configuration.
 type Config struct {
 	// HTTP
@@ -40,6 +46,12 @@ type Config struct {
 	RegistrationMode string // open|first_user|disabled
 	SessionTTL       time.Duration
 	CORSOrigins      []string // allowed browser origins; empty disables CORS (same-origin only)
+
+	// Portable workspace transfer resource controls.
+	WorkspaceTransferTimeout       time.Duration
+	WorkspaceBundleMaxBytes        int64
+	WorkspaceTransferMaxConcurrent int
+	WorkspaceTransferTmpDir        string
 
 	// Dev knobs
 	LogLevel string // debug|info|warn|error
@@ -92,6 +104,36 @@ func Load() (*Config, error) {
 	} else {
 		cfg.SessionTTL = 24 * time.Hour
 	}
+	if v := os.Getenv("MEM_WORKSPACE_TRANSFER_TIMEOUT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Errorf("MEM_WORKSPACE_TRANSFER_TIMEOUT: %w", err)
+		}
+		cfg.WorkspaceTransferTimeout = d
+	} else {
+		cfg.WorkspaceTransferTimeout = DefaultWorkspaceTransferTimeout
+	}
+	if v := os.Getenv("MEM_WORKSPACE_BUNDLE_MAX_BYTES"); v != "" {
+		value, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("MEM_WORKSPACE_BUNDLE_MAX_BYTES: %w", err)
+		}
+		cfg.WorkspaceBundleMaxBytes = value
+	} else {
+		cfg.WorkspaceBundleMaxBytes = DefaultWorkspaceBundleMaxBytes
+	}
+	if v := os.Getenv("MEM_WORKSPACE_TRANSFER_MAX_CONCURRENT"); v != "" {
+		value, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("MEM_WORKSPACE_TRANSFER_MAX_CONCURRENT: %w", err)
+		}
+		cfg.WorkspaceTransferMaxConcurrent = value
+	} else {
+		cfg.WorkspaceTransferMaxConcurrent = DefaultWorkspaceTransferMaxConcurrent
+	}
+	cfg.WorkspaceTransferTmpDir = strings.TrimSpace(
+		os.Getenv("MEM_WORKSPACE_TRANSFER_TMP_DIR"),
+	)
 
 	if cfg.DBURL == "" {
 		return nil, errors.New("MEM_DB_URL is required")
@@ -104,6 +146,15 @@ func Load() (*Config, error) {
 	}
 	if cfg.SessionTTL <= 0 {
 		return nil, errors.New("MEM_SESSION_TTL must be positive")
+	}
+	if cfg.WorkspaceTransferTimeout <= 0 {
+		return nil, errors.New("MEM_WORKSPACE_TRANSFER_TIMEOUT must be positive")
+	}
+	if cfg.WorkspaceBundleMaxBytes <= 0 {
+		return nil, errors.New("MEM_WORKSPACE_BUNDLE_MAX_BYTES must be a positive integer")
+	}
+	if cfg.WorkspaceTransferMaxConcurrent <= 0 {
+		return nil, errors.New("MEM_WORKSPACE_TRANSFER_MAX_CONCURRENT must be a positive integer")
 	}
 	if v := os.Getenv("MEM_CORS_ORIGINS"); v != "" {
 		for _, o := range strings.Split(v, ",") {

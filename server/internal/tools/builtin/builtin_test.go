@@ -18,11 +18,12 @@ import (
 // arguments → HTTP request correctly without standing up a real memd.
 type fakeServer struct {
 	*httptest.Server
-	lastMethod string
-	lastPath   string
-	lastQuery  string
-	lastBody   []byte
-	lastCtype  string
+	lastMethod  string
+	lastPath    string
+	lastQuery   string
+	lastBody    []byte
+	lastCtype   string
+	lastHeaders http.Header
 }
 
 func newFakeServer(body string, status int, ctype string) *fakeServer {
@@ -32,6 +33,7 @@ func newFakeServer(body string, status int, ctype string) *fakeServer {
 		fs.lastPath = r.URL.Path
 		fs.lastQuery = r.URL.RawQuery
 		fs.lastCtype = r.Header.Get("Content-Type")
+		fs.lastHeaders = r.Header.Clone()
 		b, _ := io.ReadAll(r.Body)
 		fs.lastBody = b
 		if ctype != "" {
@@ -52,10 +54,12 @@ func TestRegisterAll_RegistersExpectedToolNames(t *testing.T) {
 		t.Fatalf("RegisterAll: %v", err)
 	}
 	want := []string{
-		"mem_ask", "mem_face",
-		"mem_folder_tree", "mem_get", "mem_info",
-		"mem_list", "mem_ls", "mem_mkdir", "mem_mv", "mem_put",
-		"mem_related", "mem_search",
+		"mem_archive", "mem_checkpoint", "mem_checkpoint_get",
+		"mem_checkpoint_list", "mem_context", "mem_face", "mem_feedback",
+		"mem_folder_tree", "mem_forget", "mem_get", "mem_info", "mem_list",
+		"mem_ls", "mem_memory_get", "mem_memory_list", "mem_mkdir", "mem_mv",
+		"mem_put", "mem_related", "mem_remember", "mem_restore", "mem_resume",
+		"mem_search", "mem_task_list",
 	}
 	got := reg.List()
 	if len(got) != len(want) {
@@ -68,6 +72,114 @@ func TestRegisterAll_RegistersExpectedToolNames(t *testing.T) {
 		if got[i].Description == "" {
 			t.Fatalf("%s: empty description", n)
 		}
+	}
+}
+
+func TestMemRemember_PostsNestedBodyAndIdempotencyHeader(t *testing.T) {
+	fs := newFakeServer(`{"memory":{"id":"mem-1"},"replayed":false}`, http.StatusCreated, "application/json")
+	defer fs.Close()
+	reg := tools.New()
+	if err := registerRemember(reg, apiclient.New(fs.URL, "tok")); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := reg.Call(context.Background(), "mem_remember", map[string]any{
+		"content":         "Use PostgreSQL for lexical recall",
+		"kind":            "decision",
+		"path":            "/Projects/mem",
+		"idempotency_key": "task-42-db-decision",
+		"event_at":        "2026-07-28T12:34:56Z",
+		"source_ref":      "agent://codex/task-42",
+		"source_file_id":  "file-1",
+		"source_locator":  map[string]any{"kind": "paragraph", "index": float64(3)},
+		"agent_id":        "codex",
+		"session_id":      "session-7",
+		"task_id":         "task-42",
+		"attributes":      map[string]any{"confidence": "confirmed"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fs.lastMethod != http.MethodPost || fs.lastPath != "/v1/memories" {
+		t.Fatalf("unexpected request: %s %s", fs.lastMethod, fs.lastPath)
+	}
+	if got := fs.lastHeaders.Get("Idempotency-Key"); got != "task-42-db-decision" {
+		t.Fatalf("Idempotency-Key = %q", got)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(fs.lastBody, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["kind"] != "decision" ||
+		body["content"] != "Use PostgreSQL for lexical recall" ||
+		body["path"] != "/Projects/mem" ||
+		body["event_at"] != "2026-07-28T12:34:56Z" {
+		t.Fatalf("top-level body = %#v", body)
+	}
+	if _, exists := body["idempotency_key"]; exists {
+		t.Fatalf("idempotency key must be a header, body = %#v", body)
+	}
+	source, ok := body["source"].(map[string]any)
+	if !ok {
+		t.Fatalf("source = %#v", body["source"])
+	}
+	if source["type"] != "agent" ||
+		source["ref"] != "agent://codex/task-42" ||
+		source["file_id"] != "file-1" {
+		t.Fatalf("source = %#v", source)
+	}
+	locator, ok := source["locator"].(map[string]any)
+	if !ok || locator["kind"] != "paragraph" || locator["index"] != float64(3) {
+		t.Fatalf("source.locator = %#v", source["locator"])
+	}
+	producer, ok := body["producer"].(map[string]any)
+	if !ok ||
+		producer["agent_id"] != "codex" ||
+		producer["session_id"] != "session-7" ||
+		producer["task_id"] != "task-42" {
+		t.Fatalf("producer = %#v", body["producer"])
+	}
+	attributes, ok := body["attributes"].(map[string]any)
+	if !ok || attributes["confidence"] != "confirmed" {
+		t.Fatalf("attributes = %#v", body["attributes"])
+	}
+	response, ok := out.(map[string]any)
+	if !ok || response["replayed"] != false {
+		t.Fatalf("response = %#v", out)
+	}
+}
+
+func TestMemContext_PostsEvidenceRequest(t *testing.T) {
+	fs := newFakeServer(`{"query":"project decision","scope":"/Work","evidence":[]}`, 200, "application/json")
+	defer fs.Close()
+	reg := tools.New()
+	if err := registerContext(reg, apiclient.New(fs.URL, "tok")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := reg.Call(context.Background(), "mem_context", map[string]any{
+		"query":       "project decision",
+		"scope":       "/Work",
+		"source":      "memory",
+		"memory_kind": "decision",
+		"limit":       float64(6),
+		"max_chars":   float64(9000),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fs.lastMethod != http.MethodPost || fs.lastPath != "/v1/context" {
+		t.Fatalf("unexpected request: %s %s", fs.lastMethod, fs.lastPath)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(fs.lastBody, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["query"] != "project decision" || body["scope"] != "/Work" {
+		t.Fatalf("body = %#v", body)
+	}
+	if body["source"] != "memory" || body["memory_kind"] != "decision" {
+		t.Fatalf("memory filters missing from body = %#v", body)
 	}
 }
 

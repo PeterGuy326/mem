@@ -1,8 +1,8 @@
-// Real-backend API client for the AI-side endpoints (search/ask/faces/providers/timeline/related).
+// Real-backend API client for search, faces, indexing providers, timeline, and related files.
 // Stays separate from lib/api.ts hooks that still use the W1 MSW mock shape;
 // new pages call these directly.
 
-import { api, getToken } from './api';
+import { api } from './api';
 
 // --- Search ---
 
@@ -33,99 +33,6 @@ export function searchFiles(params: {
   limit?: number;
 }): Promise<SearchResponse> {
   return api.post<SearchResponse>('/search', params);
-}
-
-// --- Ask (RAG) ---
-
-export interface AskSource {
-  file_id: string;
-  name: string;
-  path: string;
-  mime: string;
-  excerpt: string;
-  score: number;
-}
-export interface AskStep {
-  name: string; // "retrieve" | "generate"
-  label: string;
-  detail: string;
-  duration_ms: number;
-}
-export interface AskResponse {
-  answer: string;
-  sources: AskSource[];
-  steps?: AskStep[];
-  provider: string;
-  latency_ms: number;
-  asked_at: string;
-}
-
-export function askQuestion(params: {
-  question: string;
-  scope?: string;
-  top_k?: number;
-}): Promise<AskResponse> {
-  return api.post<AskResponse>('/ask', params);
-}
-
-// --- Ask (streaming) ---
-
-export interface AskStreamEvent {
-  type: 'step' | 'thinking' | 'answer' | 'sources' | 'done' | 'error';
-  step?: AskStep;
-  delta?: string;
-  sources?: AskSource[];
-  error?: string;
-}
-
-/**
- * Stream a RAG answer over Server-Sent Events, invoking `onEvent` for each
- * chunk (retrieval step, thinking deltas, answer deltas, sources, done). Lets
- * the UI render the model's reasoning + answer token-by-token. Returns when the
- * stream ends; throws on transport errors so the caller can fall back to the
- * unary askQuestion().
- */
-export async function streamAsk(
-  params: { question: string; scope?: string; top_k?: number },
-  onEvent: (ev: AskStreamEvent) => void,
-  signal?: AbortSignal,
-): Promise<void> {
-  const token = getToken();
-  const res = await fetch('/v1/ask/stream', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify(params),
-    signal,
-  });
-  if (!res.ok || !res.body) {
-    throw new Error(`stream failed: ${res.status}`);
-  }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    // SSE frames are separated by a blank line.
-    let idx: number;
-    while ((idx = buf.indexOf('\n\n')) !== -1) {
-      const frame = buf.slice(0, idx);
-      buf = buf.slice(idx + 2);
-      const line = frame.split('\n').find((l) => l.startsWith('data:'));
-      if (!line) continue;
-      const json = line.slice(5).trim();
-      if (!json) continue;
-      try {
-        onEvent(JSON.parse(json) as AskStreamEvent);
-      } catch {
-        /* ignore malformed frame */
-      }
-    }
-  }
 }
 
 // --- Faces ---
@@ -166,8 +73,23 @@ export function mergeFaces(keepId: string, mergeId: string): Promise<{ ok: boole
 
 // --- Providers ---
 
+export const INDEX_PROVIDER_KINDS = [
+  'embedding',
+  'vlm',
+  'asr',
+  'ocr',
+] as const;
+
+export type IndexProviderKind = (typeof INDEX_PROVIDER_KINDS)[number];
+
+export function isIndexProviderKind(kind: string): kind is IndexProviderKind {
+  return INDEX_PROVIDER_KINDS.some((candidate) => candidate === kind);
+}
+
 export interface ProviderSetting {
-  kind: 'embedding' | 'llm' | 'vlm' | string;
+  // The API may advertise roles the web product intentionally does not expose.
+  // Consumers should narrow this with isIndexProviderKind before rendering.
+  kind: string;
   spec: string;
   dim?: number | null;
   updated_at: string;
@@ -184,6 +106,7 @@ export function setProvider(
   setting: ProviderSetting;
   reindex_queued: boolean;
   reindex_files?: number;
+  reindex_required?: boolean;
   previous_dim?: number | null;
   dim_migration_ok: boolean;
 }> {

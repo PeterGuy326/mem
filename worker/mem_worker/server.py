@@ -9,7 +9,7 @@ Or, if the proto stubs are compiled inside an installed environment::
     mem-worker
 
 The server:
-  * binds to ``MEM_WORKER_GRPC_HOST:MEM_WORKER_GRPC_PORT`` (default ``0.0.0.0:50051``)
+  * binds to ``MEM_WORKER_GRPC_HOST:MEM_WORKER_GRPC_PORT`` (default ``127.0.0.1:50051``)
   * answers ``HealthCheck`` without touching Ollama/S3 (so liveness probes
     always succeed even in degraded mode)
   * dispatches ``Process`` to the registered processor for the file's mime
@@ -77,51 +77,10 @@ class ProcessorServicer:
     # ---- Chat ----
 
     def Chat(self, request, context):
-        """RAG bridge: forward messages to the configured LLM provider."""
-        pb = self._pb
-        log.info("chat.start",
-                 user_id=request.user_id,
-                 messages=len(request.messages),
-                 provider=request.llm_provider or "(default)")
-
-        # Resolve provider spec: explicit override → settings default.
-        spec = (request.llm_provider or "").strip()
-        if not spec:
-            spec = get_settings().default_llm
-
-        from .providers import Message, get_llm_provider, ProviderError
-
-        try:
-            llm = get_llm_provider(spec)
-        except ProviderError as exc:
-            return pb.ChatResponse(
-                error=f"resolve provider: {exc}",
-                status=pb.STATUS_FAILED,
-            )
-
-        msgs = [Message(role=m.role, content=m.content) for m in request.messages]
-        try:
-            content = llm.complete(msgs)
-        except (ProviderError, NotImplementedError) as exc:
-            log.error("chat.failed", error=str(exc))
-            return pb.ChatResponse(
-                provider=spec,
-                error=str(exc),
-                status=pb.STATUS_FAILED,
-            )
-        except Exception as exc:  # noqa: BLE001
-            log.exception("chat.unexpected")
-            return pb.ChatResponse(
-                provider=spec,
-                error=f"unexpected: {exc}",
-                status=pb.STATUS_FAILED,
-            )
-
-        log.info("chat.ok", provider=spec, reply_chars=len(content))
-        return pb.ChatResponse(
-            content=content or "",
-            provider=spec,
-            status=pb.STATUS_OK,
+        """Retired RPC: answer generation belongs to the external Agent."""
+        context.abort(
+            grpc.StatusCode.UNIMPLEMENTED,
+            "Chat RPC retired; use mem_context through memd/MCP",
         )
 
     # ---- HealthCheck ----
@@ -141,7 +100,6 @@ class ProcessorServicer:
         Override keys (all optional, ``"<vendor>:<model>"`` form):
             embedding_provider        — TEXT embedder (for TextProcessor only)
             visual_embedding_provider — VISUAL embedder (for ImageProcessor only)
-            llm_provider              — chat / summary LLM
             vlm_provider              — image captioner
 
         Note: the text and visual embedder kinds are intentionally separate.
@@ -154,25 +112,28 @@ class ProcessorServicer:
             return None
         emb_spec = options.get("embedding_provider") or ""
         v_emb_spec = options.get("visual_embedding_provider") or ""
-        llm_spec = options.get("llm_provider") or ""
         vlm_spec = options.get("vlm_provider") or ""
-        if not (emb_spec or v_emb_spec or llm_spec or vlm_spec):
+        if not (emb_spec or v_emb_spec or vlm_spec):
             return base
         # Lazy import to avoid cycle when default_registry() pulls in this file.
-        from .providers import get_embedding_provider, get_llm_provider, get_vlm_provider
+        from .providers import get_embedding_provider, get_vlm_provider
+        from .processors.audio import AudioProcessor
         from .processors.image import ImageProcessor
+        from .processors.pdf import PDFProcessor
         from .processors.text import TextProcessor
 
-        llm = get_llm_provider(llm_spec) if llm_spec else None
         vlm = get_vlm_provider(vlm_spec) if vlm_spec else None
+        emb = get_embedding_provider(emb_spec) if emb_spec else None
 
         if isinstance(base, TextProcessor):
-            emb = get_embedding_provider(emb_spec) if emb_spec else None
-            return TextProcessor(embedder=emb, llm=llm)
+            return TextProcessor(embedder=emb)
+        if isinstance(base, PDFProcessor):
+            return PDFProcessor(embedder=emb)
+        if isinstance(base, AudioProcessor):
+            return AudioProcessor(embedder=emb)
         if isinstance(base, ImageProcessor):
             v_emb = get_embedding_provider(v_emb_spec) if v_emb_spec else None
             return ImageProcessor(embedder=v_emb, vlm=vlm)
-        # PDF / Audio stubs etc. — fall back to base.
         return base
 
     # ---- Process ----

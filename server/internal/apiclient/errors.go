@@ -28,10 +28,13 @@ const (
 // APIError preserves the {error, hint} pair that memd returns on non-2xx
 // responses, together with the underlying HTTP status code.
 type APIError struct {
-	StatusCode int
-	Code       string // machine-readable, e.g. "not_found", "missing_bearer"
-	Message    string
-	Hint       string
+	StatusCode         int
+	Code               string // machine-readable, e.g. "not_found", "missing_bearer"
+	Message            string
+	Hint               string
+	Conflicts          []WorkspaceImportConflict
+	ConflictTotal      int
+	ConflictsTruncated bool
 }
 
 func (e *APIError) Error() string {
@@ -46,7 +49,7 @@ func (e *APIError) Kind() ErrorKind {
 	switch e.StatusCode {
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return KindAuth
-	case http.StatusNotFound:
+	case http.StatusNotFound, http.StatusGone:
 		return KindNotFound
 	case http.StatusConflict:
 		return KindConflict

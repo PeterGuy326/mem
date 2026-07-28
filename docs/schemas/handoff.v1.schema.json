@@ -1,0 +1,271 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://getmem.dev/schemas/handoff.v1.schema.json",
+  "title": "mem portable Agent handoff v1",
+  "description": "Vendor-neutral task state written by one Agent and resumed by another.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract",
+    "schema_version",
+    "checkpoint_kind",
+    "task_key",
+    "scope_path",
+    "state",
+    "producer"
+  ],
+  "properties": {
+    "contract": {
+      "const": "mem.handoff"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "checkpoint_kind": {
+      "type": "string",
+      "enum": ["checkpoint", "handoff"]
+    },
+    "task_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "base_checkpoint_id": {
+      "type": ["string", "null"],
+      "format": "uuid"
+    },
+    "scope_path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "pattern": "^/"
+    },
+    "state": {
+      "$ref": "#/$defs/state"
+    },
+    "producer": {
+      "$ref": "#/$defs/producer"
+    }
+  },
+  "$defs": {
+    "textItem": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "referenceList": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2048
+      }
+    },
+    "progress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "completed"],
+      "properties": {
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384
+        },
+        "completed": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/textItem"
+          }
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "references"],
+      "properties": {
+        "summary": {
+          "$ref": "#/$defs/textItem"
+        },
+        "rationale": {
+          "type": "string",
+          "maxLength": 8192
+        },
+        "references": {
+          "$ref": "#/$defs/referenceList"
+        }
+      }
+    },
+    "nextStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "references"],
+      "properties": {
+        "summary": {
+          "$ref": "#/$defs/textItem"
+        },
+        "references": {
+          "$ref": "#/$defs/referenceList"
+        }
+      }
+    },
+    "blocker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "references"],
+      "properties": {
+        "summary": {
+          "$ref": "#/$defs/textItem"
+        },
+        "needs": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "references": {
+          "$ref": "#/$defs/referenceList"
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uri", "required"],
+      "properties": {
+        "uri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "role": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "required": {
+          "type": "boolean"
+        }
+      }
+    },
+    "vcs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "branch": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "dirty": {
+          "type": "boolean"
+        },
+        "status_summary": {
+          "type": "string",
+          "maxLength": 8192
+        }
+      }
+    },
+    "workspaceState": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "working_directory": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "vcs": {
+          "$ref": "#/$defs/vcs"
+        }
+      }
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "goal",
+        "progress",
+        "decisions",
+        "next_steps",
+        "blockers",
+        "open_questions",
+        "artifacts"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["in_progress", "ready", "blocked", "complete"]
+        },
+        "goal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384
+        },
+        "progress": {
+          "$ref": "#/$defs/progress"
+        },
+        "decisions": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/decision"
+          }
+        },
+        "next_steps": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/nextStep"
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/blocker"
+          }
+        },
+        "open_questions": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/textItem"
+          }
+        },
+        "artifacts": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/artifact"
+          }
+        },
+        "workspace_state": {
+          "$ref": "#/$defs/workspaceState"
+        }
+      }
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent_id"],
+      "properties": {
+        "agent_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "session_id": {
+          "type": "string",
+          "maxLength": 200
+        }
+      }
+    }
+  }
+}

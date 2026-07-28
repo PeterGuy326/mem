@@ -4,7 +4,7 @@
  * "back to drive" escape hatch, plus the error text (collapsed) for debugging.
  */
 import * as React from 'react';
-import { Orb } from '@/components/ask/Orb';
+import { Logo } from '@/components/layout/Logo';
 import { Button } from '@/components/ui/Button';
 import { RotateCw, Home } from 'lucide-react';
 
@@ -34,8 +34,8 @@ export class ErrorBoundary extends React.Component<Props, State> {
     return (
       <div className="grid min-h-screen place-items-center bg-bg px-6 text-fg">
         <div className="flex max-w-md flex-col items-center text-center">
-          <div className="mb-5 opacity-90 grayscale-[0.2]">
-            <Orb size={64} active={false} />
+          <div className="mb-5 rounded-lg border border-border bg-bg-panel px-4 py-3 shadow-soft">
+            <Logo />
           </div>
           <h1 className="text-lg font-semibold">出错了 · Something went wrong</h1>
           <p className="mt-2 text-sm leading-relaxed text-fg-muted">

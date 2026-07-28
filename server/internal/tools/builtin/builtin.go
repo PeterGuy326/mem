@@ -17,17 +17,30 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/PeterGuy326/mem/server/internal/apiclient"
 	"github.com/PeterGuy326/mem/server/internal/tools"
 )
 
 // RegisterAll registers the full W1 tool set with reg, binding each tool's
-// Run handler to the supplied apiclient. Subsequent phases (W3 search, W4
-// ask, …) add their own Register* functions called from here.
+// Run handler to the supplied apiclient. Memory-native lifecycle tools use
+// the same registry while preserving mem_list's historical file semantics.
 func RegisterAll(reg *tools.Registry, client *apiclient.Client) error {
 	for _, fn := range []func(*tools.Registry, *apiclient.Client) error{
 		registerPut,
+		registerRemember,
+		registerMemoryList,
+		registerMemoryGet,
+		registerMemoryFeedback,
+		registerMemoryArchive,
+		registerMemoryRestore,
+		registerMemoryForget,
+		registerCheckpoint,
+		registerTaskList,
+		registerCheckpointList,
+		registerCheckpointGet,
+		registerResume,
 		registerGet,
 		registerInfo,
 		registerList,
@@ -36,7 +49,7 @@ func RegisterAll(reg *tools.Registry, client *apiclient.Client) error {
 		registerMv,
 		registerFolderTree,
 		registerSearch,
-		registerAsk,
+		registerContext,
 		registerRelated,
 		registerFace,
 	} {
@@ -45,6 +58,103 @@ func RegisterAll(reg *tools.Registry, client *apiclient.Client) error {
 		}
 	}
 	return nil
+}
+
+// --- memory tools ---
+
+func registerRemember(reg *tools.Registry, c *apiclient.Client) error {
+	return reg.Register(tools.Tool{
+		Name: "mem_remember",
+		Description: "Persist a model-independent observation, decision, preference, task state, " +
+			"or artifact reference with source provenance. Safe retries require a stable idempotency_key.",
+		InputSchema: tools.Schema{
+			Type:     "object",
+			Required: []string{"content", "kind", "path", "idempotency_key"},
+			Properties: map[string]tools.Property{
+				"content": {Type: "string", Description: "Memory content to persist"},
+				"kind": {Type: "string", Description: "Memory kind",
+					Enum: []string{"observation", "decision", "preference", "task_state", "fact", "note", "artifact"}},
+				"path":            {Type: "string", Description: "Canonical virtual path used to scope the memory"},
+				"idempotency_key": {Type: "string", Description: "Stable retry key, unique within the workspace"},
+				"event_at":        {Type: "string", Format: "date-time", Description: "Optional RFC 3339 event time"},
+				"source_type":     {Type: "string", Default: "agent", Description: "Source type (default agent)"},
+				"source_ref":      {Type: "string", Description: "Optional external source reference"},
+				"source_file_id":  {Type: "string", Description: "Optional mem source file UUID"},
+				"source_locator":  {Type: "object", Description: "Optional structured source locator, e.g. page, paragraph, or timecode"},
+				"agent_id":        {Type: "string", Description: "Producer Agent identifier"},
+				"session_id":      {Type: "string", Description: "Producer session identifier"},
+				"task_id":         {Type: "string", Description: "Producer task identifier"},
+				"attributes":      {Type: "object", Description: "Optional application-defined attributes"},
+			},
+		},
+		Run: func(ctx context.Context, args map[string]any) (any, error) {
+			content, _ := args["content"].(string)
+			kind, _ := args["kind"].(string)
+			path, _ := args["path"].(string)
+			idempotencyKey, _ := args["idempotency_key"].(string)
+			if strings.TrimSpace(content) == "" ||
+				strings.TrimSpace(kind) == "" ||
+				strings.TrimSpace(path) == "" ||
+				strings.TrimSpace(idempotencyKey) == "" {
+				return nil, fmt.Errorf("mem_remember: content, kind, path, and idempotency_key are required")
+			}
+
+			sourceType, _ := args["source_type"].(string)
+			if strings.TrimSpace(sourceType) == "" {
+				sourceType = "agent"
+			}
+			source := map[string]any{"type": sourceType}
+			for arg, field := range map[string]string{
+				"source_ref":     "ref",
+				"source_file_id": "file_id",
+			} {
+				if value, _ := args[arg].(string); value != "" {
+					source[field] = value
+				}
+			}
+			if locator, ok, err := rememberObjectArg(args, "source_locator"); err != nil {
+				return nil, err
+			} else if ok {
+				source["locator"] = locator
+			}
+
+			producer := map[string]any{}
+			for _, key := range []string{"agent_id", "session_id", "task_id"} {
+				if value, _ := args[key].(string); value != "" {
+					producer[key] = value
+				}
+			}
+
+			body := map[string]any{
+				"kind":     kind,
+				"content":  content,
+				"path":     path,
+				"source":   source,
+				"producer": producer,
+			}
+			if eventAt, _ := args["event_at"].(string); eventAt != "" {
+				body["event_at"] = eventAt
+			}
+			if attributes, ok, err := rememberObjectArg(args, "attributes"); err != nil {
+				return nil, err
+			} else if ok {
+				body["attributes"] = attributes
+			}
+
+			var out map[string]any
+			if err := c.DoJSONWithHeaders(
+				ctx,
+				http.MethodPost,
+				"/v1/memories",
+				body,
+				&out,
+				map[string]string{"Idempotency-Key": strings.TrimSpace(idempotencyKey)},
+			); err != nil {
+				return nil, err
+			}
+			return out, nil
+		},
+	})
 }
 
 // --- file tools ---
@@ -329,6 +439,7 @@ func registerSearch(reg *tools.Registry, c *apiclient.Client) error {
 			Required: []string{"query"},
 			Properties: map[string]tools.Property{
 				"query": {Type: "string", Description: "Free-form natural-language query, e.g. \"2012 photos with Xiao Ming\""},
+				"scope": {Type: "string", Description: "Optional virtual-folder scope, e.g. /Projects/mem"},
 				"type":  {Type: "string", Description: "MIME prefix filter: image|text|application|audio|video"},
 				"route": {Type: "string", Description: "Search route: text|visual|auto (default auto fuses both)", Enum: []string{"text", "visual", "auto"}},
 				"since": {Type: "string", Description: "YYYY-MM-DD lower bound on timeline_at"},
@@ -342,6 +453,9 @@ func registerSearch(reg *tools.Registry, c *apiclient.Client) error {
 				return nil, fmt.Errorf("mem_search: query is required")
 			}
 			body := map[string]any{"query": q}
+			if v, _ := args["scope"].(string); v != "" {
+				body["scope"] = v
+			}
 			if v, _ := args["type"].(string); v != "" {
 				body["type"] = v
 			}
@@ -366,38 +480,47 @@ func registerSearch(reg *tools.Registry, c *apiclient.Client) error {
 	})
 }
 
-// --- ask tool ---
+// --- context tool ---
 
-func registerAsk(reg *tools.Registry, c *apiclient.Client) error {
+func registerContext(reg *tools.Registry, c *apiclient.Client) error {
 	return reg.Register(tools.Tool{
-		Name: "mem_ask",
-		Description: "Cross-file question answering: retrieve the top relevant snippets " +
-			"from the user's drive then synthesize an answer with citations. " +
-			"Returns {answer, sources[]}. Prefer this over mem_search+mem_get when " +
-			"the user wants a synthesized answer, not raw files. SPEC §8.1.",
+		Name: "mem_context",
+		Description: "Recall a bounded, source-verifiable evidence pack for the calling Agent. " +
+			"Returns citations, excerpts, content hashes, and source URLs; mem does not synthesize an answer.",
 		InputSchema: tools.Schema{
 			Type:     "object",
-			Required: []string{"question"},
+			Required: []string{"query"},
 			Properties: map[string]tools.Property{
-				"question": {Type: "string", Description: "Natural-language question, e.g. \"what's in my rental contract?\""},
-				"scope":    {Type: "string", Description: "Path prefix filter (e.g. /Photos) — not yet implemented server-side"},
-				"top_k":    {Type: "integer", Description: "Number of context snippets (default 5, max 20)", Default: 5},
+				"query":  {Type: "string", Description: "What the Agent needs to remember"},
+				"scope":  {Type: "string", Description: "Optional virtual-folder scope, e.g. /Projects/mem"},
+				"source": {Type: "string", Description: "Evidence source: all|file|memory", Enum: []string{"all", "file", "memory"}, Default: "all"},
+				"type":   {Type: "string", Description: "MIME prefix filter: image|text|application|audio|video"},
+				"memory_kind": {Type: "string", Description: "Structured memory kind filter",
+					Enum: []string{"observation", "decision", "preference", "task_state", "fact", "note", "artifact"}},
+				"since":     {Type: "string", Description: "YYYY-MM-DD inclusive lower bound"},
+				"until":     {Type: "string", Description: "YYYY-MM-DD inclusive upper bound"},
+				"limit":     {Type: "integer", Description: "Max evidence items (default 8, max 50)", Default: 8},
+				"max_chars": {Type: "integer", Description: "Total context character budget (default 12000)", Default: 12000},
 			},
 		},
 		Run: func(ctx context.Context, args map[string]any) (any, error) {
-			q, _ := args["question"].(string)
-			if q == "" {
-				return nil, fmt.Errorf("mem_ask: question is required")
+			q, _ := args["query"].(string)
+			if strings.TrimSpace(q) == "" {
+				return nil, fmt.Errorf("mem_context: query is required")
 			}
-			body := map[string]any{"question": q}
-			if v, _ := args["scope"].(string); v != "" {
-				body["scope"] = v
+			body := map[string]any{"query": q}
+			for _, key := range []string{"scope", "source", "type", "memory_kind", "since", "until"} {
+				if v, _ := args[key].(string); v != "" {
+					body[key] = v
+				}
 			}
-			if v := args["top_k"]; v != nil {
-				body["top_k"] = v
+			for _, key := range []string{"limit", "max_chars"} {
+				if v := args[key]; v != nil {
+					body[key] = v
+				}
 			}
 			var out map[string]any
-			if err := c.DoJSON(ctx, http.MethodPost, "/v1/ask", body, &out); err != nil {
+			if err := c.DoJSON(ctx, http.MethodPost, "/v1/context", body, &out); err != nil {
 				return nil, err
 			}
 			return out, nil
@@ -419,7 +542,7 @@ func registerRelated(reg *tools.Registry, c *apiclient.Client) error {
 			Required: []string{"file_id"},
 			Properties: map[string]tools.Property{
 				"file_id": {Type: "string", Description: "Anchor file id to find neighbours of"},
-				"type":    {Type: "string", Description: "MIME prefix filter: image|text|application|audio|video"},
+				"type":    {Type: "string", Description: "Relation type filter", Enum: []string{"same_topic", "same_event", "same_person"}},
 				"limit":   {Type: "integer", Description: "Max results (default 10, max 100)", Default: 10},
 			},
 		},
@@ -556,4 +679,16 @@ func isTextMIME(ct string) bool {
 		return true
 	}
 	return false
+}
+
+func rememberObjectArg(args map[string]any, key string) (map[string]any, bool, error) {
+	value, exists := args[key]
+	if !exists || value == nil {
+		return nil, false, nil
+	}
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil, false, fmt.Errorf("mem_remember: %s must be an object", key)
+	}
+	return object, true, nil
 }

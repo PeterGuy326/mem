@@ -26,6 +26,16 @@ export function setCurrentWorkspaceID(id: string | null): void {
 }
 
 /**
+ * Stable namespace for React Query caches.
+ *
+ * The API resolves an implicit default workspace when no header is present, so
+ * keep that state separate from every explicitly selected workspace.
+ */
+export function getWorkspaceCacheKey(): string {
+  return getCurrentWorkspaceID() ?? 'default';
+}
+
+/**
  * The stored token is missing/invalid/expired server-side. Drop the whole
  * session and land on /login — otherwise every page renders eternal loading
  * skeletons on top of 401s.
@@ -55,6 +65,12 @@ interface RequestOptions extends Omit<RequestInit, 'body'> {
   body?: unknown;
   /** When `body` is FormData, leave Content-Type alone. */
   formData?: FormData;
+  query?: Record<string, string | number | boolean | undefined | null>;
+}
+
+export interface RawRequestOptions extends Omit<RequestInit, 'body' | 'headers'> {
+  body?: BodyInit | null;
+  headers?: HeadersInit;
   query?: Record<string, string | number | boolean | undefined | null>;
 }
 
@@ -104,7 +120,10 @@ export async function apiFetch<T>(path: string, opts: RequestOptions = {}): Prom
 
   if (!res.ok) {
     const err: ApiError = {
-      error: (data && typeof data === 'object' && 'error' in data ? String(data.error) : res.statusText) || 'request failed',
+      error:
+        (data && typeof data === 'object' && 'error' in data
+          ? String(data.error)
+          : res.statusText) || 'request failed',
       hint: data && typeof data === 'object' && 'hint' in data ? String(data.hint) : undefined,
       status: res.status,
     };
@@ -117,6 +136,30 @@ export async function apiFetch<T>(path: string, opts: RequestOptions = {}): Prom
   }
 
   return data as T;
+}
+
+/**
+ * Authenticated response-level fetch for contracts that must inspect headers
+ * before consuming a binary body. Callers own status/body parsing; 401 still
+ * follows the same session-invalidating behavior as the JSON helpers.
+ */
+export async function apiRawResponse(
+  path: string,
+  opts: RawRequestOptions = {},
+): Promise<Response> {
+  const { query, headers, ...rest } = opts;
+  const finalHeaders = new Headers(headers);
+  if (!finalHeaders.has('Accept')) finalHeaders.set('Accept', 'application/json');
+
+  const token = getToken();
+  if (token) finalHeaders.set('Authorization', `Bearer ${token}`);
+  const workspaceID = getCurrentWorkspaceID();
+  if (workspaceID) finalHeaders.set('X-Workspace-ID', workspaceID);
+
+  const url = `${API_BASE}${path}${buildQuery(query)}`;
+  const response = await fetch(url, { ...rest, headers: finalHeaders });
+  if (response.status === 401) forceLogout();
+  return response;
 }
 
 function safeParse(text: string): unknown {
@@ -179,6 +222,5 @@ export const api = {
   apiPatch: <T>(path: string, body?: unknown, opts?: RequestOptions) =>
     apiFetch<T>(path, { ...opts, method: 'PATCH', body }),
   del: <T>(path: string, opts?: RequestOptions) => apiFetch<T>(path, { ...opts, method: 'DELETE' }),
-  upload: <T>(path: string, formData: FormData) =>
-    apiFetch<T>(path, { method: 'POST', formData }),
+  upload: <T>(path: string, formData: FormData) => apiFetch<T>(path, { method: 'POST', formData }),
 };

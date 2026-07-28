@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { api, getWorkspaceCacheKey } from '@/lib/api';
 import type {
   FileKind,
   ListFilesResponse,
@@ -13,16 +13,17 @@ import type { FolderNode } from '@/lib/folder-tree';
 import { ROOT_NAME } from '@/lib/folder-tree';
 
 export const fileKeys = {
-  all: ['files'] as const,
-  list: (params: Record<string, unknown>) => ['files', 'list', params] as const,
-  byPath: (path: string) => ['files', 'by-path', path] as const,
-  detail: (id: string) => ['files', 'detail', id] as const,
-  related: (id: string) => ['files', 'related', id] as const,
-  tree: () => ['files', 'tree'] as const,
+  all: () => ['workspace', getWorkspaceCacheKey(), 'files'] as const,
+  list: (params: Record<string, unknown>) => [...fileKeys.all(), 'list', params] as const,
+  byPath: (path: string) => [...fileKeys.all(), 'by-path', path] as const,
+  detail: (id: string) => [...fileKeys.all(), 'detail', id] as const,
+  related: (id: string) => [...fileKeys.all(), 'related', id] as const,
+  tree: () => [...fileKeys.all(), 'tree'] as const,
 };
 
 export const searchKeys = {
-  query: (params: Record<string, unknown>) => ['search', params] as const,
+  query: (params: Record<string, unknown>) =>
+    ['workspace', getWorkspaceCacheKey(), 'search', params] as const,
 };
 
 /**
@@ -117,6 +118,7 @@ function makeMemFile(p: {
   path: string;
   mime: string;
   summary?: string | null;
+  caption?: string | null;
   created_at?: string;
   timeline_at?: string | null;
 }): MemFile {
@@ -130,7 +132,7 @@ function makeMemFile(p: {
     mime: p.mime,
     storage_key: '',
     summary: p.summary ?? null,
-    caption: p.summary ?? null,
+    caption: p.caption ?? null,
     tags: [],
     timeline_at: p.timeline_at ?? null,
     geo: null,
@@ -190,6 +192,7 @@ export interface SearchParams {
 
 /** A single hit as returned by memd `POST /v1/search`. */
 interface RawSearchHit {
+  evidence_id?: string;
   file_id: string;
   name: string;
   path: string;
@@ -197,6 +200,8 @@ interface RawSearchHit {
   score: number;
   snippet: string | null;
   source: 'text' | 'visual' | string;
+  content_sha256?: string;
+  chunk_index?: number;
   summary?: string | null;
   timeline_at?: string | null;
   created_at: string;
@@ -211,12 +216,16 @@ function hitToResult(h: RawSearchHit): SearchResult {
       path: h.path,
       mime: h.mime,
       summary: h.summary,
+      caption: h.source === 'visual' ? h.snippet : null,
       created_at: h.created_at,
       timeline_at: h.timeline_at,
     }),
     score: h.score,
     snippet: h.snippet,
     channel: h.source === 'visual' ? 'visual' : 'text',
+    evidence_id: h.evidence_id,
+    content_sha256: h.content_sha256,
+    chunk_index: h.chunk_index,
   };
 }
 
@@ -259,7 +268,7 @@ export function useUpload() {
       return results;
     },
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: fileKeys.all });
+      void qc.invalidateQueries({ queryKey: fileKeys.all() });
     },
   });
 }
@@ -269,7 +278,7 @@ export function useDeleteFile() {
   return useMutation({
     mutationFn: (id: string) => api.del<{ ok: true }>(`/files/${id}`),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: fileKeys.all });
+      void qc.invalidateQueries({ queryKey: fileKeys.all() });
     },
   });
 }
@@ -281,7 +290,7 @@ export function useMoveFile() {
     mutationFn: ({ id, targetPath }: { id: string; targetPath: string }) =>
       api.apiPatch<MemFile>(`/files/${id}`, { path: targetPath }),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: fileKeys.all });
+      void qc.invalidateQueries({ queryKey: fileKeys.all() });
     },
   });
 }
@@ -293,7 +302,7 @@ export function useRenameFile() {
     mutationFn: ({ id, name }: { id: string; name: string }) =>
       api.apiPatch<MemFile>(`/files/${id}`, { name }),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: fileKeys.all });
+      void qc.invalidateQueries({ queryKey: fileKeys.all() });
     },
   });
 }
@@ -305,7 +314,7 @@ export function useCreateFolder() {
     mutationFn: ({ path, name }: { path: string; name: string }) =>
       api.post<FolderNode>('/folders', { path: path === '/' ? `/${name}` : `${path}/${name}` }),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: fileKeys.all });
+      void qc.invalidateQueries({ queryKey: fileKeys.all() });
     },
   });
 }
@@ -317,7 +326,7 @@ export function useRenameFolder() {
     mutationFn: ({ id, name }: { id: string; name: string }) =>
       api.apiPatch<FolderNode>(`/folders/${id}`, { name }),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: fileKeys.all });
+      void qc.invalidateQueries({ queryKey: fileKeys.all() });
     },
   });
 }
@@ -329,7 +338,7 @@ export function useMoveFolder() {
     mutationFn: ({ id, newParent }: { id: string; newParent: string }) =>
       api.apiPatch<FolderNode>(`/folders/${id}`, { parent_path: newParent }),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: fileKeys.all });
+      void qc.invalidateQueries({ queryKey: fileKeys.all() });
     },
   });
 }
@@ -341,7 +350,7 @@ export function useDeleteFolder() {
     mutationFn: ({ id }: { id: string }) =>
       api.del<void>(`/folders/${id}`, { query: { recursive: true } }),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: fileKeys.all });
+      void qc.invalidateQueries({ queryKey: fileKeys.all() });
     },
   });
 }

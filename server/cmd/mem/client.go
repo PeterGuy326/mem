@@ -51,7 +51,7 @@ type httpClient struct {
 }
 
 func newHTTPClient(cfg *cliConfig) *httpClient {
-	return &httpClient{api: apiclient.New(cfg.Server, cfg.Token)}
+	return &httpClient{api: apiclient.New(cfg.Server, cfg.Token).WithWorkspace(cfg.Workspace)}
 }
 
 func (c *httpClient) doJSON(method, path string, body, out any) error {

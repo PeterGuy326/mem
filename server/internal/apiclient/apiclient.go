@@ -19,9 +19,10 @@ import (
 // few non-JSON shapes (multipart upload, streaming upload, streaming
 // download) that the file endpoints need.
 type Client struct {
-	baseURL string
-	token   string
-	hc      *http.Client
+	baseURL   string
+	token     string
+	workspace string
+	hc        *http.Client
 }
 
 // New constructs a Client. The baseURL is normalized (trailing slash
@@ -47,9 +48,25 @@ func (c *Client) WithToken(token string) *Client {
 	return &cp
 }
 
+// WithWorkspace returns a shallow copy that sends X-Workspace-ID on every
+// request. This lets one Agent token address an explicitly selected memory
+// namespace instead of silently falling back to its personal workspace.
+func (c *Client) WithWorkspace(workspace string) *Client {
+	cp := *c
+	cp.workspace = strings.TrimSpace(workspace)
+	return &cp
+}
+
 // DoJSON issues a JSON request and decodes the response body into out (if
 // non-nil). Returns *APIError for non-2xx responses.
 func (c *Client) DoJSON(ctx context.Context, method, path string, body, out any) error {
+	return c.DoJSONWithHeaders(ctx, method, path, body, out, nil)
+}
+
+// DoJSONWithHeaders is DoJSON with additional request headers. Client-owned
+// authentication and workspace headers are attached last so callers cannot
+// accidentally replace the configured request scope.
+func (c *Client) DoJSONWithHeaders(ctx context.Context, method, path string, body, out any, headers map[string]string) error {
 	var rdr io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -64,6 +81,9 @@ func (c *Client) DoJSON(ctx context.Context, method, path string, body, out any)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	for key, value := range headers {
+		req.Header.Set(key, value)
 	}
 	c.attachAuth(req)
 	resp, err := c.hc.Do(req)
@@ -187,6 +207,9 @@ func (c *Client) attachAuth(req *http.Request) {
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
+	if c.workspace != "" {
+		req.Header.Set("X-Workspace-ID", c.workspace)
+	}
 }
 
 func decode(resp *http.Response, out any) error {
@@ -201,8 +224,11 @@ func decode(resp *http.Response, out any) error {
 
 func errorFromResponse(resp *http.Response) error {
 	var er struct {
-		Error string `json:"error"`
-		Hint  string `json:"hint"`
+		Error     string                    `json:"error"`
+		Hint      string                    `json:"hint"`
+		Conflicts []WorkspaceImportConflict `json:"conflicts"`
+		Total     int                       `json:"total"`
+		Truncated bool                      `json:"truncated"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&er)
 	msg := er.Error
@@ -210,10 +236,13 @@ func errorFromResponse(resp *http.Response) error {
 		msg = http.StatusText(resp.StatusCode)
 	}
 	return &APIError{
-		StatusCode: resp.StatusCode,
-		Code:       er.Error, // memd uses the same string for code+message; can split later
-		Message:    msg,
-		Hint:       er.Hint,
+		StatusCode:         resp.StatusCode,
+		Code:               er.Error, // memd uses the same string for code+message; can split later
+		Message:            msg,
+		Hint:               er.Hint,
+		Conflicts:          er.Conflicts,
+		ConflictTotal:      er.Total,
+		ConflictsTruncated: er.Truncated,
 	}
 }
 

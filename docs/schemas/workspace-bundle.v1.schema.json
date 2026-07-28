@@ -1,0 +1,424 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mem.local/schemas/workspace-bundle.v1.schema.json",
+  "title": "mem workspace bundle manifest v1",
+  "$comment": "Index NDJSON is decoded strictly. Memory records and memory events carry idempotency_key_sha256 only; raw idempotency_key fields are forbidden. files.count counts user-visible entries, while blobs.count counts unique content digests.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract",
+    "schema_version",
+    "bundle_id",
+    "created_at",
+    "archive",
+    "source",
+    "scope",
+    "restore",
+    "indexes",
+    "checkpoint_payloads",
+    "blobs",
+    "checksums",
+    "exclusions"
+  ],
+  "properties": {
+    "contract": {
+      "const": "mem.workspace_bundle"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "bundle_id": {
+      "$ref": "#/$defs/uuid"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "archive": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "layout",
+        "media_type"
+      ],
+      "properties": {
+        "format": {
+          "const": "zip64"
+        },
+        "layout": {
+          "const": "fixed-v1"
+        },
+        "media_type": {
+          "const": "application/vnd.mem.workspace-bundle+zip"
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workspace_id",
+        "workspace_name",
+        "exporter",
+        "exporter_version"
+      ],
+      "properties": {
+        "workspace_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "workspace_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "exporter": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "exporter_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "complete"
+      ],
+      "properties": {
+        "path": {
+          "const": "/"
+        },
+        "complete": {
+          "const": true
+        }
+      }
+    },
+    "restore": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "modes",
+        "preserve_object_ids",
+        "path_rewrite"
+      ],
+      "properties": {
+        "modes": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": "fresh"
+            },
+            {
+              "const": "merge_conservative"
+            }
+          ],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "preserve_object_ids": {
+          "const": true
+        },
+        "path_rewrite": {
+          "const": false
+        }
+      }
+    },
+    "indexes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "folders",
+        "files",
+        "memories",
+        "memory_events",
+        "tasks",
+        "checkpoints",
+        "checkpoint_refs"
+      ],
+      "properties": {
+        "folders": {
+          "$ref": "#/$defs/foldersIndex"
+        },
+        "files": {
+          "$ref": "#/$defs/filesIndex",
+          "description": "User-visible file records. Multiple records may reference one content-addressed blob."
+        },
+        "memories": {
+          "$ref": "#/$defs/memoriesIndex"
+        },
+        "memory_events": {
+          "$ref": "#/$defs/memoryEventsIndex"
+        },
+        "tasks": {
+          "$ref": "#/$defs/tasksIndex"
+        },
+        "checkpoints": {
+          "$ref": "#/$defs/checkpointsIndex"
+        },
+        "checkpoint_refs": {
+          "$ref": "#/$defs/checkpointRefsIndex"
+        }
+      }
+    },
+    "checkpoint_payloads": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path_prefix",
+        "count"
+      ],
+      "properties": {
+        "path_prefix": {
+          "const": "payloads/checkpoints/"
+        },
+        "count": {
+          "$ref": "#/$defs/count"
+        }
+      }
+    },
+    "blobs": {
+      "type": "object",
+      "description": "Unique content-addressed archive blobs; count need not equal indexes.files.count.",
+      "additionalProperties": false,
+      "required": [
+        "path_prefix",
+        "count",
+        "total_size"
+      ],
+      "properties": {
+        "path_prefix": {
+          "const": "blobs/sha256/"
+        },
+        "count": {
+          "$ref": "#/$defs/count"
+        },
+        "total_size": {
+          "$ref": "#/$defs/count"
+        }
+      }
+    },
+    "checksums": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "algorithm"
+      ],
+      "properties": {
+        "path": {
+          "const": "checksums.sha256"
+        },
+        "algorithm": {
+          "const": "sha256"
+        }
+      }
+    },
+    "exclusions": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "const": "auth.users"
+        },
+        {
+          "const": "auth.password_hashes"
+        },
+        {
+          "const": "auth.tokens"
+        },
+        {
+          "const": "auth.token_hashes"
+        },
+        {
+          "const": "auth.sessions"
+        },
+        {
+          "const": "auth.workspace_memberships"
+        },
+        {
+          "const": "provenance.user_ids"
+        },
+        {
+          "const": "provenance.token_ids"
+        },
+        {
+          "const": "memory.raw_idempotency_keys"
+        },
+        {
+          "const": "storage.storage_keys"
+        },
+        {
+          "const": "storage.presigned_urls"
+        },
+        {
+          "const": "providers.settings"
+        },
+        {
+          "const": "providers.credentials"
+        },
+        {
+          "const": "runtime.environment"
+        },
+        {
+          "const": "derived.embeddings_text"
+        },
+        {
+          "const": "derived.embeddings_visual"
+        },
+        {
+          "const": "derived.embeddings_face"
+        },
+        {
+          "const": "derived.entities"
+        },
+        {
+          "const": "derived.file_entities"
+        },
+        {
+          "const": "derived.file_relations"
+        },
+        {
+          "const": "runtime.worker_jobs"
+        },
+        {
+          "const": "runtime.index_state"
+        }
+      ],
+      "items": false,
+      "minItems": 22,
+      "maxItems": 22
+    }
+  },
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "foldersIndex": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/index"
+        },
+        {
+          "properties": {
+            "path": {
+              "const": "objects/folders.ndjson"
+            }
+          }
+        }
+      ]
+    },
+    "filesIndex": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/index"
+        },
+        {
+          "properties": {
+            "path": {
+              "const": "objects/files.ndjson"
+            }
+          }
+        }
+      ]
+    },
+    "memoriesIndex": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/index"
+        },
+        {
+          "properties": {
+            "path": {
+              "const": "objects/memories.ndjson"
+            }
+          }
+        }
+      ]
+    },
+    "tasksIndex": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/index"
+        },
+        {
+          "properties": {
+            "path": {
+              "const": "objects/tasks.ndjson"
+            }
+          }
+        }
+      ]
+    },
+    "memoryEventsIndex": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/index"
+        },
+        {
+          "properties": {
+            "path": {
+              "const": "objects/memory_events.ndjson"
+            }
+          }
+        }
+      ]
+    },
+    "checkpointsIndex": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/index"
+        },
+        {
+          "properties": {
+            "path": {
+              "const": "objects/checkpoints.ndjson"
+            }
+          }
+        }
+      ]
+    },
+    "checkpointRefsIndex": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/index"
+        },
+        {
+          "properties": {
+            "path": {
+              "const": "objects/checkpoint_refs.ndjson"
+            }
+          }
+        }
+      ]
+    },
+    "index": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "count"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "count": {
+          "$ref": "#/$defs/count"
+        }
+      }
+    }
+  }
+}

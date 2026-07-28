@@ -24,8 +24,8 @@ service ProcessorService {
   //   4. Return a ProcessResponse with everything needed to persist
   rpc Process(ProcessRequest) returns (ProcessResponse) {}
 
-  // Chat is an LLM-completion bridge used by the server's RAG `Ask` flow.
-  // The worker forwards messages to the user's configured LLMProvider.
+  // Retired compatibility slot. Implementations MUST return UNIMPLEMENTED;
+  // final reasoning and answer generation belong to the external Agent.
   rpc Chat(ChatRequest) returns (ChatResponse) {}
 
   // Liveness / readiness probe. Always cheap. Does NOT require external
@@ -127,7 +127,7 @@ message EmbeddingRow {
 }
 
 // ============================================================================
-// Chat (RAG support)
+// Retired Chat compatibility messages (RPC always returns UNIMPLEMENTED)
 // ============================================================================
 
 message ChatRequest {

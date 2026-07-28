@@ -1,8 +1,8 @@
 # mem · server (Go backend)
 
-> W1 deliverable — Go HTTP API + PostgreSQL schema + `mem put / get / cat` + Token auth.
-> W1.5: folders as first-class citizens (SPEC §6.3 / §6bis v0.3 lockdown).
-> See `/SPEC.md` for the full project spec.
+> Canonical Memory Plane API, CLI and MCP adapter.
+> Files, structured Agent memories and Context Packs share one authorization
+> and service layer. See `/SPEC.md` for the full project spec.
 
 ## Layout
 
@@ -11,18 +11,20 @@ server/
 ├── cmd/
 │   ├── memd/          — HTTP daemon entrypoint (default :8787)
 │   ├── mem/           — User-facing CLI (cobra)
-│   └── mem-mcp/       — MCP server stub (W4 scope)
+│   └── mem-mcp/       — stdio MCP adapter over the HTTP API
 ├── internal/
 │   ├── api/           — chi HTTP router + handlers + middleware
 │   ├── auth/          — User + Token (bcrypt + SHA-256 hash), scope checks
 │   ├── config/        — env-var driven config loader (MEM_*)
 │   ├── db/            — pgx pool + goose embedded migrations
-│   ├── db/migrations/ — SQL migrations (`0001_init.sql`)
+│   ├── contextpack/   — bounded file + structured-memory evidence packs
+│   ├── db/migrations/ — embedded, ordered SQL migrations
 │   ├── file/          — Ingestion (SHA-256, 秒传 dedup), retrieval, listing
 │   ├── folder/        — Folder service (mkdir -p, rename, move, tree)
+│   ├── memory/        — model-independent remember/get/lexical recall kernel
 │   ├── pathx/         — Virtual-path normalization + validation
 │   ├── storage/       — S3-compatible blob store (minio-go)
-│   └── workerpb/      — Stub for gRPC client to Python worker (W2+)
+│   └── workerpb/      — generated gRPC contract for the Python worker
 ├── go.mod
 ├── Dockerfile         — multi-stage build (memd / mem / mem-mcp)
 └── README.md
@@ -67,8 +69,9 @@ so the stack coexists with other local Redis/MinIO instances):
 
 ## Bootstrap a dev user
 
-memd does not ship a public sign-up endpoint in W1. Insert a user with bcrypt
-once, then use `mem auth login`:
+Registration follows `MEM_REGISTRATION_MODE`. When it is disabled for a local
+deployment, insert a development user with bcrypt once, then use
+`mem auth login`:
 
 ```bash
 # Generate a bcrypt hash (any tool works; here using Python for convenience)
@@ -91,23 +94,83 @@ All token-protected routes require `Authorization: Bearer <token>`.
 |---|---|---|---|
 | `GET`    | `/healthz`                  | — | liveness |
 | `GET`    | `/v1/version`               | — | server version |
+| `POST`   | `/v1/auth/register`         | — | create a user when deployment registration policy allows it |
 | `POST`   | `/v1/auth/login`            | — | email+password → admin-scoped session token |
 | `POST`   | `/v1/auth/tokens`           | admin | create token (plaintext returned once) |
 | `GET`    | `/v1/auth/tokens`           | admin | list tokens (no secrets) |
 | `DELETE` | `/v1/auth/tokens/{id}`      | admin | revoke a token |
+| `POST`   | `/v1/memories`              | write | idempotently persist structured memory; requires `Idempotency-Key` |
+| `GET`    | `/v1/memories`              | read | list bounded memory summaries with authorization-bound cursor pagination |
+| `GET`    | `/v1/memories/{id}`         | read | resolve a stable memory citation within workspace/path scope |
+| `POST`   | `/v1/memories/{id}/feedback` | read + write | useful/not-useful or pin/unpin with `expected_version` and `Idempotency-Key` |
+| `POST`   | `/v1/memories/{id}/archive` | read + write | reversibly exclude a memory from normal recall |
+| `POST`   | `/v1/memories/{id}/restore` | read + write | restore an archived memory to normal recall |
+| `POST`   | `/v1/memories/{id}/forget`  | delete + delete-capable workspace role | irreversibly redact the live memory payload; source files are independent |
+| `POST`   | `/v1/context`               | search | build a bounded evidence pack from `all`, `file` or `memory` sources |
+| `GET`    | `/v1/tasks`                 | read | list path-scoped portable Agent tasks |
+| `POST`   | `/v1/tasks/{task_key}/checkpoints` | write (+ read for `mem://` refs) | commit an immutable `mem.handoff` revision; requires `Idempotency-Key` |
+| `GET`    | `/v1/tasks/{task_key}/checkpoints` | read | list bounded checkpoint summaries newest first |
+| `GET`    | `/v1/tasks/{task_key}/checkpoints/{id}` | read | inspect one versioned handoff |
+| `POST`   | `/v1/tasks/{task_key}/resume` | read | restore the task head or selected checkpoint; `search` optionally enriches related context |
+| `GET`    | `/v1/workspaces/current/export` | read + admin, unrestricted path, owner/admin role | build and download a validated `.membundle` v1 archive |
+| `POST`   | `/v1/workspaces/current/import?mode=fresh` | write + admin, unrestricted path, owner/admin role | validate and atomically restore into an empty workspace |
 | `POST`   | `/v1/files`                 | write | upload (multipart `file=`, optional form field `path=/Photos/2012`; or `?stream=1&name=...&path=...`) |
 | `GET`    | `/v1/files`                 | read  | list (`?tag=&type=&path=&prefix=&since=&until=&limit=&page=`); `path` = exact folder, `prefix` = subtree (mutually exclusive) |
 | `GET`    | `/v1/files/{id}`            | read  | metadata + AI fields |
 | `GET`    | `/v1/files/{id}/content`    | read  | stream raw bytes |
 | `PATCH`  | `/v1/files/{id}`            | write | body `{name?, path?}` — rename and/or move |
-| `GET`    | `/v1/files/{id}/related`    | read  | W3 stub: `{related:[]}` (relation engine arrives later) |
+| `GET`    | `/v1/files/{id}/related`    | read  | ranked related files from the relation service |
 | `POST`   | `/v1/folders`               | write | body `{path:"/Photos/2012"}` — mkdir -p, idempotent |
 | `GET`    | `/v1/folders`               | read  | list direct children of `?parent=/Photos` (defaults to root) |
 | `GET`    | `/v1/folders/tree`          | read  | full tree with per-node file counts |
 | `PATCH`  | `/v1/folders/{id}`          | write | body `{name?, parent_path?}` — rename and/or move (cascades to descendants in one tx) |
-| `DELETE` | `/v1/folders/{id}`          | delete | `?recursive=true` to drop subtree; otherwise must be empty |
+| `DELETE` | `/v1/folders/{id}`          | delete | recursive or empty-folder delete; returns `409` when the subtree retains memory or immutable task checkpoints |
 
 Error envelope (SPEC §8.2): `{"error": "<code>", "hint": "<actionable hint>"}`.
+
+### Structured memory contract
+
+`POST /v1/memories` accepts `kind`, `content`, `path`, `source`,
+optional `producer`, `event_at` and `attributes`. `Idempotency-Key` is a
+required Header: a new write returns `201/replayed:false`, an equivalent retry
+returns the original ID with `200/replayed:true`, and the same key with a
+different normalized request returns `409/idempotency_conflict`. The body is
+limited to 256 KiB and memory content to 64 KiB. Linking `source.file_id`
+additionally requires `read` scope.
+
+Workspace and actor provenance come from authenticated middleware, never the
+request body. `X-Workspace-ID` selects an accessible workspace; a token bound
+to another workspace receives `403 token_workspace_forbidden`.
+
+`GET /v1/memories` returns a bounded `excerpt` rather than full content and
+uses an opaque `(created_at,id)` cursor bound to the normalized filters and the
+Token path boundary. Details add the stable `mem://memories/<id>` citation and
+public provenance.
+
+`GET /v1/tasks/{task_key}/checkpoints` likewise returns a bounded history
+projection: status, a 500-code-point progress excerpt, total progress length,
+completed/reference counts and immutable identity fields. Full handoff state
+and references are available only through the selected checkpoint detail or
+resume endpoint.
+
+Every feedback/lifecycle write requires a stable `Idempotency-Key` and the
+memory's current `state_version`. New events return `201`; an equivalent retry
+returns the same event with `200/replayed:true`; stale versions and changed
+idempotency payloads return `409`. Archive is reversible and removes a record
+from normal recall. Mutation responses return bounded control state rather
+than echoing content, path or provenance into an MCP context. Forget replaces
+the live content/source/producer/path/creator projection with a generic
+tombstone, cannot be undone, and does not delete a separately stored source
+file. Raw remember/control idempotency keys are never stored. WAL, replicas
+and backups remain governed by deployment retention; this is not a claim of
+cryptographic media erasure.
+
+`POST /v1/context` accepts `source=all|file|memory`, `memory_kind`, path/date
+scope, result limit and character budget. Memory evidence contains
+`memory_id`, `memory_kind`, a stable citation, retrieval reason and provenance.
+If one requested lane fails but another supplies evidence, the response is
+`200` with `partial=true` and `warnings[]`; a failed lane with no surviving
+evidence returns `502/context_unavailable`.
 
 ## CLI commands
 
@@ -124,6 +187,20 @@ Error envelope (SPEC §8.2): `{"error": "<code>", "hint": "<actionable hint>"}`.
 | `mem put <dir> --recursive [--to /Albums]` | Upload every file under dir, mirroring the on-disk tree into `--to` |
 | `mem put - --name foo.txt [--to /]` | Upload from stdin |
 | `mem put <path> --tag x --tag y` | With tags |
+| `mem remember <content> --kind decision --path /Projects/x --idempotency-key key` | Write structured Agent memory |
+| `mem memory <id> [--scope /Projects/x]` | Get one full structured memory by UUID |
+| `mem memories [--scope /Projects/x] [--lifecycle active\|archived\|all]` | List bounded structured-memory summaries |
+| `mem feedback <id> --action useful\|not_useful\|pin\|unpin --expected-version N --idempotency-key key` | Append explicit feedback |
+| `mem archive <id> ...` / `mem restore <id> ...` | Reversible recall lifecycle control |
+| `mem forget <id> --expected-version N --idempotency-key key --reason user_request --yes` | Irreversibly redact a live memory payload |
+| `mem context <query> --source all\|file\|memory` | Build a bounded evidence pack without generating an answer |
+| `mem checkpoint --input <handoff.json\|-> --idempotency-key key` | Commit an immutable portable task checkpoint |
+| `mem tasks [--scope /Projects/x]` | List resumable task summaries |
+| `mem checkpoints <task_key>` | List bounded immutable checkpoint summaries for one task |
+| `mem checkpoint get <task_key> <checkpoint_id>` | Get one immutable checkpoint and handoff payload |
+| `mem resume <task_key>` | Restore the current task head and resolved/missing references |
+| `mem workspace export --output <file.membundle>` | Export the complete current workspace without overwriting by default |
+| `mem workspace import --input <file.membundle> --mode fresh --yes` | Restore a validated bundle into an empty target workspace |
 | `mem get <file_id> -o <path>` | Download (use `-` for stdout) |
 | `mem cat <file_id>` | Print text content to stdout (binary refused) |
 | `mem info <file_id>` | Pretty metadata |
@@ -141,7 +218,7 @@ Error envelope (SPEC §8.2): `{"error": "<code>", "hint": "<actionable hint>"}`.
 Legacy `mem login`, `mem logout` and `mem token ...` paths remain hidden
 compatibility aliases and print a deprecation warning.
 
-Global flags: `--format text|json`, `--server URL`.
+Global flags: `--format text|json`, `--server URL`, `--workspace UUID`.
 Exit codes (SPEC §7.1): `0` ok · `2` not_found · `3` auth · `4` quota · `5` provider_error.
 
 ## Folders model
@@ -156,8 +233,11 @@ The folder layer is a strict materialization of SPEC §6.3 / §6bis (v0.3
   redundant cache of the parent folder's absolute path (kept in sync inside
   the same tx as folder rename / move).
 - All mutating folder ops (`Create / Rename / Move / Delete`) run inside one
-  PostgreSQL transaction. Rename / move use a single SQL `UPDATE … LIKE`
-  that rewrites every descendant's path prefix; no application-level loop.
+  PostgreSQL transaction. Rename / move use literal segment-boundary prefix
+  rewrites for all descendants, including `memories.path`; valid `%` and `_`
+  path characters are never interpreted as SQL wildcards.
+- Active or archived memories block both direct and recursive folder deletion.
+  Folder deletion never acts as implicit memory forget.
 - Cycle prevention: `Move` refuses any destination that equals the source
   or sits under it (`pathx.IsDescendantOrSelf`).
 - Path rules are centralised in `internal/pathx`:
@@ -169,9 +249,21 @@ The folder layer is a strict materialization of SPEC §6.3 / §6bis (v0.3
 
 See SPEC §6.3 for the full consistency rule table.
 
-## DB schema (W1 + folders)
+## DB schema
 
-See `internal/db/migrations/0001_init.sql` and `0002_folders.sql`. Tables:
+See `internal/db/migrations/`. In addition to users, workspaces, files and
+folders, migrations `0008_agent_memories.sql` and
+`0010_memory_lifecycle.sql` plus privacy hardening in
+`0012_memory_privacy_hardening.sql` add:
+
+- `memories` — immutable Agent occurrences with source/producer provenance,
+  workspace-local idempotency, lifecycle state and stable content hashes
+- deterministic FTS and trigram indexes so remember → recall works without a
+  Worker, embedding provider or answer model
+- optimistic lifecycle projections plus append-only, retry-safe
+  `memory_events`; forgotten rows retain only the minimum live tombstone
+
+Core tables also include:
 - `users`, `tokens`
 - `folders` — `(id, user_id, parent_id, path, name, created_at, updated_at)`,
   UNIQUE `(user_id, path)`
@@ -202,8 +294,10 @@ cd server && go test ./...
 `internal/file` ships unit tests for SHA-256 streaming, storage key layout,
 the dedup hashing contract, and target-path normalization on upload.
 `internal/folder` covers mkdir-p ancestors, cycle detection, prefix rewrites,
-and path-name validation. `internal/pathx` exhaustively tests path rule
-edges. End-to-end tests against a real Postgres land in W2 (testcontainers).
+path-name validation and memory-safe lifecycle behavior. `internal/memory`
+covers normalization, idempotency, workspace/path isolation and PostgreSQL
+recall. `internal/contextpack` covers source selection, budgets and explicit
+partial-lane warnings. `internal/pathx` exhaustively tests path rule edges.
 
 ## Verify
 
@@ -214,7 +308,7 @@ go vet ./...
 go test ./...
 ```
 
-## Open questions / TODO (W1 + folders)
+## Open questions / TODO
 
 - [ ] **S3 cleanup on recursive folder delete** — `DELETE /v1/folders/{id}?recursive=true`
       removes DB rows but leaves the S3 objects behind. Needs a background GC
@@ -224,15 +318,12 @@ go test ./...
       currently sanitized beyond `pathx.ValidateName`. Probably fine since
       we explicitly forbid `/` in basenames, but needs a smoke test.
 - [ ] Real OAuth / device-flow login — replaces dev `POST /v1/auth/login` (W4+).
-- [ ] Worker gRPC integration — `internal/workerpb/` is a placeholder; needs
-      the worker team's `.proto` (W2).
-- [ ] Async post-upload hook — currently files land with `index_status='pending'`
-      and nothing pulls them. W2 will add an Asynq enqueue here.
 - [ ] Quota enforcement — `tokens.quota` is stored but unread (W3).
 - [ ] Chunked / resumable upload (`F1.3`) — W1 implements single-shot upload
       with a temp-file spill; multipart S3 upload is W2.
-- [ ] Folder-scoped tokens — `tokens.paths[]` exists in the schema but is not
-      yet enforced against folder operations. (W3.)
+- [x] Folder-scoped tokens — file, memory, search, context and folder operations
+      enforce `tokens.paths[]`; whole-workspace aggregate operations require an
+      unrestricted token.
 - [ ] `go.mod` go directive is `1.25.0` even though the spec asks for `1.22`,
       because transitive deps (`modernc.org/sqlite` via `pressly/goose/v3`) pin
       higher minimums. Builds + tests pass on Go 1.22+ toolchains via the
@@ -242,7 +333,7 @@ go test ./...
 ## Contract with other agents
 
 - **Worker (Python)**: writes to `embeddings_*`, `entities`, `file_entities`,
-  and updates `files.summary / caption / tags / timeline_at / index_status`.
-  See `internal/workerpb/README.md` for the gRPC integration plan.
+  and updates `files.summary / caption / tags / timeline_at / index_status`
+  through the current gRPC processing contract.
 - **Frontend (web/)**: consumes the v1 HTTP API table above. JSON shapes are
   whatever `internal/file.File` / `internal/auth.Token` serialize to.

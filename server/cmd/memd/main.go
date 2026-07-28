@@ -10,18 +10,22 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/PeterGuy326/mem/server/internal/api"
-	"github.com/PeterGuy326/mem/server/internal/ask"
 	"github.com/PeterGuy326/mem/server/internal/auth"
 	"github.com/PeterGuy326/mem/server/internal/config"
+	"github.com/PeterGuy326/mem/server/internal/contextpack"
 	"github.com/PeterGuy326/mem/server/internal/db"
 	"github.com/PeterGuy326/mem/server/internal/face"
 	"github.com/PeterGuy326/mem/server/internal/file"
 	"github.com/PeterGuy326/mem/server/internal/folder"
+	"github.com/PeterGuy326/mem/server/internal/handoff"
 	"github.com/PeterGuy326/mem/server/internal/indexer"
+	"github.com/PeterGuy326/mem/server/internal/memory"
 	"github.com/PeterGuy326/mem/server/internal/provider"
 	"github.com/PeterGuy326/mem/server/internal/queue"
 	"github.com/PeterGuy326/mem/server/internal/relator"
@@ -29,6 +33,8 @@ import (
 	"github.com/PeterGuy326/mem/server/internal/storage"
 	"github.com/PeterGuy326/mem/server/internal/workerclient"
 	"github.com/PeterGuy326/mem/server/internal/workspace"
+	"github.com/PeterGuy326/mem/server/internal/workspacebundle"
+	"github.com/PeterGuy326/mem/server/internal/workspacetransfer"
 )
 
 func main() {
@@ -46,12 +52,21 @@ func run() error {
 
 	logger := newLogger(cfg.LogLevel)
 	slog.SetDefault(logger)
+	workspaceTransferTmpDir, err := prepareWorkspaceTransferTmpDir(
+		cfg.WorkspaceTransferTmpDir,
+	)
+	if err != nil {
+		return fmt.Errorf("workspace transfer temp dir: %w", err)
+	}
 	logger.Info("memd starting",
 		"http_addr", cfg.HTTPAddr,
 		"db", redactDSN(cfg.DBURL),
 		"s3_endpoint", cfg.S3Endpoint,
 		"s3_bucket", cfg.S3Bucket,
 		"version", api.Version,
+		"workspace_bundle_max_bytes", cfg.WorkspaceBundleMaxBytes,
+		"workspace_transfer_max_concurrent", cfg.WorkspaceTransferMaxConcurrent,
+		"workspace_transfer_timeout", cfg.WorkspaceTransferTimeout,
 	)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -82,6 +97,23 @@ func run() error {
 	workspaceSvc := workspace.New(database.Pool)
 	folderSvc := folder.New(database.Pool)
 	fileSvc := file.New(database.Pool, store, folderSvc)
+	memorySvc := memory.New(database.Pool)
+	handoffSvc := handoff.New(database.Pool)
+	workspaceBundleLimits := workspaceTransferBundleLimits()
+	workspaceTransferSvc := workspacetransfer.New(
+		database.Pool,
+		store,
+		workspacetransfer.Options{
+			Exporter:        "memd",
+			ExporterVersion: api.Version,
+			Writer: workspacebundle.WriterOptions{
+				Limits: workspaceBundleLimits,
+			},
+			Reader: workspacebundle.ReaderOptions{
+				Limits: workspaceBundleLimits,
+			},
+		},
+	)
 
 	// AI worker client. Empty MEM_WORKER_GRPC disables AI indexing entirely
 	// (upload still works, files stay in index_status='pending').
@@ -111,25 +143,35 @@ func run() error {
 	}
 
 	providerSvc := provider.New(database.Pool, workerCli, queueCli, logger)
-	askSvc := ask.New(database.Pool, searchSvc, workerCli, logger)
+	contextSvc := contextpack.New(searchSvc, &memoryRecallAdapter{service: memorySvc})
 
 	srv := &api.Server{
-		Auth:             authSvc,
-		File:             fileSvc,
-		Folder:           folderSvc,
-		Indexer:          idxSvc,
-		Queue:            queueCli,
-		Search:           searchSvc,
-		Ask:              askSvc,
-		Provider:         providerSvc,
-		Relator:          relatorSvc,
-		Face:             faceSvc,
-		Workspace:        workspaceSvc,
-		DeploymentMode:   cfg.DeploymentMode,
-		RegistrationMode: cfg.RegistrationMode,
-		SessionTTL:       cfg.SessionTTL,
-		CORSOrigins:      cfg.CORSOrigins,
-		Log:              logger,
+		Auth:                     authSvc,
+		File:                     fileSvc,
+		Folder:                   folderSvc,
+		Indexer:                  idxSvc,
+		Queue:                    queueCli,
+		Search:                   searchSvc,
+		Context:                  contextSvc,
+		Memory:                   memorySvc,
+		Handoff:                  handoffSvc,
+		Provider:                 providerSvc,
+		Relator:                  relatorSvc,
+		Face:                     faceSvc,
+		Workspace:                workspaceSvc,
+		WorkspaceTransfer:        workspaceTransferSvc,
+		WorkspaceTransferTimeout: cfg.WorkspaceTransferTimeout,
+		WorkspaceBundleMaxBytes:  cfg.WorkspaceBundleMaxBytes,
+		WorkspaceTransferGate: make(
+			chan struct{},
+			cfg.WorkspaceTransferMaxConcurrent,
+		),
+		WorkspaceTransferTmpDir: workspaceTransferTmpDir,
+		DeploymentMode:          cfg.DeploymentMode,
+		RegistrationMode:        cfg.RegistrationMode,
+		SessionTTL:              cfg.SessionTTL,
+		CORSOrigins:             cfg.CORSOrigins,
+		Log:                     logger,
 	}
 
 	// Boot the queue consumer in-process. Promotion to a separate binary is a
@@ -175,6 +217,55 @@ func run() error {
 	}
 	logger.Info("memd stopped cleanly")
 	return nil
+}
+
+func workspaceTransferBundleLimits() workspacebundle.Limits {
+	limits := workspacebundle.DefaultLimits()
+	limits.MaxEntries = 100_000
+	limits.MaxTotalSize = 32 << 30
+	limits.MaxTotalMetadataSize = 128 << 20
+	limits.MaxRecordsPerIndex = 100_000
+	return limits
+}
+
+func prepareWorkspaceTransferTmpDir(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	path, err := filepath.Abs(filepath.Clean(raw))
+	if err != nil {
+		return "", fmt.Errorf("resolve path: %w", err)
+	}
+	info, err := os.Lstat(path)
+	if err == nil {
+		return validateWorkspaceTransferTmpDir(path, info)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("inspect %s: %w", path, err)
+	}
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return "", fmt.Errorf("create %s: %w", path, err)
+	}
+	info, err = os.Lstat(path)
+	if err != nil {
+		return "", fmt.Errorf("inspect %s: %w", path, err)
+	}
+	return validateWorkspaceTransferTmpDir(path, info)
+}
+
+func validateWorkspaceTransferTmpDir(path string, info os.FileInfo) (string, error) {
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return "", fmt.Errorf("%s must be a directory, not a symlink or file", path)
+	}
+	if permissions := info.Mode().Perm(); permissions != 0o700 {
+		return "", fmt.Errorf(
+			"%s permissions are %#o; require 0700",
+			path,
+			permissions,
+		)
+	}
+	return path, nil
 }
 
 func newLogger(level string) *slog.Logger {

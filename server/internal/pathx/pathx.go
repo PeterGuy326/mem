@@ -14,6 +14,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Root is the canonical root path.
@@ -70,7 +72,10 @@ func Normalize(p string) (string, error) {
 
 // ValidateName checks that a single path segment is legal.
 //
-// Forbidden: empty, ".", "..", anything containing "/" or NUL.
+// Forbidden: empty, ".", "..", invalid UTF-8, "/", terminal control
+// characters, Unicode line separators, and bidirectional controls. Paths are
+// displayed by human-facing CLI clients, so accepting those code points would
+// turn a stored path into an ANSI/OSC or visual-spoofing injection primitive.
 func ValidateName(name string) error {
 	if name == "" {
 		return fmt.Errorf("%w: empty", ErrBadName)
@@ -80,6 +85,18 @@ func ValidateName(name string) error {
 	}
 	if strings.ContainsAny(name, "/\x00") {
 		return fmt.Errorf("%w: contains '/' or NUL", ErrBadName)
+	}
+	if !utf8.ValidString(name) {
+		return fmt.Errorf("%w: invalid UTF-8", ErrBadName)
+	}
+	bidiControl := unicode.Properties["Bidi_Control"]
+	for _, r := range name {
+		if unicode.IsControl(r) ||
+			r == '\u2028' ||
+			r == '\u2029' ||
+			(bidiControl != nil && unicode.Is(bidiControl, r)) {
+			return fmt.Errorf("%w: contains a control character", ErrBadName)
+		}
 	}
 	return nil
 }

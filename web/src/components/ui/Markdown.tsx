@@ -1,9 +1,9 @@
 /**
- * Minimal, dependency-free Markdown renderer for LLM answers.
- * Handles the subset qwen/most chat models emit: headings, bold, italic,
+ * Minimal, dependency-free Markdown renderer for text documents.
+ * Handles the subset used by file previews: headings, bold, italic,
  * inline code, fenced code, bullet/numbered lists, blockquotes, and paragraphs.
- * Citation tags like [1] are highlighted. Not a full CommonMark parser — just
- * enough to render answers cleanly without pulling in react-markdown.
+ * Citation-like tags such as [1] are highlighted. Not a full CommonMark parser;
+ * it stays intentionally small to avoid pulling in react-markdown.
  */
 import * as React from 'react';
 

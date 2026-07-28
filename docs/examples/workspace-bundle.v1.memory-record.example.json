@@ -1,0 +1,29 @@
+{
+  "id": "40000000-0000-4000-8000-000000000001",
+  "kind": "decision",
+  "content": "Preserve portable IDs and immutable lineage.",
+  "attributes": {
+    "confidence": "confirmed"
+  },
+  "path": "/Project",
+  "event_at": "2026-07-28T09:00:00Z",
+  "source_type": "file",
+  "source_ref": "state.txt",
+  "source_file_id": "30000000-0000-4000-8000-000000000001",
+  "source_file_sha256": "12dada1fff4d4787ade3333147202c3b443e376f2646133f243168334e014f4b",
+  "source_locator": {
+    "line": 1
+  },
+  "producer_agent": "claude-code",
+  "producer_session": "source-session",
+  "producer_task": "portable-task",
+  "idempotency_key_sha256": "6c0311997b1f6f8e08643f4423b5470a27b64d2d9172491a2af419d9f4e5f737",
+  "origin_request_sha256": "50e76f8ad2e949ad54b5692726de9be62ad73cccbddc9549f0c954b1f5915718",
+  "content_sha256": "71fb3f48fb90b5598cb1928c897418bab5b47dc013215393cc1977fc0ac77752",
+  "lifecycle_status": "active",
+  "state_version": 1,
+  "useful_count": 0,
+  "not_useful_count": 0,
+  "created_at": "2026-07-28T09:00:00Z",
+  "updated_at": "2026-07-28T09:00:00Z"
+}

@@ -15,6 +15,7 @@ package indexer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -26,6 +27,7 @@ import (
 
 	"github.com/PeterGuy326/mem/server/internal/face"
 	"github.com/PeterGuy326/mem/server/internal/file"
+	"github.com/PeterGuy326/mem/server/internal/indexmeta"
 	"github.com/PeterGuy326/mem/server/internal/workerclient"
 	"github.com/PeterGuy326/mem/server/internal/workerpb"
 )
@@ -115,6 +117,8 @@ func (s *Service) IndexFile(ctx context.Context, f *file.File) {
 			"file_id", f.ID, "reason", "worker_disabled")
 		return
 	}
+	unlockIndexing := indexmeta.LockIndexing(f.UserID)
+	defer unlockIndexing()
 
 	if err := s.setStatus(ctx, f.ID, "processing"); err != nil {
 		s.log.Error("indexer.set_processing", "file_id", f.ID, "err", err)
@@ -123,11 +127,17 @@ func (s *Service) IndexFile(ctx context.Context, f *file.File) {
 
 	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	embProv, visualProv, llmProv, vlmProv := s.providerOverrides(ctx, f.UserID)
+	embProv, vlmProv, err := s.providerOverrides(ctx, f.UserID)
+	if err != nil {
+		s.log.Error("indexer.provider_lookup_failed", "file_id", f.ID, "err", err)
+		_ = s.setStatus(ctx, f.ID, "failed")
+		return
+	}
 	// For images, always pin a CLIP image-tower embedder so the visual vector
 	// lands in the same 512-d latent space the search visual route queries.
 	// Without this we relied on the worker's default coinciding with CLIP.
-	if visualProv == "" && strings.HasPrefix(f.MIME, "image/") {
+	visualProv := ""
+	if strings.HasPrefix(f.MIME, "image/") {
 		visualProv = "clip:ViT-B-32"
 	}
 	resp, err := s.client.Index(rpcCtx, workerclient.FileMeta{
@@ -139,7 +149,6 @@ func (s *Service) IndexFile(ctx context.Context, f *file.File) {
 		StorageKey:              f.StorageKey,
 		EmbeddingProvider:       embProv,
 		VisualEmbeddingProvider: visualProv,
-		LLMProvider:             llmProv,
 		VLMProvider:             vlmProv,
 	})
 	if err != nil {
@@ -156,6 +165,28 @@ func (s *Service) IndexFile(ctx context.Context, f *file.File) {
 		s.log.Info("indexer.skipped", "file_id", f.ID, "reason", "unsupported_mime")
 		_ = s.setStatus(ctx, f.ID, "done")
 		return
+	}
+	if text := resp.Embeddings["text"]; text != nil && len(text.Rows) > 0 {
+		// Re-resolve after the long worker RPC. The in-process coordinator
+		// prevents local switches; this second check also fails safely if a
+		// different memd instance changed the setting while work was in flight.
+		latestEmb, _, resolveErr := s.providerOverrides(ctx, f.UserID)
+		if resolveErr != nil {
+			s.log.Error("indexer.embedding_provider_recheck_failed",
+				"file_id", f.ID, "err", resolveErr)
+			_ = s.setStatus(ctx, f.ID, "failed")
+			return
+		}
+		expected := embProv
+		if latestEmb != "" {
+			expected = latestEmb
+		}
+		if expected != "" && text.Provider != expected {
+			s.log.Error("indexer.embedding_provider_mismatch",
+				"file_id", f.ID, "expected", expected, "actual", text.Provider)
+			_ = s.setStatus(ctx, f.ID, "failed")
+			return
+		}
 	}
 
 	if err := s.persist(ctx, f.ID, resp); err != nil {
@@ -212,18 +243,23 @@ func (s *Service) persist(ctx context.Context, fileID uuid.UUID, resp *workerpb.
 		return fmt.Errorf("update files: %w", err)
 	}
 
+	text := resp.Embeddings["text"]
+	if text != nil && len(text.Rows) > 0 && strings.TrimSpace(text.Provider) == "" {
+		return fmt.Errorf("text embedding provider identity is empty")
+	}
+
 	// Wipe previous embeddings for idempotency (re-index replays).
 	if _, err := tx.Exec(ctx, `DELETE FROM embeddings_text WHERE file_id = $1`, fileID); err != nil {
 		return fmt.Errorf("delete old text embeddings: %w", err)
 	}
 
-	if text := resp.Embeddings["text"]; text != nil && len(text.Rows) > 0 {
+	if text != nil && len(text.Rows) > 0 {
 		batch := &pgx.Batch{}
 		for _, row := range text.Rows {
 			batch.Queue(
-				`INSERT INTO embeddings_text (file_id, chunk_index, chunk_text, embedding)
-				 VALUES ($1, $2, $3, $4::vector)`,
-				fileID, row.Index, row.ChunkText, vectorLiteral(row.Values),
+				`INSERT INTO embeddings_text (file_id, chunk_index, chunk_text, embedding, provider)
+				 VALUES ($1, $2, $3, $4::vector, $5)`,
+				fileID, row.Index, row.ChunkText, vectorLiteral(row.Values), text.Provider,
 			)
 		}
 		br := tx.SendBatch(ctx, batch)
@@ -288,32 +324,50 @@ func (s *Service) fileUserID(ctx context.Context, tx pgx.Tx, fileID uuid.UUID) (
 // `mem provider set embedding ...` switches dims.
 //
 // Done as a separate package-internal query (not via provider.Service) to
-// avoid an import cycle. Missing rows fall through to worker defaults.
-func (s *Service) providerOverrides(ctx context.Context, userID uuid.UUID) (emb, visual, llm, vlm string) {
+// avoid an import cycle. When no setting exists, an existing corpus's recorded
+// provider is sent explicitly so worker environment changes cannot drift it.
+func (s *Service) providerOverrides(ctx context.Context, userID uuid.UUID) (emb, vlm string, err error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT kind, spec FROM provider_settings WHERE user_id = $1`, userID)
 	if err != nil {
-		s.log.Warn("indexer.provider_lookup_failed", "user_id", userID, "err", err)
-		return "", "", "", ""
+		return "", "", fmt.Errorf("query provider settings: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var kind, spec string
 		if err := rows.Scan(&kind, &spec); err != nil {
-			continue
+			return "", "", fmt.Errorf("scan provider setting: %w", err)
 		}
 		switch kind {
 		case "embedding":
 			emb = spec
-		case "visual_embedding":
-			visual = spec
-		case "llm":
-			llm = spec
 		case "vlm":
 			vlm = spec
 		}
 	}
-	return
+	if err := rows.Err(); err != nil {
+		return "", "", err
+	}
+	corpusProvider, hasCorpus, err := indexmeta.TextProvider(ctx, s.pool, userID)
+	if err != nil {
+		if emb != "" && (errors.Is(err, indexmeta.ErrUnknownProvider) ||
+			errors.Is(err, indexmeta.ErrMixedProviders)) {
+			// Explicit recovery path: an owner has selected a provider and is
+			// rebuilding legacy rows whose historical model was not recorded.
+			return emb, vlm, nil
+		}
+		return "", "", err
+	}
+	if hasCorpus {
+		if emb != "" && emb != corpusProvider {
+			return "", "", fmt.Errorf(
+				"configured embedding provider %q differs from corpus provider %q",
+				emb, corpusProvider,
+			)
+		}
+		emb = corpusProvider
+	}
+	return emb, vlm, nil
 }
 
 func (s *Service) setStatus(ctx context.Context, fileID uuid.UUID, status string) error {

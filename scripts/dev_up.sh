@@ -4,7 +4,7 @@
 # Starts, in order, waiting for each to become healthy:
 #   1. PostgreSQL (brew postgresql@NN + pgvector) — local cluster in .dev/pgdata
 #   2. MinIO (S3-compatible) — .dev/bin/minio, data in .dev/miniodata, :9100
-#   3. mem AI worker (Python gRPC) — :50051, Ollama-backed (nomic + llama3.1)
+#   3. mem indexing worker (Python gRPC) — :50051, embedding/VLM/ASR/OCR
 #   4. memd (Go HTTP API) — :8787, auto-migrates the DB on boot
 #
 # Idempotent: re-running detects already-running services and only (re)starts
@@ -267,7 +267,7 @@ start_worker() {
   else
     log "starting worker"
     ( cd "${REPO_ROOT}/worker" && \
-      env MEM_WORKER_GRPC_HOST=0.0.0.0 \
+      env MEM_WORKER_GRPC_HOST=127.0.0.1 \
           MEM_WORKER_GRPC_PORT="$WORKER_PORT" \
           MEM_S3_ENDPOINT="http://localhost:${MINIO_ADDR#:}" \
           MEM_S3_BUCKET="$MINIO_BUCKET" \
@@ -280,7 +280,6 @@ start_worker() {
           OPENAI_API_KEY="${OPENAI_API_KEY:-}" \
           MEM_DEFAULT_EMBEDDING="${MEM_DEFAULT_EMBEDDING:-ollama:nomic-embed-text}" \
           MEM_DEFAULT_VISUAL_EMBEDDING="${MEM_DEFAULT_VISUAL_EMBEDDING:-clip:ViT-B-32}" \
-          MEM_DEFAULT_LLM="${MEM_DEFAULT_LLM:-ollama:llama3.1}" \
           MEM_DEFAULT_VLM="${MEM_DEFAULT_VLM:-ollama:minicpm-v}" \
           MEM_LOG_LEVEL=INFO \
           $SETSID "$py" -m mem_worker.server >"${LOG_DIR}/worker.log" 2>&1 < /dev/null & \

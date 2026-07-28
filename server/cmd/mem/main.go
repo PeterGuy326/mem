@@ -13,6 +13,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var (
+	cliServerOverride    string
+	cliWorkspaceOverride string
+)
+
 func main() {
 	root := newRootCmd()
 	if err := root.Execute(); err != nil {
@@ -30,22 +35,31 @@ func main() {
 }
 
 func newRootCmd() *cobra.Command {
-	var (
-		server string
-		format string
-	)
+	var format string
 	root := &cobra.Command{
 		Use:   "mem",
 		Short: "mem — Agent-Native AI 网盘 CLI",
 		Long:  `mem is the command-line interface for the mem AI drive.`,
 	}
-	root.PersistentFlags().StringVar(&server, "server", "", "memd base URL (overrides config; e.g. http://localhost:8787)")
+	root.PersistentFlags().StringVar(&cliServerOverride, "server", "", "memd base URL (overrides config; e.g. http://localhost:8787)")
+	root.PersistentFlags().StringVar(&cliWorkspaceOverride, "workspace", "", "memory workspace UUID (overrides config)")
 	root.PersistentFlags().StringVar(&format, "format", "text", "output format: text|json")
 
 	root.AddCommand(newAuthCmd())
 	root.AddCommand(newLegacyAuthCommand(newLoginCmd(), "mem auth login"))
 	root.AddCommand(newLegacyAuthCommand(newLogoutCmd(), "mem auth logout"))
 	root.AddCommand(newLegacyTokenCmd())
+	root.AddCommand(newRememberCmd())
+	root.AddCommand(newMemoryCmd())
+	root.AddCommand(newMemoriesCmd())
+	root.AddCommand(newFeedbackCmd())
+	root.AddCommand(newArchiveCmd())
+	root.AddCommand(newRestoreCmd())
+	root.AddCommand(newForgetCmd())
+	root.AddCommand(newCheckpointCmd())
+	root.AddCommand(newTasksCmd())
+	root.AddCommand(newCheckpointsCmd())
+	root.AddCommand(newResumeCmd())
 	root.AddCommand(newPutCmd())
 	root.AddCommand(newGetCmd())
 	root.AddCommand(newCatCmd())
@@ -56,11 +70,12 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newRenameCmd())
 	root.AddCommand(newFolderCmd())
 	root.AddCommand(newSearchCmd())
-	root.AddCommand(newAskCmd())
+	root.AddCommand(newContextCmd())
 	root.AddCommand(newRelatedCmd())
 	root.AddCommand(newFaceCmd())
 	root.AddCommand(newProviderCmd())
 	root.AddCommand(newTimelineCmd())
+	root.AddCommand(newWorkspaceCmd())
 	root.AddCommand(newVersionCmd())
 	return root
 }

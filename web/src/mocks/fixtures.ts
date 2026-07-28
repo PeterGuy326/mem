@@ -295,11 +295,20 @@ export function findFile(id: string): MemFile | undefined {
 
 // ---------- Search / scoring (left intact for /v1/search if still used) ----------
 function tokenize(s: string): string[] {
-  return s
+  const parts = s
     .toLowerCase()
     .replace(/[，。！？、,.!?]/g, ' ')
     .split(/\s+/)
     .filter(Boolean);
+  const tokens = new Set(parts);
+  // The mock is only a deterministic UI fixture, not a semantic evaluator.
+  // Add CJK bigrams so the product's Chinese demo queries still exercise the
+  // intended result UI instead of becoming one unmatched, sentence-long token.
+  for (const part of parts) {
+    if (!/^[\p{Script=Han}]+$/u.test(part) || part.length < 2) continue;
+    for (let i = 0; i < part.length - 1; i++) tokens.add(part.slice(i, i + 2));
+  }
+  return Array.from(tokens);
 }
 
 export function searchFiles(opts: {

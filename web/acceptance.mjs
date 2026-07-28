@@ -71,16 +71,12 @@ try {
     log('6 搜索结果跳详情', false, '跳过（上一步无命中）');
   }
 
-  // 7) Ask — 提真问题
+  // 7) Ask 产品入口已退役
   await page.goto(BASE + '/ask', { waitUntil: 'networkidle' });
-  const askInput = page.locator('input[placeholder*="Ask anything"]');
-  await askInput.fill('how does rust guarantee memory safety');
-  await page.locator('button[type=submit]').click();
-  await page.waitForTimeout(20000); // RAG 要等 LLM
-  await shot('05-ask-answered');
-  const askText = await page.locator('body').innerText();
-  const gotAnswer = askText.length > 400 && !askText.includes('请检查');
-  log('7 Ask 提问', gotAnswer, gotAnswer ? `回答已渲染（${askText.length} 字符）` : '未见回答');
+  await shot('05-ask-retired');
+  const retiredText = await page.locator('body').innerText();
+  const askRetired = retiredText.includes('404') && (await page.locator('input').count()) === 0;
+  log('7 Ask 入口退役', askRetired, askRetired ? '/ask 返回产品级 404' : '仍存在问答入口');
 
   // 8) Faces
   await page.goto(BASE + '/faces', { waitUntil: 'networkidle' });
@@ -94,7 +90,8 @@ try {
   await page.waitForTimeout(2000);
   await shot('07-providers');
   const provText = await page.locator('body').innerText();
-  log('9 Providers', provText.includes('ollama') && provText.includes('768'), 'embedding 真配置回显');
+  const indexOnly = provText.includes('embedding') && !provText.toLowerCase().includes('llm');
+  log('9 索引模型', indexOnly, indexOnly ? '索引模型可见、回答模型已隐藏' : '模型边界不符合预期');
 
   log('10 控制台无报错', errs.length === 0, errs.length ? `${errs.length} 条 error` : '干净');
 } catch (e) {

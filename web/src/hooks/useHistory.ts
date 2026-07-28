@@ -1,5 +1,5 @@
 /**
- * localStorage-backed "recent items" history (search queries / ask questions).
+ * localStorage-backed recent search history.
  * Most-recent-first, de-duplicated (case-insensitive), capped. Survives reloads
  * and is shared across tabs via the `storage` event.
  */
@@ -71,18 +71,4 @@ export function useHistory(key: string, max = MAX) {
   }, [key]);
 
   return { items, push, remove, clear };
-}
-
-/**
- * Split a thinking-model answer of the form `<think>…</think>answer` into its
- * reasoning and final-answer parts. Returns `{ thinking: null }` for plain
- * answers. Tolerates a missing closing tag (streaming-truncated reasoning).
- */
-export function splitThinking(text: string): { thinking: string | null; answer: string } {
-  if (!text) return { thinking: null, answer: '' };
-  const m = text.match(/^\s*<think>([\s\S]*?)<\/think>([\s\S]*)$/);
-  if (m) return { thinking: (m[1] ?? '').trim(), answer: (m[2] ?? '').trim() };
-  const open = text.match(/^\s*<think>([\s\S]*)$/); // unclosed (still "thinking")
-  if (open) return { thinking: (open[1] ?? '').trim(), answer: '' };
-  return { thinking: null, answer: text };
 }

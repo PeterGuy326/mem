@@ -11,9 +11,10 @@ import (
 
 // cliConfig is the persisted CLI state at ~/.mem/config.yaml.
 type cliConfig struct {
-	Server string `yaml:"server"`
-	Email  string `yaml:"email,omitempty"`
-	Token  string `yaml:"token,omitempty"`
+	Server    string `yaml:"server"`
+	Email     string `yaml:"email,omitempty"`
+	Token     string `yaml:"token,omitempty"`
+	Workspace string `yaml:"workspace,omitempty"`
 }
 
 func configPath() (string, error) {
@@ -70,6 +71,9 @@ func resolveConfig(serverOverride string) (*cliConfig, error) {
 	if err != nil {
 		return nil, err
 	}
+	if serverOverride == "" {
+		serverOverride = cliServerOverride
+	}
 	if serverOverride != "" {
 		c.Server = serverOverride
 	}
@@ -78,6 +82,12 @@ func resolveConfig(serverOverride string) (*cliConfig, error) {
 	}
 	if v := os.Getenv("MEM_TOKEN"); v != "" {
 		c.Token = v
+	}
+	if v := os.Getenv("MEM_WORKSPACE"); v != "" {
+		c.Workspace = v
+	}
+	if cliWorkspaceOverride != "" {
+		c.Workspace = cliWorkspaceOverride
 	}
 	return c, nil
 }

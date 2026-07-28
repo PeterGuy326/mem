@@ -62,6 +62,9 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "scan", err.Error())
 			return
 		}
+		if !tokenAllowsPath(r, e.Path) {
+			continue
+		}
 		key := e.At.Format("2006-01")
 		if _, ok := groups[key]; !ok {
 			order = append(order, key)

@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -112,7 +113,6 @@ type FileMeta struct {
 	// Provider overrides (optional). Empty values fall back to worker defaults.
 	EmbeddingProvider       string
 	VisualEmbeddingProvider string // CLIP image-tower embedder for image/* files
-	LLMProvider             string
 	VLMProvider             string
 }
 
@@ -146,7 +146,7 @@ func (c *Client) Index(ctx context.Context, m FileMeta) (*workerpb.ProcessRespon
 // buildOptionsJSON encodes per-request provider overrides into a JSON blob
 // the worker understands. Returns nil when no overrides are set.
 func buildOptionsJSON(m FileMeta) []byte {
-	if m.EmbeddingProvider == "" && m.VisualEmbeddingProvider == "" && m.LLMProvider == "" && m.VLMProvider == "" {
+	if m.EmbeddingProvider == "" && m.VisualEmbeddingProvider == "" && m.VLMProvider == "" {
 		return nil
 	}
 	out := map[string]string{}
@@ -156,9 +156,6 @@ func buildOptionsJSON(m FileMeta) []byte {
 	if m.VisualEmbeddingProvider != "" {
 		out["visual_embedding_provider"] = m.VisualEmbeddingProvider
 	}
-	if m.LLMProvider != "" {
-		out["llm_provider"] = m.LLMProvider
-	}
 	if m.VLMProvider != "" {
 		out["vlm_provider"] = m.VLMProvider
 	}
@@ -166,41 +163,56 @@ func buildOptionsJSON(m FileMeta) []byte {
 	return b
 }
 
-// ChatMessage is one role+content pair (mirrors workerpb.ChatMessage).
-type ChatMessage struct {
-	Role    string
-	Content string
-}
+const vlmProbeDataURI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 
-// Chat forwards messages to the worker's LLM. providerSpec is optional —
-// empty means "use the user's configured llm provider on the worker side".
-// Returns the assistant reply.
-func (c *Client) Chat(ctx context.Context, userID string, msgs []ChatMessage, providerSpec string) (string, error) {
+// ProbeVLM sends a tiny in-memory image through the worker's real VLM adapter
+// and requires a non-empty caption. provider_probe tells ImageProcessor to
+// return immediately after captioning, without loading CLIP/face models.
+func (c *Client) ProbeVLM(ctx context.Context, providerSpec string) (string, error) {
 	if !c.Enabled() {
 		return "", errors.New("workerclient: disabled")
 	}
 	if err := c.ensureDialed(); err != nil {
 		return "", err
 	}
-	pbMsgs := make([]*workerpb.ChatMessage, 0, len(msgs))
-	for _, m := range msgs {
-		pbMsgs = append(pbMsgs, &workerpb.ChatMessage{Role: m.Role, Content: m.Content})
-	}
-	req := &workerpb.ChatRequest{
-		UserId:      userID,
-		Messages:    pbMsgs,
-		LlmProvider: providerSpec,
-	}
-	cctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
-	resp, err := c.stub.Chat(cctx, req)
+	req, err := buildVLMProbeRequest(providerSpec)
 	if err != nil {
-		return "", fmt.Errorf("worker chat: %w", err)
+		return "", err
+	}
+	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	resp, err := c.stub.Process(cctx, req)
+	if err != nil {
+		return "", fmt.Errorf("worker process(VLM probe): %w", err)
 	}
 	if resp.Status == workerpb.ProcessStatus_STATUS_FAILED {
-		return "", fmt.Errorf("worker chat failed: %s", resp.Error)
+		return "", fmt.Errorf("worker VLM probe failed: %s", resp.Error)
 	}
-	return resp.Content, nil
+	caption := strings.TrimSpace(resp.Caption)
+	if caption == "" {
+		return "", errors.New("worker VLM probe returned no caption")
+	}
+	return caption, nil
+}
+
+func buildVLMProbeRequest(providerSpec string) (*workerpb.ProcessRequest, error) {
+	if strings.TrimSpace(providerSpec) == "" {
+		return nil, errors.New("workerclient: VLM provider spec is empty")
+	}
+	options, err := json.Marshal(map[string]any{
+		"vlm_provider":   providerSpec,
+		"provider_probe": true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encode VLM probe options: %w", err)
+	}
+	return &workerpb.ProcessRequest{
+		FileId:      "provider-probe",
+		StorageUri:  vlmProbeDataURI,
+		Mime:        "image/png",
+		Name:        "provider-probe.png",
+		OptionsJson: options,
+	}, nil
 }
 
 // EmbedTextWith embeds q using a specific provider spec override (e.g.

@@ -74,8 +74,8 @@ class ProcessorServiceServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def Chat(self, request, context):
-        """Chat is an LLM-completion bridge used by the server's RAG `Ask` flow.
-        The worker forwards messages to the user's configured LLMProvider.
+        """Retired compatibility slot. Implementations MUST return UNIMPLEMENTED;
+        final reasoning and answer generation belong to the external Agent.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')

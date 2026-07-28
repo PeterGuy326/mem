@@ -1,4 +1,4 @@
-"""OpenAI provider — text embeddings + chat completions + vision.
+"""OpenAI provider — text embeddings, optional indexing completions, and vision.
 
 Uses plain ``requests`` rather than the openai SDK so the only new optional
 dep is API-key configuration.
@@ -96,7 +96,11 @@ class OpenAIEmbeddingProvider(_BaseOpenAI):
 
 
 class OpenAILLMProvider(_BaseOpenAI):
-    """OpenAI chat completions (``gpt-4o-mini`` / ``gpt-4o`` / …)."""
+    """Compatibility completion hook for explicit extraction/indexing jobs.
+
+    The Worker ``Chat`` RPC is retired. This provider is not an Agent answer
+    path and deliberately returns only the model's public content field.
+    """
 
     def __init__(self, model: str = "gpt-4o-mini",
                  api_key: Optional[str] = None, base_url: Optional[str] = None):
@@ -119,16 +123,9 @@ class OpenAILLMProvider(_BaseOpenAI):
         if not choices:
             return ""
         msg = choices[0].get("message") or {}
-        content = msg.get("content") or ""
-        # Thinking models (e.g. qwen3.7-max) put their chain-of-thought in a
-        # separate ``reasoning_content`` field. Surface it to the UI by wrapping
-        # it in <think>…</think> ahead of the answer — no proto/API change needed
-        # (ChatResponse.content is a plain string); the web client splits it out
-        # and renders a collapsible "思考过程" panel.
-        reasoning = (msg.get("reasoning_content") or "").strip()
-        if reasoning:
-            return f"<think>{reasoning}</think>{content}"
-        return content
+        # Ignore vendor-private reasoning fields. Indexing artifacts must never
+        # turn into a hidden chat transcript or expose chain-of-thought.
+        return msg.get("content") or ""
 
     def stream(self, messages: list[Message], **kwargs: Any) -> Iterator[str]:
         raise NotImplementedError("OpenAI streaming not wired yet")

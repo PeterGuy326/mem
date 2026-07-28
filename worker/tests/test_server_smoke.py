@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib
 
+import grpc
 import pytest
 
 
@@ -55,3 +56,53 @@ def test_process_returns_skipped_for_unknown_mime():
     )
     resp = servicer.Process(req, context=None)
     assert resp.status == pb.STATUS_SKIPPED
+
+
+def test_chat_rpc_is_retired_and_llm_override_is_ignored():
+    pb = importlib.import_module("mem_worker.proto.processor_pb2")
+    pbg = importlib.import_module("mem_worker.proto.processor_pb2_grpc")
+
+    from mem_worker.server import ProcessorServicer
+
+    class Aborted(RuntimeError):
+        pass
+
+    class Context:
+        def abort(self, code, details):
+            assert code == grpc.StatusCode.UNIMPLEMENTED
+            assert "mem_context" in details
+            raise Aborted(details)
+
+    servicer = ProcessorServicer(pb, pbg)
+    with pytest.raises(Aborted):
+        servicer.Chat(pb.ChatRequest(), Context())
+
+    base = servicer._registry.find("text/plain")
+    assert servicer._pick_processor(
+        "text/plain", {"llm_provider": "openai:should-never-run"}
+    ) is base
+
+
+@pytest.mark.parametrize(
+    ("mime", "embedder_getter"),
+    [
+        ("text/plain", lambda proc: proc._embedder),
+        ("application/pdf", lambda proc: proc._text._embedder),
+        ("audio/mpeg", lambda proc: proc._text._embedder),
+    ],
+)
+def test_embedding_override_reaches_text_derived_processors(
+    monkeypatch, mime, embedder_getter
+):
+    pb = importlib.import_module("mem_worker.proto.processor_pb2")
+    pbg = importlib.import_module("mem_worker.proto.processor_pb2_grpc")
+    from mem_worker import providers
+    from mem_worker.server import ProcessorServicer
+
+    marker = object()
+    monkeypatch.setattr(providers, "get_embedding_provider", lambda spec: marker)
+
+    proc = ProcessorServicer(pb, pbg)._pick_processor(
+        mime, {"embedding_provider": "test:pinned-space"}
+    )
+    assert embedder_getter(proc) is marker

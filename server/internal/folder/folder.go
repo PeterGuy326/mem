@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/PeterGuy326/mem/server/internal/pathx"
+	"github.com/PeterGuy326/mem/server/internal/workspacelock"
 )
 
 // Folder mirrors a row in the `folders` table.
@@ -67,8 +68,12 @@ func New(pool *pgxpool.Pool) *Service { return &Service{pool: pool} }
 
 // Sentinel errors.
 var (
-	ErrNotFound = errors.New("folder not found")
-	ErrNotEmpty = errors.New("folder is not empty")
+	ErrNotFound          = errors.New("folder not found")
+	ErrNotEmpty          = errors.New("folder is not empty")
+	ErrContainsMemories  = errors.New("folder contains memories; forget them explicitly before recursive deletion")
+	ErrContainsTaskState = errors.New(
+		"folder contains immutable Agent task checkpoints; re-scope them explicitly before moving or deleting",
+	)
 	ErrCycle    = errors.New("cannot move folder into itself or a descendant")
 	ErrRootOp   = errors.New("operation not allowed on root")
 	ErrConflict = errors.New("a folder with that path already exists")
@@ -87,7 +92,7 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, path string) (*F
 		return nil, nil
 	}
 	var deepest *Folder
-	err = s.withTx(ctx, func(tx pgx.Tx) error {
+	err = s.withContentWriteTx(ctx, userID, func(tx pgx.Tx) error {
 		f, e := ensureFolderTx(ctx, tx, userID, norm)
 		if e != nil {
 			return e
@@ -354,7 +359,7 @@ func (s *Service) Rename(ctx context.Context, userID uuid.UUID, oldPath, newName
 	if newPath == oldNorm {
 		return nil // no-op
 	}
-	return s.withTx(ctx, func(tx pgx.Tx) error {
+	return s.withPathMutationTx(ctx, userID, func(tx pgx.Tx) error {
 		src, err := selectFolderByPathTx(ctx, tx, userID, oldNorm)
 		if err != nil {
 			return err
@@ -364,6 +369,13 @@ func (s *Service) Rename(ctx context.Context, userID uuid.UUID, oldPath, newName
 			return ErrConflict
 		} else if err != nil && !errors.Is(err, ErrNotFound) {
 			return err
+		}
+		containsTaskState, err := containsTaskStateTx(ctx, tx, userID, src.Path, true)
+		if err != nil {
+			return fmt.Errorf("check rename task checkpoints: %w", err)
+		}
+		if containsTaskState {
+			return ErrContainsTaskState
 		}
 		return rewritePrefixTx(ctx, tx, userID, src.ID, oldNorm, newPath, src.ParentID)
 	})
@@ -396,7 +408,7 @@ func (s *Service) Move(ctx context.Context, userID uuid.UUID, srcPath, dstParent
 		return nil
 	}
 
-	return s.withTx(ctx, func(tx pgx.Tx) error {
+	return s.withPathMutationTx(ctx, userID, func(tx pgx.Tx) error {
 		src, err := selectFolderByPathTx(ctx, tx, userID, srcNorm)
 		if err != nil {
 			return err
@@ -421,6 +433,13 @@ func (s *Service) Move(ctx context.Context, userID uuid.UUID, srcPath, dstParent
 			}
 			newParentID = &parent.ID
 		}
+		containsTaskState, err := containsTaskStateTx(ctx, tx, userID, src.Path, true)
+		if err != nil {
+			return fmt.Errorf("check move task checkpoints: %w", err)
+		}
+		if containsTaskState {
+			return ErrContainsTaskState
+		}
 		return rewritePrefixTx(ctx, tx, userID, src.ID, srcNorm, newPath, newParentID)
 	})
 }
@@ -438,15 +457,15 @@ func rewritePrefixTx(ctx context.Context, tx pgx.Tx, userID, srcID uuid.UUID, ol
 	if err != nil {
 		return fmt.Errorf("update src folder: %w", err)
 	}
-	// 2. cascade descendant folders (path LIKE oldPrefix/%)
-	likePrefix := oldPrefix + "/%"
-	cutLen := len(oldPrefix)
+	// 2. Cascade descendant folders with a literal segment-prefix comparison.
+	// LIKE is unsafe here because valid virtual paths may contain '%' or '_'.
 	_, err = tx.Exec(ctx,
 		`UPDATE folders
-		 SET path = $1 || substring(path FROM $2::int),
+		 SET path = $1 || substring(path FROM length($2) + 1),
 		     updated_at = $3
-		 WHERE user_id = $4 AND path LIKE $5`,
-		newPrefix, cutLen+1, now, userID, likePrefix)
+		 WHERE user_id = $4
+		   AND left(path, length($2) + 1) = $2 || '/'`,
+		newPrefix, oldPrefix, now, userID)
 	if err != nil {
 		return fmt.Errorf("cascade folders: %w", err)
 	}
@@ -458,13 +477,39 @@ func rewritePrefixTx(ctx context.Context, tx pgx.Tx, userID, srcID uuid.UUID, ol
 		`UPDATE files
 		 SET path = CASE
 		              WHEN path = $1 THEN $2
-		              ELSE $2 || substring(path FROM $3::int)
+		              ELSE $2 || substring(path FROM length($1) + 1)
 		            END,
-		     updated_at = $4
-		 WHERE user_id = $5 AND (path = $1 OR path LIKE $6)`,
-		oldPrefix, newPrefix, cutLen+1, now, userID, likePrefix)
+		     updated_at = $3
+		 WHERE user_id = $4
+		   AND (path = $1 OR left(path, length($1) + 1) = $1 || '/')`,
+		oldPrefix, newPrefix, now, userID)
 	if err != nil {
 		return fmt.Errorf("cascade files: %w", err)
+	}
+	// 4. Keep structured memory occurrences aligned with the virtual folder
+	// tree. Files/folders are owned by the resource-owner user, while memories
+	// are workspace-scoped, so resolve the owner's workspace explicitly.
+	//
+	// Use the same literal segment-prefix predicate as above. LIKE would treat
+	// valid '%' and '_' path characters as wildcards and could rewrite
+	// unrelated memories.
+	_, err = tx.Exec(ctx,
+		`UPDATE memories AS m
+		 SET path = CASE
+		              WHEN m.path = $1 THEN $2
+		              ELSE $2 || substring(m.path FROM length($1) + 1)
+		            END,
+		     updated_at = $3
+		 WHERE EXISTS (
+		       SELECT 1
+		         FROM workspaces AS w
+		        WHERE w.id = m.workspace_id
+		          AND w.resource_owner_user_id = $4
+		 )
+		   AND (m.path = $1 OR left(m.path, length($1) + 1) = $1 || '/')`,
+		oldPrefix, newPrefix, now, userID)
+	if err != nil {
+		return fmt.Errorf("cascade memories: %w", err)
 	}
 	return nil
 }
@@ -484,7 +529,7 @@ func (s *Service) Delete(ctx context.Context, userID uuid.UUID, path string, rec
 	if norm == pathx.Root {
 		return ErrRootOp
 	}
-	return s.withTx(ctx, func(tx pgx.Tx) error {
+	return s.withPathMutationTx(ctx, userID, func(tx pgx.Tx) error {
 		src, err := selectFolderByPathTx(ctx, tx, userID, norm)
 		if err != nil {
 			return err
@@ -498,13 +543,32 @@ func (s *Service) Delete(ctx context.Context, userID uuid.UUID, path string, rec
 				return ErrNotEmpty
 			}
 		} else {
+			containsTaskState, err := containsTaskStateTx(ctx, tx, userID, src.Path, true)
+			if err != nil {
+				return fmt.Errorf("check recursive delete task checkpoints: %w", err)
+			}
+			if containsTaskState {
+				return ErrContainsTaskState
+			}
+			containsMemories, err := containsMemoriesTx(ctx, tx, userID, src.Path, true)
+			if err != nil {
+				return fmt.Errorf("check recursive delete memories: %w", err)
+			}
+			if containsMemories {
+				// A folder operation must never become an implicit memory
+				// deletion. The caller has to use the memory lifecycle's
+				// explicit forget operation first.
+				return ErrContainsMemories
+			}
 			// Hard delete: remove all descendant files first (FKs cascade
 			// from folders → files would only NULL out folder_id, so we have
 			// to delete files explicitly).
-			likePrefix := src.Path + "/%"
 			if _, err := tx.Exec(ctx,
-				`DELETE FROM files WHERE user_id = $1 AND (folder_id = $2 OR path = $3 OR path LIKE $4)`,
-				userID, src.ID, src.Path, likePrefix); err != nil {
+				`DELETE FROM files
+				  WHERE user_id = $1
+				    AND (folder_id = $2 OR path = $3
+				         OR left(path, length($3) + 1) = $3 || '/')`,
+				userID, src.ID, src.Path); err != nil {
 				return fmt.Errorf("recursive delete files: %w", err)
 			}
 			// Subfolder rows cascade via the FK ON DELETE CASCADE when we
@@ -533,7 +597,99 @@ func isEmptyTx(ctx context.Context, tx pgx.Tx, userID, folderID uuid.UUID, path 
 		userID, folderID).Scan(&n); err != nil {
 		return false, err
 	}
-	return n == 0, nil
+	if n > 0 {
+		return false, nil
+	}
+	containsTaskState, err := containsTaskStateTx(ctx, tx, userID, path, false)
+	if err != nil {
+		return false, fmt.Errorf("check folder task checkpoints: %w", err)
+	}
+	if containsTaskState {
+		return false, nil
+	}
+	containsMemories, err := containsMemoriesTx(ctx, tx, userID, path, false)
+	if err != nil {
+		return false, fmt.Errorf("check folder memories: %w", err)
+	}
+	return !containsMemories, nil
+}
+
+// containsMemoriesTx reports whether a resource owner's workspace contains an
+// active or archived memory at path. When recursive is true, descendants are
+// included with a literal segment-boundary comparison.
+//
+// Forgotten/tombstoned rows intentionally do not block folder deletion: an
+// explicit memory lifecycle transition has already happened for those rows.
+func containsMemoriesTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	userID uuid.UUID,
+	path string,
+	recursive bool,
+) (bool, error) {
+	var exists bool
+	if recursive {
+		err := tx.QueryRow(ctx,
+			`SELECT EXISTS (
+			   SELECT 1
+			     FROM memories AS m
+			     JOIN workspaces AS w ON w.id = m.workspace_id
+			    WHERE w.resource_owner_user_id = $1
+			      AND m.lifecycle_status IN ('active', 'archived')
+			      AND (m.path = $2 OR left(m.path, length($2) + 1) = $2 || '/')
+			 )`,
+			userID, path).Scan(&exists)
+		return exists, err
+	}
+	err := tx.QueryRow(ctx,
+		`SELECT EXISTS (
+		   SELECT 1
+		     FROM memories AS m
+		     JOIN workspaces AS w ON w.id = m.workspace_id
+		    WHERE w.resource_owner_user_id = $1
+		      AND m.lifecycle_status IN ('active', 'archived')
+		      AND m.path = $2
+		 )`,
+		userID, path).Scan(&exists)
+	return exists, err
+}
+
+// containsTaskStateTx reports whether a folder scope has an Agent task. A
+// task's checkpoints are immutable and include scope_path in their canonical
+// JSON and payload hash, so ordinary folder operations must not rewrite them.
+// A future explicit re-scope/rebase operation can move the current task scope
+// while retaining historical checkpoints and an audit trail.
+func containsTaskStateTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	userID uuid.UUID,
+	path string,
+	recursive bool,
+) (bool, error) {
+	var exists bool
+	if recursive {
+		err := tx.QueryRow(ctx,
+			`SELECT EXISTS (
+			   SELECT 1
+			     FROM agent_tasks AS t
+			     JOIN workspaces AS w ON w.id = t.workspace_id
+			    WHERE w.resource_owner_user_id = $1
+			      AND (t.scope_path = $2
+			           OR left(t.scope_path, length($2) + 1) = $2 || '/')
+			 )`,
+			userID, path).Scan(&exists)
+		return exists, err
+	}
+	err := tx.QueryRow(ctx,
+		`SELECT EXISTS (
+		   SELECT 1
+		     FROM agent_tasks AS t
+		     JOIN workspaces AS w ON w.id = t.workspace_id
+		    WHERE w.resource_owner_user_id = $1
+		      AND t.scope_path = $2
+		 )`,
+		userID, path).Scan(&exists)
+	return exists, err
 }
 
 // EnsureFolderTx is exposed so the file service can mkdir -p inside its own
@@ -546,6 +702,24 @@ func EnsureFolderTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, path strin
 // folder.id for an upload destination (own short tx).
 func (s *Service) ResolveOrCreate(ctx context.Context, userID uuid.UUID, path string) (*Folder, error) {
 	return s.Create(ctx, userID, path)
+}
+
+// ResolveOrCreateLockedTx resolves a folder inside a caller-owned transaction.
+// The caller must acquire workspacelock.ForContentWriteByOwner as the first
+// database action and hold it through the content write that references the
+// returned folder. File.Put and File.Move use this to keep folder_id and path
+// in one serialization window.
+func (s *Service) ResolveOrCreateLockedTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	userID uuid.UUID,
+	path string,
+) (*Folder, error) {
+	norm, err := pathx.Normalize(path)
+	if err != nil {
+		return nil, err
+	}
+	return ensureFolderTx(ctx, tx, userID, norm)
 }
 
 // --- internal helpers ---
@@ -592,6 +766,32 @@ func (s *Service) withTx(ctx context.Context, fn func(pgx.Tx) error) error {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+func (s *Service) withContentWriteTx(
+	ctx context.Context,
+	userID uuid.UUID,
+	fn func(pgx.Tx) error,
+) error {
+	return s.withTx(ctx, func(tx pgx.Tx) error {
+		if _, err := workspacelock.ForContentWriteByOwner(ctx, tx, userID); err != nil {
+			return err
+		}
+		return fn(tx)
+	})
+}
+
+func (s *Service) withPathMutationTx(
+	ctx context.Context,
+	userID uuid.UUID,
+	fn func(pgx.Tx) error,
+) error {
+	return s.withTx(ctx, func(tx pgx.Tx) error {
+		if _, err := workspacelock.ForPathMutation(ctx, tx, userID); err != nil {
+			return err
+		}
+		return fn(tx)
+	})
 }
 
 func cloneUUID(u *uuid.UUID) *uuid.UUID {

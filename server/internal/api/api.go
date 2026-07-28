@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -28,40 +29,78 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
-	"github.com/PeterGuy326/mem/server/internal/ask"
 	"github.com/PeterGuy326/mem/server/internal/auth"
+	"github.com/PeterGuy326/mem/server/internal/contextpack"
 	"github.com/PeterGuy326/mem/server/internal/face"
 	"github.com/PeterGuy326/mem/server/internal/file"
 	"github.com/PeterGuy326/mem/server/internal/folder"
+	"github.com/PeterGuy326/mem/server/internal/handoff"
 	"github.com/PeterGuy326/mem/server/internal/indexer"
+	"github.com/PeterGuy326/mem/server/internal/memory"
+	"github.com/PeterGuy326/mem/server/internal/pathx"
 	"github.com/PeterGuy326/mem/server/internal/provider"
 	"github.com/PeterGuy326/mem/server/internal/queue"
 	"github.com/PeterGuy326/mem/server/internal/relator"
 	"github.com/PeterGuy326/mem/server/internal/search"
 	"github.com/PeterGuy326/mem/server/internal/workspace"
+	"github.com/PeterGuy326/mem/server/internal/workspacetransfer"
 )
 
 // Version is overridden by ldflags at release-build time.
 var Version = "dev"
 
+// MemoryService is the write/read port used by HTTP handlers. Keeping the
+// handlers behind an interface makes authorization and error mapping testable
+// without weakening the concrete persistence service.
+type MemoryService interface {
+	Remember(context.Context, memory.Command) (*memory.RememberResult, error)
+	Get(context.Context, memory.Query) (*memory.Memory, error)
+	List(context.Context, memory.ListQuery) (*memory.ListResult, error)
+	Feedback(context.Context, memory.FeedbackCommand) (*memory.MutationResult, error)
+	Archive(context.Context, memory.LifecycleCommand) (*memory.MutationResult, error)
+	Restore(context.Context, memory.LifecycleCommand) (*memory.MutationResult, error)
+	Forget(context.Context, memory.ForgetCommand) (*memory.ForgetResult, error)
+}
+
+// WorkspaceTransferService is the portable full-workspace import/export port.
+// HTTP owns transport limits and temporary-file handling; the concrete service
+// owns bundle validation and the database/object-store transaction boundary.
+type WorkspaceTransferService interface {
+	Export(
+		context.Context,
+		workspacetransfer.ExportRequest,
+	) (*workspacetransfer.ExportResult, error)
+	Import(
+		context.Context,
+		workspacetransfer.ImportRequest,
+	) (*workspacetransfer.ImportResult, error)
+}
+
 // Server bundles the dependencies a handler needs.
 type Server struct {
-	Auth             *auth.Service
-	File             *file.Service
-	Folder           *folder.Service
-	Indexer          *indexer.Service  // legacy inline path (only used if Queue is nil)
-	Queue            *queue.Client     // preferred: async indexing via Asynq
-	Search           *search.Service   // optional; nil disables /v1/search
-	Ask              *ask.Service      // optional; nil disables /v1/ask
-	Provider         *provider.Service // optional; nil disables /v1/providers
-	Relator          *relator.Service  // optional; nil falls back to stub response
-	Face             *face.Service     // optional; nil disables /v1/faces
-	Workspace        *workspace.Service
-	DeploymentMode   string
-	RegistrationMode string
-	SessionTTL       time.Duration
-	CORSOrigins      []string // allowed browser origins; empty disables CORS
-	Log              *slog.Logger
+	Auth                     *auth.Service
+	File                     *file.Service
+	Folder                   *folder.Service
+	Indexer                  *indexer.Service // legacy inline path (only used if Queue is nil)
+	Queue                    *queue.Client    // preferred: async indexing via Asynq
+	Search                   *search.Service  // optional; nil disables /v1/search
+	Context                  *contextpack.Service
+	Memory                   MemoryService
+	Handoff                  handoff.ServicePort
+	Provider                 *provider.Service // optional; nil disables /v1/providers
+	Relator                  *relator.Service  // optional; nil falls back to stub response
+	Face                     *face.Service     // optional; nil disables /v1/faces
+	Workspace                *workspace.Service
+	WorkspaceTransfer        WorkspaceTransferService
+	WorkspaceTransferTimeout time.Duration
+	WorkspaceBundleMaxBytes  int64
+	WorkspaceTransferGate    chan struct{}
+	WorkspaceTransferTmpDir  string
+	DeploymentMode           string
+	RegistrationMode         string
+	SessionTTL               time.Duration
+	CORSOrigins              []string // allowed browser origins; empty disables CORS
+	Log                      *slog.Logger
 }
 
 // Router returns a chi.Router with all v1 routes wired.
@@ -74,7 +113,7 @@ func (s *Server) Router() http.Handler {
 	}
 	r.Use(s.logRequest)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(60 * time.Second))
+	r.Use(s.requestTimeoutMiddleware)
 
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -95,6 +134,20 @@ func (s *Server) Router() http.Handler {
 		r.Get("/v1/capabilities", s.handleCapabilities)
 		r.Get("/v1/workspaces", s.handleListWorkspaces)
 		r.Get("/v1/workspaces/current", s.handleCurrentWorkspace)
+		r.With(
+			s.requireScope(auth.ScopeRead),
+			s.requireScope(auth.ScopeAdmin),
+			s.requireUnrestrictedPaths,
+			s.requireWorkspaceTransfer,
+			s.requireWorkspaceTransferCapacity,
+		).Get("/v1/workspaces/current/export", s.handleWorkspaceExport)
+		r.With(
+			s.requireScope(auth.ScopeWrite),
+			s.requireScope(auth.ScopeAdmin),
+			s.requireUnrestrictedPaths,
+			s.requireWorkspaceTransfer,
+			s.requireWorkspaceTransferCapacity,
+		).Post("/v1/workspaces/current/import", s.handleWorkspaceImport)
 
 		r.With(s.requireScope(auth.ScopeAdmin)).Post("/v1/auth/tokens", s.handleCreateToken)
 		r.With(s.requireScope(auth.ScopeAdmin)).Get("/v1/auth/tokens", s.handleListTokens)
@@ -107,33 +160,83 @@ func (s *Server) Router() http.Handler {
 		r.With(s.requireScope(auth.ScopeWrite)).Patch("/v1/files/{id}", s.handlePatchFile)
 		r.With(s.requireScope(auth.ScopeDelete), s.requireWorkspaceDelete).Delete("/v1/files/{id}", s.handleDeleteFile)
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/files/{id}/related", s.handleFileRelated)
-		r.With(s.requireScope(auth.ScopeWrite)).Post("/v1/relations/rebuild", s.handleRebuildRelations)
+		r.With(s.requireScope(auth.ScopeWrite), s.requireUnrestrictedPaths).Post("/v1/relations/rebuild", s.handleRebuildRelations)
+
+		// Structured Agent memory. API owns idempotency and provenance;
+		// CLI and MCP remain adapters over this canonical contract.
+		r.With(s.requireScope(auth.ScopeWrite)).Post("/v1/memories", s.handleRemember)
+		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/memories", s.handleListMemories)
+		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/memories/{id}", s.handleGetMemory)
+		r.With(
+			s.requireScope(auth.ScopeRead),
+			s.requireScope(auth.ScopeWrite),
+		).Post("/v1/memories/{id}/feedback", s.handleMemoryFeedback)
+		r.With(
+			s.requireScope(auth.ScopeRead),
+			s.requireScope(auth.ScopeWrite),
+		).Post("/v1/memories/{id}/archive", s.handleArchiveMemory)
+		r.With(
+			s.requireScope(auth.ScopeRead),
+			s.requireScope(auth.ScopeWrite),
+		).Post("/v1/memories/{id}/restore", s.handleRestoreMemory)
+		r.With(
+			s.requireScope(auth.ScopeDelete),
+			s.requireWorkspaceDelete,
+		).Post("/v1/memories/{id}/forget", s.handleForgetMemory)
+
+		// Versioned, vendor-neutral task checkpoints. The task key is stable
+		// across Claude Code, Codex and other Agent hosts.
+		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/tasks", s.handleListTasks)
+		r.With(s.requireScope(auth.ScopeWrite)).Post(
+			"/v1/tasks/{taskKey}/checkpoints", s.handleCheckpoint,
+		)
+		r.With(s.requireScope(auth.ScopeRead)).Get(
+			"/v1/tasks/{taskKey}/checkpoints", s.handleListCheckpoints,
+		)
+		r.With(s.requireScope(auth.ScopeRead)).Get(
+			"/v1/tasks/{taskKey}/checkpoints/{checkpointID}", s.handleGetCheckpoint,
+		)
+		r.With(s.requireScope(auth.ScopeRead)).Post(
+			"/v1/tasks/{taskKey}/resume", s.handleResume,
+		)
 
 		// Search (SPEC §F3)
 		r.With(s.requireScope(auth.ScopeSearch)).Post("/v1/search", s.handleSearch)
 
-		// Ask — RAG cross-file QA (SPEC §F5)
-		r.With(s.requireScope(auth.ScopeSearch)).Post("/v1/ask", s.handleAsk)
-		r.With(s.requireScope(auth.ScopeSearch)).Post("/v1/ask/stream", s.handleAskStream)
+		// Context — bounded, source-verifiable evidence for external agents.
+		r.With(s.requireScope(auth.ScopeSearch)).Post("/v1/context", s.handleContext)
 
 		// Providers (SPEC §F8)
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/providers", s.handleListProviders)
-		r.With(s.requireScope(auth.ScopeAdmin), s.requireWorkspaceProviderWrite).Put("/v1/providers/{kind}", s.handleSetProvider)
-		r.With(s.requireScope(auth.ScopeRead)).Post("/v1/providers/{kind}/test", s.handleTestProvider)
+		r.With(
+			s.requireScope(auth.ScopeAdmin),
+			s.requireWorkspaceProviderWrite,
+			s.requireUnrestrictedPaths,
+		).Put("/v1/providers/{kind}", s.handleSetProvider)
+		r.With(
+			s.requireScope(auth.ScopeAdmin),
+			s.requireWorkspaceProviderWrite,
+			s.requireUnrestrictedPaths,
+		).Post("/v1/providers/{kind}/test", s.handleTestProvider)
+		r.With(
+			s.requireScope(auth.ScopeAdmin),
+			s.requireWorkspaceProviderWrite,
+			s.requireUnrestrictedPaths,
+		).Post("/v1/providers/embedding/reindex", s.handleReindexEmbedding)
 
 		// Timeline (SPEC §F6.3)
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/timeline", s.handleTimeline)
 
 		// Faces (SPEC §F6.1, F6.2)
-		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/faces", s.handleFaceList)
-		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/faces/{id}/files", s.handleFaceFiles)
-		r.With(s.requireScope(auth.ScopeWrite)).Post("/v1/faces/{id}/name", s.handleFaceName)
-		r.With(s.requireScope(auth.ScopeWrite)).Post("/v1/faces/{id}/merge", s.handleFaceMerge)
+		r.With(s.requireScope(auth.ScopeRead), s.requireUnrestrictedPaths).Get("/v1/faces", s.handleFaceList)
+		r.With(s.requireScope(auth.ScopeRead), s.requireUnrestrictedPaths).Get("/v1/faces/{id}/files", s.handleFaceFiles)
+		r.With(s.requireScope(auth.ScopeWrite), s.requireUnrestrictedPaths).Post("/v1/faces/{id}/name", s.handleFaceName)
+		r.With(s.requireScope(auth.ScopeWrite), s.requireUnrestrictedPaths).Post("/v1/faces/{id}/merge", s.handleFaceMerge)
 
 		// Folders (SPEC §6.3)
 		r.With(s.requireScope(auth.ScopeWrite)).Post("/v1/folders", s.handleCreateFolder)
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/folders", s.handleListFolders)
-		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/folders/tree", s.handleFolderTree)
+		r.With(s.requireScope(auth.ScopeRead), s.requireUnrestrictedPaths).Get("/v1/folders/tree", s.handleFolderTree)
 		r.With(s.requireScope(auth.ScopeWrite)).Patch("/v1/folders/{id}", s.handlePatchFolder)
 		r.With(s.requireScope(auth.ScopeDelete), s.requireWorkspaceDelete).Delete("/v1/folders/{id}", s.handleDeleteFolder)
 	})
@@ -163,7 +266,8 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 			w.Header().Add("Vary", "Origin")
 			if r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Workspace-ID")
+				w.Header().Set("Access-Control-Allow-Headers",
+					"Authorization, Content-Type, Idempotency-Key, X-Workspace-ID")
 				w.Header().Set("Access-Control-Max-Age", "600")
 				w.WriteHeader(http.StatusNoContent)
 				return
@@ -197,6 +301,25 @@ func (s *Server) logRequest(next http.Handler) http.Handler {
 	})
 }
 
+// requestTimeoutMiddleware keeps the bounded 60-second default for ordinary
+// API calls while allowing a separately configured, longer transfer budget.
+func (s *Server) requestTimeoutMiddleware(next http.Handler) http.Handler {
+	bounded := middleware.Timeout(60 * time.Second)(next)
+	transferTimeout := s.WorkspaceTransferTimeout
+	if transferTimeout <= 0 {
+		transferTimeout = 30 * time.Minute
+	}
+	transferBounded := middleware.Timeout(transferTimeout)(next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/workspaces/current/export", "/v1/workspaces/current/import":
+			transferBounded.ServeHTTP(w, r)
+		default:
+			bounded.ServeHTTP(w, r)
+		}
+	})
+}
+
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		header := r.Header.Get("Authorization")
@@ -216,6 +339,14 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 				hint = "token has expired; create a new one"
 			}
 			writeError(w, status, code, hint)
+			return
+		}
+		if t.RedactPII {
+			// Older releases persisted this flag without applying redaction.
+			// Refuse the token rather than returning unredacted source data under
+			// a misleading privacy promise.
+			writeError(w, http.StatusNotImplemented, "pii_redaction_unavailable",
+				"this token requests PII redaction, which is not implemented; revoke it and create a scoped token")
 			return
 		}
 		ctx := context.WithValue(r.Context(), ctxActor, u)
@@ -238,6 +369,117 @@ func (s *Server) requireScope(scope string) func(http.Handler) http.Handler {
 	}
 }
 
+// requireUnrestrictedPaths protects aggregate operations whose current
+// implementation cannot safely project a partial virtual tree/entity graph.
+// Path-restricted Agent tokens should use file/search/context operations.
+func (s *Server) requireUnrestrictedPaths(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if tokenHasPathRestrictions(r) {
+			writeError(w, http.StatusForbidden, "path_forbidden",
+				"operation requires an unrestricted token path")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func tokenHasPathRestrictions(r *http.Request) bool {
+	tok, _ := r.Context().Value(ctxToken).(*auth.Token)
+	if tok == nil || len(tok.Paths) == 0 {
+		return false
+	}
+	for _, p := range tok.Paths {
+		if p == pathx.Root {
+			return false
+		}
+	}
+	return true
+}
+
+func tokenAllowsPath(r *http.Request, raw string) bool {
+	if !tokenHasPathRestrictions(r) {
+		return true
+	}
+	candidate, err := pathx.Normalize(raw)
+	if err != nil {
+		return false
+	}
+	tok := r.Context().Value(ctxToken).(*auth.Token)
+	for _, allowed := range tok.Paths {
+		if allowed == "" {
+			continue
+		}
+		norm, err := pathx.Normalize(allowed)
+		if err == nil && pathx.IsDescendantOrSelf(candidate, norm) {
+			return true
+		}
+	}
+	return false
+}
+
+func requireTokenPath(w http.ResponseWriter, r *http.Request, raw string) bool {
+	if tokenAllowsPath(r, raw) {
+		return true
+	}
+	writeError(w, http.StatusForbidden, "path_forbidden",
+		"token is not authorized for virtual path "+raw)
+	return false
+}
+
+func delegatedTokenPaths(parent, requested []string) ([]string, error) {
+	parentRestricted := true
+	if len(parent) == 0 {
+		parentRestricted = false
+	}
+	for _, p := range parent {
+		if p == pathx.Root {
+			parentRestricted = false
+			break
+		}
+	}
+	if !parentRestricted {
+		return requested, nil
+	}
+	if len(requested) == 0 {
+		return append([]string(nil), parent...), nil
+	}
+
+	out := make([]string, 0, len(requested))
+	for _, raw := range requested {
+		if raw == "" {
+			return nil, errors.New("delegated token path cannot be empty")
+		}
+		child, err := pathx.Normalize(raw)
+		if err != nil {
+			return nil, err
+		}
+		allowed := false
+		for _, parentPath := range parent {
+			if parentPath == "" {
+				continue
+			}
+			normParent, err := pathx.Normalize(parentPath)
+			if err == nil && pathx.IsDescendantOrSelf(child, normParent) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return nil, fmt.Errorf("delegated path %s exceeds caller authorization", child)
+		}
+		out = append(out, child)
+	}
+	return out, nil
+}
+
+func hideUnauthorizedFile(w http.ResponseWriter, r *http.Request, raw string) bool {
+	if tokenAllowsPath(r, raw) {
+		return true
+	}
+	writeError(w, http.StatusNotFound, "not_found", "no such file")
+	return false
+}
+
 func (s *Server) workspaceMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.Workspace == nil {
@@ -245,14 +487,16 @@ func (s *Server) workspaceMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		actor := r.Context().Value(ctxActor).(*auth.User)
-		var requested *uuid.UUID
-		if raw := strings.TrimSpace(r.Header.Get("X-Workspace-ID")); raw != "" {
-			id, err := uuid.Parse(raw)
-			if err != nil {
-				writeError(w, http.StatusBadRequest, "bad_workspace_id", "X-Workspace-ID must be a UUID")
+		tok := r.Context().Value(ctxToken).(*auth.Token)
+		requested, err := requestedWorkspace(r.Header.Get("X-Workspace-ID"), tok.WorkspaceID)
+		if err != nil {
+			if errors.Is(err, errTokenWorkspaceMismatch) {
+				writeError(w, http.StatusForbidden, "token_workspace_forbidden",
+					"token is bound to a different workspace")
 				return
 			}
-			requested = &id
+			writeError(w, http.StatusBadRequest, "bad_workspace_id", "X-Workspace-ID must be a UUID")
+			return
 		}
 		ws, err := s.Workspace.Resolve(r.Context(), actor.ID, requested)
 		if err != nil {
@@ -268,6 +512,23 @@ func (s *Server) workspaceMiddleware(next http.Handler) http.Handler {
 		ctx = context.WithValue(ctx, ctxUser, owner)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+var errTokenWorkspaceMismatch = errors.New("token workspace mismatch")
+
+func requestedWorkspace(raw string, bound *uuid.UUID) (*uuid.UUID, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return bound, nil
+	}
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	if bound != nil && id != *bound {
+		return nil, errTokenWorkspaceMismatch
+	}
+	return &id, nil
 }
 
 func (s *Server) requireWorkspaceDelete(next http.Handler) http.Handler {
@@ -289,6 +550,44 @@ func (s *Server) requireWorkspaceProviderWrite(next http.Handler) http.Handler {
 			return
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) requireWorkspaceTransfer(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch currentWorkspace(r).Role {
+		case workspace.RoleOwner, workspace.RoleAdmin:
+			next.ServeHTTP(w, r)
+		default:
+			writeError(
+				w,
+				http.StatusForbidden,
+				"forbidden",
+				"workspace role does not allow workspace transfer",
+			)
+		}
+	})
+}
+
+func (s *Server) requireWorkspaceTransferCapacity(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.WorkspaceTransferGate == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		select {
+		case s.WorkspaceTransferGate <- struct{}{}:
+			defer func() { <-s.WorkspaceTransferGate }()
+			next.ServeHTTP(w, r)
+		default:
+			w.Header().Set("Retry-After", "5")
+			writeError(
+				w,
+				http.StatusTooManyRequests,
+				"workspace_transfer_busy",
+				"workspace transfer capacity is full; retry later",
+			)
+		}
 	})
 }
 
@@ -363,7 +662,7 @@ func (s *Server) issueSession(w http.ResponseWriter, u *auth.User, status int) {
 		ttl = 24 * time.Hour
 	}
 	exp := time.Now().Add(ttl)
-	plain, tok, err := s.Auth.CreateToken(context.Background(), u.ID, "session-"+time.Now().Format("20060102-150405"),
+	plain, tok, err := s.Auth.CreateToken(context.Background(), u.ID, nil, "session-"+time.Now().Format("20060102-150405"),
 		auth.AllScopes, nil, &exp, false)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", err.Error())
@@ -396,6 +695,11 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
+	if req.RedactPII {
+		writeError(w, http.StatusUnprocessableEntity, "pii_redaction_unavailable",
+			"redact_pii is not implemented; use workspace/path scopes and do not rely on silent redaction")
+		return
+	}
 	var exp *time.Time
 	if req.ExpiresIn != "" {
 		d, err := time.ParseDuration(req.ExpiresIn)
@@ -406,18 +710,44 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		t := time.Now().Add(d)
 		exp = &t
 	}
-	plain, tok, err := s.Auth.CreateToken(r.Context(), u.ID, req.Name, req.Scopes, req.Paths, exp, req.RedactPII)
+	callerToken := r.Context().Value(ctxToken).(*auth.Token)
+	// Session tokens are intentionally unbound root credentials used by a
+	// person to mint long-lived Agent tokens. A workspace-bound Agent token
+	// may delegate, but never outside its own path or beyond its own lifetime.
+	if callerToken.WorkspaceID != nil {
+		delegated, err := delegatedTokenPaths(callerToken.Paths, req.Paths)
+		if err != nil {
+			writeError(w, http.StatusForbidden, "token_delegation_forbidden", err.Error())
+			return
+		}
+		req.Paths = delegated
+		if callerToken.ExpiresAt != nil {
+			if exp == nil {
+				inherited := *callerToken.ExpiresAt
+				exp = &inherited
+			} else if exp.After(*callerToken.ExpiresAt) {
+				writeError(w, http.StatusForbidden, "token_delegation_forbidden",
+					"delegated token cannot outlive the caller token")
+				return
+			}
+		}
+	}
+	ws := currentWorkspace(r)
+	plain, tok, err := s.Auth.CreateToken(
+		r.Context(), u.ID, &ws.ID, req.Name, req.Scopes, req.Paths, exp, req.RedactPII,
+	)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "create_failed", err.Error())
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"id":         tok.ID,
-		"name":       tok.Name,
-		"scopes":     tok.Scopes,
-		"paths":      tok.Paths,
-		"expires_at": tok.ExpiresAt,
-		"token":      plain, // one-time plaintext
+		"id":           tok.ID,
+		"name":         tok.Name,
+		"scopes":       tok.Scopes,
+		"paths":        tok.Paths,
+		"workspace_id": tok.WorkspaceID,
+		"expires_at":   tok.ExpiresAt,
+		"token":        plain, // one-time plaintext
 	})
 }
 
@@ -427,6 +757,16 @@ func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
+	}
+	caller := r.Context().Value(ctxToken).(*auth.Token)
+	if caller.WorkspaceID != nil {
+		filtered := tokens[:0]
+		for _, token := range tokens {
+			if token.WorkspaceID != nil && *token.WorkspaceID == *caller.WorkspaceID {
+				filtered = append(filtered, token)
+			}
+		}
+		tokens = filtered
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tokens": tokens})
 }
@@ -438,7 +778,13 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_id", err.Error())
 		return
 	}
-	if err := s.Auth.RevokeToken(r.Context(), u.ID, id); err != nil {
+	caller := r.Context().Value(ctxToken).(*auth.Token)
+	if caller.WorkspaceID != nil {
+		err = s.Auth.RevokeTokenInWorkspace(r.Context(), u.ID, id, *caller.WorkspaceID)
+	} else {
+		err = s.Auth.RevokeToken(r.Context(), u.ID, id)
+	}
+	if err != nil {
 		if errors.Is(err, auth.ErrTokenNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "no such token")
 			return
@@ -501,10 +847,23 @@ func (s *Server) handlePutFile(w http.ResponseWriter, r *http.Request) {
 		}
 		targetPath = r.FormValue("path")
 	}
+	normalizedTarget, err := pathx.Normalize(targetPath)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_path", err.Error())
+		return
+	}
+	if !requireTokenPath(w, r, normalizedTarget) {
+		return
+	}
 
 	res, err := s.File.Put(r.Context(), u.ID, name, mime, targetPath, size, tags, body)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "put_failed", err.Error())
+		return
+	}
+	if res.Deduped && !tokenAllowsPath(r, res.File.Path) {
+		writeError(w, http.StatusForbidden, "path_forbidden",
+			"matching content already exists outside this token's authorized paths")
 		return
 	}
 	status := http.StatusCreated
@@ -551,6 +910,9 @@ func (s *Server) handleGetFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
+	if !hideUnauthorizedFile(w, r, f.Path) {
+		return
+	}
 	writeJSON(w, http.StatusOK, f)
 }
 
@@ -559,6 +921,18 @@ func (s *Server) handleGetContent(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_id", err.Error())
+		return
+	}
+	meta, err := s.File.Get(r.Context(), u.ID, id)
+	if err != nil {
+		if errors.Is(err, file.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "no such file")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	if !hideUnauthorizedFile(w, r, meta.Path) {
 		return
 	}
 	f, rc, err := s.File.Content(r.Context(), u.ID, id)
@@ -585,10 +959,11 @@ func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
 	u := r.Context().Value(ctxUser).(*auth.User)
 	q := r.URL.Query()
 	f := file.ListFilter{
-		Tag:    q.Get("tag"),
-		Type:   q.Get("type"),
-		Path:   q.Get("path"),
-		Prefix: q.Get("prefix"),
+		Tag:          q.Get("tag"),
+		Type:         q.Get("type"),
+		Path:         q.Get("path"),
+		Prefix:       q.Get("prefix"),
+		AllowedPaths: r.Context().Value(ctxToken).(*auth.Token).Paths,
 	}
 	if f.Path != "" && f.Prefix != "" {
 		writeError(w, http.StatusBadRequest, "bad_filter", "use either ?path= or ?prefix=, not both")
@@ -651,9 +1026,27 @@ func (s *Server) handlePatchFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
+	current, err := s.File.Get(r.Context(), u.ID, id)
+	if err != nil {
+		writeFileMutateError(w, err)
+		return
+	}
+	if !hideUnauthorizedFile(w, r, current.Path) {
+		return
+	}
 	if req.Name == nil && req.Path == nil {
 		writeError(w, http.StatusBadRequest, "no_op", "supply at least one of `name` or `path`")
 		return
+	}
+	if req.Path != nil {
+		dest, err := pathx.Normalize(*req.Path)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_path", err.Error())
+			return
+		}
+		if !requireTokenPath(w, r, dest) {
+			return
+		}
 	}
 	var (
 		out *file.File
@@ -684,6 +1077,14 @@ func (s *Server) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_id", err.Error())
 		return
 	}
+	f, err := s.File.Get(r.Context(), u.ID, id)
+	if err != nil {
+		writeFileMutateError(w, err)
+		return
+	}
+	if !hideUnauthorizedFile(w, r, f.Path) {
+		return
+	}
 	if err := s.File.Delete(r.Context(), u.ID, id); err != nil {
 		writeFileMutateError(w, err)
 		return
@@ -706,6 +1107,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Query string  `json:"query"`
+		Scope string  `json:"scope,omitempty"`
 		Type  string  `json:"type,omitempty"`
 		Route string  `json:"route,omitempty"`
 		Since *string `json:"since,omitempty"`
@@ -716,12 +1118,30 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_body", err.Error())
 		return
 	}
+	if strings.TrimSpace(req.Query) == "" {
+		writeError(w, http.StatusBadRequest, "bad_query", "query is required")
+		return
+	}
+	switch req.Route {
+	case "", search.RouteAuto, search.RouteText, search.RouteVisual:
+	default:
+		writeError(w, http.StatusBadRequest, "bad_route", "route must be auto, text, or visual")
+		return
+	}
+	scope, err := pathx.Normalize(req.Scope)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_scope", err.Error())
+		return
+	}
+	tok := r.Context().Value(ctxToken).(*auth.Token)
 	q := search.Query{
-		UserID: u.ID,
-		Text:   req.Query,
-		Route:  req.Route,
-		Type:   req.Type,
-		Limit:  req.Limit,
+		UserID:       u.ID,
+		Text:         req.Query,
+		Route:        req.Route,
+		Type:         req.Type,
+		PathPrefix:   scope,
+		AllowedPaths: tok.Paths,
+		Limit:        req.Limit,
 	}
 	if req.Since != nil {
 		t, err := time.Parse("2006-01-02", *req.Since)
@@ -745,7 +1165,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	hits, err := s.Search.Search(r.Context(), q)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "search_failed", err.Error())
+		if s.Log != nil {
+			s.Log.Error("search.failed", "err", err)
+		}
+		writeError(w, http.StatusBadGateway, "search_unavailable", "memory search is temporarily unavailable")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -765,12 +1188,16 @@ func (s *Server) handleFileRelated(w http.ResponseWriter, r *http.Request) {
 	}
 	// Ensure the file actually belongs to the user — keeps `?file_id=` from
 	// leaking existence between users.
-	if _, err := s.File.Get(r.Context(), u.ID, id); err != nil {
+	src, err := s.File.Get(r.Context(), u.ID, id)
+	if err != nil {
 		if errors.Is(err, file.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "no such file")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	if !hideUnauthorizedFile(w, r, src.Path) {
 		return
 	}
 	if s.Relator == nil {
@@ -786,7 +1213,8 @@ func (s *Server) handleFileRelated(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	hits, err := s.Relator.Get(r.Context(), u.ID, id, typ, limit)
+	tok := r.Context().Value(ctxToken).(*auth.Token)
+	hits, err := s.Relator.Get(r.Context(), u.ID, id, typ, tok.Paths, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
@@ -866,6 +1294,14 @@ func (s *Server) handleCreateFolder(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing_path", "supply `path` (absolute, e.g. `/Photos/2012`)")
 		return
 	}
+	norm, err := pathx.Normalize(req.Path)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_path", err.Error())
+		return
+	}
+	if !requireTokenPath(w, r, norm) {
+		return
+	}
 	f, err := s.Folder.Create(r.Context(), u.ID, req.Path)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "create_failed", err.Error())
@@ -884,6 +1320,14 @@ func (s *Server) handleListFolders(w http.ResponseWriter, r *http.Request) {
 	parent := r.URL.Query().Get("parent")
 	if parent == "" {
 		parent = "/"
+	}
+	norm, err := pathx.Normalize(parent)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_path", err.Error())
+		return
+	}
+	if !requireTokenPath(w, r, norm) {
+		return
 	}
 	folders, files, err := s.Folder.List(r.Context(), u.ID, parent)
 	if err != nil {
@@ -932,6 +1376,9 @@ func (s *Server) handlePatchFolder(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
+	if !requireTokenPath(w, r, cur.Path) {
+		return
+	}
 	var req folderPatchReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
@@ -941,17 +1388,36 @@ func (s *Server) handlePatchFolder(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "no_op", "supply `name` and/or `parent_path`")
 		return
 	}
+	destParent := pathx.Parent(cur.Path)
+	if req.ParentPath != nil {
+		destParent, err = pathx.Normalize(*req.ParentPath)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_parent_path", err.Error())
+			return
+		}
+	}
+	destName := cur.Name
+	if req.Name != nil {
+		destName = *req.Name
+	}
+	destPath, err := pathx.Join(destParent, destName)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_path", err.Error())
+		return
+	}
+	if !requireTokenPath(w, r, destPath) {
+		return
+	}
 	curPath := cur.Path
 	if req.ParentPath != nil {
 		if err := s.Folder.Move(r.Context(), u.ID, curPath, *req.ParentPath); err != nil {
 			writeFolderMutateError(w, err)
 			return
 		}
-		curPath = *req.ParentPath
-		if curPath == "/" {
-			curPath = "/" + cur.Name
-		} else {
-			curPath = curPath + "/" + cur.Name
+		curPath, err = pathx.Join(destParent, cur.Name)
+		if err != nil {
+			writeFolderMutateError(w, err)
+			return
 		}
 	}
 	if req.Name != nil {
@@ -985,6 +1451,9 @@ func (s *Server) handleDeleteFolder(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
+	if !requireTokenPath(w, r, cur.Path) {
+		return
+	}
 	if err := s.Folder.Delete(r.Context(), u.ID, cur.Path, recursive); err != nil {
 		writeFolderMutateError(w, err)
 		return
@@ -998,6 +1467,12 @@ func writeFolderMutateError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "not_found", "no such folder")
 	case errors.Is(err, folder.ErrNotEmpty):
 		writeError(w, http.StatusConflict, "not_empty", "folder is not empty; pass ?recursive=true to delete its contents")
+	case errors.Is(err, folder.ErrContainsMemories):
+		writeError(w, http.StatusConflict, "contains_memories",
+			"folder contains durable memories; forget them explicitly before deleting the folder")
+	case errors.Is(err, folder.ErrContainsTaskState):
+		writeError(w, http.StatusConflict, "contains_task_checkpoints",
+			"folder contains immutable Agent task checkpoints; explicitly re-scope the task before moving or deleting the folder")
 	case errors.Is(err, folder.ErrCycle):
 		writeError(w, http.StatusBadRequest, "cycle", "cannot move folder into itself or a descendant")
 	case errors.Is(err, folder.ErrConflict):

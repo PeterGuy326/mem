@@ -74,11 +74,20 @@ func TestMCP_InitializeHandshake(t *testing.T) {
 
 func TestMCP_ToolsListReflectsRegistry(t *testing.T) {
 	reg := tools.New()
+	maximum := 200
 	_ = reg.Register(tools.Tool{
 		Name:        "mem_demo",
 		Description: "demo",
-		InputSchema: tools.Schema{Type: "object"},
-		Run:         func(context.Context, map[string]any) (any, error) { return "ok", nil },
+		InputSchema: tools.Schema{
+			Type: "object",
+			Properties: map[string]tools.Property{
+				"limit": {
+					Type:    "integer",
+					Maximum: &maximum,
+				},
+			},
+		},
+		Run: func(context.Context, map[string]any) (any, error) { return "ok", nil },
 	})
 	srv, buf := newTestServer(reg)
 
@@ -104,6 +113,11 @@ func TestMCP_ToolsListReflectsRegistry(t *testing.T) {
 	}
 	if schema["type"] != "object" {
 		t.Fatalf("schema.type: %v", schema["type"])
+	}
+	properties := schema["properties"].(map[string]any)
+	limit := properties["limit"].(map[string]any)
+	if limit["maximum"] != float64(200) {
+		t.Fatalf("schema maximum: %v", limit["maximum"])
 	}
 }
 

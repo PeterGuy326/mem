@@ -9,7 +9,10 @@ export type IndexStatus = 'pending' | 'processing' | 'done' | 'failed';
 export type FileKind = 'image' | 'doc' | 'audio' | 'video' | 'pdf' | 'text' | 'other';
 
 /** Coarse type filter exposed in /v1/search (see SPEC §8.1 mem_search). */
-export type SearchTypeFilter = 'image' | 'doc' | 'audio' | 'any';
+// The backend currently treats this value as a MIME prefix. "doc" is not a
+// valid prefix for text, PDF, and Office files, so the UI deliberately omits
+// that misleading filter until the API grows a document alias.
+export type SearchTypeFilter = 'image' | 'audio' | 'any';
 
 export type TokenScope = 'search' | 'read' | 'write' | 'delete' | 'admin';
 
@@ -86,6 +89,9 @@ export interface SearchResult {
   snippet: string | null;
   /** Which retrieval channel produced this hit (for tinting / debugging). */
   channel?: 'visual' | 'text' | 'metadata' | 'fused';
+  evidence_id?: string;
+  content_sha256?: string;
+  chunk_index?: number;
 }
 
 export interface SearchResponse {
@@ -125,4 +131,475 @@ export interface ApiError {
   error: string;
   hint?: string;
   status: number;
+}
+
+// ---- Workspace / capabilities ----
+
+export type WorkspaceRole = 'owner' | 'admin' | 'member' | string;
+
+export interface Workspace {
+  id: string;
+  name: string;
+  resource_owner_user_id: string;
+  role: WorkspaceRole;
+  created_at: string;
+}
+
+export interface Capabilities {
+  deployment_mode: string;
+  registration_mode: string;
+  workspace: Workspace;
+  features: {
+    context: boolean;
+    handoff: boolean;
+    memory?: boolean;
+    ask?: boolean;
+    workspace_export: boolean;
+    workspace_import: boolean;
+  };
+  handoff_schema_versions?: number[];
+  workspace_restore_modes: WorkspaceRestoreMode[];
+  workspace_bundle_schema_versions: number[];
+  permissions: {
+    read: boolean;
+    search: boolean;
+    write: boolean;
+    delete: boolean;
+    provider_read: boolean;
+    provider_modify: boolean;
+    workspace_export: boolean;
+    workspace_import: boolean;
+  };
+}
+
+// ---- Portable workspace transfer ----
+
+export type WorkspaceRestoreMode = 'fresh';
+
+export interface WorkspaceObjectCounts {
+  folders: number;
+  files: number;
+  memories: number;
+  memory_events: number;
+  tasks: number;
+  checkpoints: number;
+  checkpoint_refs: number;
+  checkpoint_payloads: number;
+  blobs: number;
+  blob_bytes: number;
+}
+
+export interface WorkspaceImportResult {
+  bundle_id: string;
+  archive_sha256: string;
+  source_workspace_id: string;
+  imported_at: string;
+  counts: WorkspaceObjectCounts;
+  replayed: boolean;
+}
+
+export interface WorkspaceImportConflict {
+  kind: string;
+  resource?: string;
+  value?: string;
+}
+
+export interface WorkspaceImportConflictResponse {
+  error: 'workspace_import_conflict';
+  hint: string;
+  conflicts: WorkspaceImportConflict[];
+  /** Confirmed lower bound when the server caps conflict enumeration. */
+  total?: number;
+  truncated?: boolean;
+}
+
+// ---- Structured Agent memory control plane ----
+
+export const MEMORY_KINDS = [
+  'observation',
+  'decision',
+  'preference',
+  'task_state',
+  'fact',
+  'note',
+  'artifact',
+] as const;
+
+export type MemoryKind = (typeof MEMORY_KINDS)[number];
+export type MemoryLifecycle = 'active' | 'archived';
+export type MemoryLifecycleFilter = MemoryLifecycle | 'all';
+export type MemoryFeedbackAction = 'useful' | 'not_useful' | 'pin' | 'unpin';
+export type MemoryForgetReason = 'user_request' | 'incorrect' | 'sensitive' | 'expired' | 'other';
+
+/**
+ * Full public memory row returned by the detail endpoint. Content and
+ * provenance values are untrusted source data and must be rendered as plain
+ * text / JSON; lifecycle mutations use MemoryControlState instead.
+ */
+export interface AgentMemoryRecord {
+  id: string;
+  workspace_id: string;
+  created_by_user_id?: string;
+  kind: MemoryKind;
+  content: string;
+  attributes: Record<string, unknown>;
+  path: string;
+  event_at?: string | null;
+  source_type: string;
+  source_ref?: string;
+  source_file_id?: string;
+  source_file_sha256?: string;
+  source_locator: Record<string, unknown>;
+  producer_agent?: string;
+  producer_session?: string;
+  producer_task?: string;
+  content_sha256: string;
+  lifecycle_status: MemoryLifecycle;
+  state_version: number;
+  pinned: boolean;
+  pinned_at?: string | null;
+  useful_count: number;
+  not_useful_count: number;
+  feedback_score: number;
+  feedback_count: number;
+  feedback_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MemoryProvenance {
+  workspace_id: string;
+  created_by_user_id?: string;
+  event_at?: string | null;
+  source_type: string;
+  source_ref?: string;
+  source_file_id?: string;
+  source_file_sha256?: string;
+  source_locator: Record<string, unknown>;
+  producer_agent?: string;
+  producer_session?: string;
+  producer_task?: string;
+}
+
+/** Full `GET /v1/memories/{id}` projection. */
+export interface AgentMemory extends AgentMemoryRecord {
+  citation: string;
+  provenance: MemoryProvenance;
+}
+
+/** Bounded list projection; full content and JSON provenance stay detail-only. */
+export interface AgentMemorySummary {
+  id: string;
+  workspace_id: string;
+  kind: MemoryKind;
+  excerpt: string;
+  content_length: number;
+  path: string;
+  event_at?: string | null;
+  source_type: string;
+  source_ref?: string;
+  source_file_id?: string;
+  source_file_sha256?: string;
+  producer_agent?: string;
+  producer_session?: string;
+  producer_task?: string;
+  content_sha256: string;
+  lifecycle_status: MemoryLifecycle;
+  state_version: number;
+  pinned: boolean;
+  pinned_at?: string | null;
+  useful_count: number;
+  not_useful_count: number;
+  feedback_score: number;
+  feedback_count: number;
+  feedback_at?: string | null;
+  citation: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ListMemoriesResponse {
+  memories: AgentMemorySummary[];
+  next_cursor?: string | null;
+}
+
+export interface MemoryEvent {
+  id: string;
+  /** Older detail/audit projections may include it; control responses omit it. */
+  workspace_id?: string;
+  memory_id: string;
+  action: MemoryFeedbackAction | 'archive' | 'restore' | 'forget';
+  actor_user_id?: string;
+  expected_version: number;
+  resulting_version: number;
+  reason?: MemoryForgetReason;
+  created_at: string;
+}
+
+/**
+ * Bounded control projection. Mutations never echo memory content, paths, or
+ * provenance into an Agent/MCP context.
+ */
+export interface MemoryControlState {
+  id: string;
+  lifecycle_status: MemoryLifecycle;
+  state_version: number;
+  pinned: boolean;
+  pinned_at?: string | null;
+  useful_count: number;
+  not_useful_count: number;
+  feedback_score: number;
+  feedback_count: number;
+  feedback_at?: string | null;
+  updated_at: string;
+}
+
+/** `feedback`, `archive`, and `restore` return only control state. */
+export interface MemoryMutationResponse {
+  memory: MemoryControlState;
+  event: MemoryEvent;
+  replayed: boolean;
+}
+
+/** `forget` deliberately returns only the retry-safe public tombstone fields. */
+export interface MemoryForgetResponse {
+  memory_id: string;
+  state_version: number;
+  forgotten_at?: string;
+  event: MemoryEvent;
+  replayed: boolean;
+}
+
+// ---- Portable Agent handoff v1 ----
+
+export type TaskStatus = 'in_progress' | 'ready' | 'blocked' | 'complete';
+export type CheckpointKind = 'checkpoint' | 'handoff';
+
+export interface HandoffProgress {
+  summary: string;
+  completed: string[];
+}
+
+export interface HandoffDecision {
+  summary: string;
+  rationale?: string;
+  references: string[];
+}
+
+export interface HandoffNextStep {
+  summary: string;
+  references: string[];
+}
+
+export interface HandoffBlocker {
+  summary: string;
+  needs?: string;
+  references: string[];
+}
+
+export interface HandoffArtifact {
+  uri: string;
+  role?: string;
+  sha256?: string;
+  required: boolean;
+}
+
+export interface HandoffVCSState {
+  revision?: string;
+  branch?: string;
+  dirty?: boolean;
+  status_summary?: string;
+}
+
+export interface HandoffWorkspaceState {
+  working_directory?: string;
+  vcs?: HandoffVCSState;
+}
+
+export interface HandoffState {
+  status: TaskStatus;
+  goal: string;
+  progress: HandoffProgress;
+  decisions: HandoffDecision[];
+  next_steps: HandoffNextStep[];
+  blockers: HandoffBlocker[];
+  open_questions: string[];
+  artifacts: HandoffArtifact[];
+  workspace_state?: HandoffWorkspaceState;
+}
+
+export interface HandoffProducer {
+  agent_id: string;
+  session_id?: string;
+}
+
+export interface HandoffV1 {
+  contract: 'mem.handoff';
+  schema_version: 1;
+  checkpoint_kind: CheckpointKind;
+  task_key: string;
+  base_checkpoint_id?: string | null;
+  scope_path: string;
+  state: HandoffState;
+  producer: HandoffProducer;
+}
+
+export interface AgentTask {
+  id: string;
+  workspace_id: string;
+  task_key: string;
+  scope_path: string;
+  head_checkpoint_id?: string | null;
+  head_sequence: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface HandoffReference {
+  checkpoint_id: string;
+  ordinal: number;
+  relation: string;
+  uri: string;
+  expected_sha256?: string;
+  required: boolean;
+  metadata: unknown;
+}
+
+export interface CheckpointSummary {
+  id: string;
+  workspace_id: string;
+  task_id: string;
+  task_key: string;
+  sequence: number;
+  checkpoint_kind: CheckpointKind;
+  contract: string;
+  schema_version: number;
+  base_checkpoint_id?: string | null;
+  scope_path: string;
+  status: TaskStatus;
+  progress_excerpt: string;
+  progress_length: number;
+  completed_count: number;
+  reference_count: number;
+  payload_sha256: string;
+  producer_agent: string;
+  producer_session?: string;
+  created_at: string;
+}
+
+export interface CheckpointRecord {
+  id: string;
+  workspace_id: string;
+  task_id: string;
+  task_key: string;
+  sequence: number;
+  checkpoint_kind: CheckpointKind;
+  contract: string;
+  schema_version: number;
+  base_checkpoint_id?: string | null;
+  scope_path: string;
+  handoff: HandoffV1;
+  payload_sha256: string;
+  created_by_user_id?: string;
+  producer_agent: string;
+  producer_session?: string;
+  created_at: string;
+  references: HandoffReference[];
+}
+
+export type ReferenceResolutionStatus =
+  | 'available'
+  | 'unavailable'
+  | 'hash_mismatch'
+  | 'external_unverified'
+  | string;
+
+export interface ResolvedHandoffReference {
+  uri: string;
+  relation: string;
+  required: boolean;
+  status: ReferenceResolutionStatus;
+  citation?: string;
+  actual_sha256?: string;
+}
+
+export interface ContextLocator {
+  kind: 'text_chunk' | 'visual_caption' | 'memory_text' | string;
+  chunk_index?: number;
+}
+
+export interface ContextProvenance {
+  source_type: string;
+  source_ref?: string;
+  source_file_id?: string;
+  source_file_sha256?: string;
+  source_locator?: unknown;
+  agent_id?: string;
+  session_id?: string;
+  task_id?: string;
+}
+
+export interface ContextEvidence {
+  evidence_id: string;
+  source_kind: 'file' | 'memory' | string;
+  source_id: string;
+  citation: string;
+  file_id?: string;
+  memory_id?: string;
+  memory_kind?: string;
+  name?: string;
+  path: string;
+  mime?: string;
+  content_sha256: string;
+  content_url: string;
+  locator: ContextLocator;
+  excerpt: string;
+  score: number;
+  route: string;
+  reason?: string;
+  provenance?: ContextProvenance;
+  timeline_at?: string;
+}
+
+export interface ContextPackWarning {
+  source: string;
+  code: string;
+  message: string;
+}
+
+export interface ContextPack {
+  query: string;
+  scope: string;
+  source: string;
+  evidence: ContextEvidence[];
+  total_chars: number;
+  partial: boolean;
+  warnings?: ContextPackWarning[];
+  retrieved_at: string;
+}
+
+export interface ResumeWarning {
+  code: string;
+  message: string;
+}
+
+export interface ResumeRequest {
+  checkpoint_id?: string;
+  scope?: string;
+  focus?: string;
+  limit?: number;
+  max_chars?: number;
+}
+
+export interface ResumeResponse {
+  contract: 'mem.resume' | string;
+  schema_version: number;
+  task: AgentTask;
+  checkpoint: CheckpointRecord;
+  resolved: ResolvedHandoffReference[];
+  missing: ResolvedHandoffReference[];
+  complete: boolean;
+  context?: ContextPack;
+  warnings?: ResumeWarning[];
+  retrieved_at: string;
 }

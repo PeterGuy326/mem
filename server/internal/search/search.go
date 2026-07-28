@@ -15,14 +15,17 @@ package search
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/PeterGuy326/mem/server/internal/indexmeta"
 	"github.com/PeterGuy326/mem/server/internal/workerclient"
 )
 
@@ -50,16 +53,19 @@ const (
 
 // Hit is one search result.
 type Hit struct {
-	FileID     uuid.UUID  `json:"file_id"`
-	Name       string     `json:"name"`
-	Path       string     `json:"path"`
-	MIME       string     `json:"mime"`
-	Score      float32    `json:"score"`   // 1 - cosine_distance, in [-1, 1]
-	Snippet    string     `json:"snippet"` // best matching chunk (text route) or caption (visual)
-	Source     string     `json:"source"`  // "text" | "visual" — which route produced this hit
-	Summary    *string    `json:"summary,omitempty"`
-	TimelineAt *time.Time `json:"timeline_at,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
+	EvidenceID    string     `json:"evidence_id"`
+	FileID        uuid.UUID  `json:"file_id"`
+	Name          string     `json:"name"`
+	Path          string     `json:"path"`
+	MIME          string     `json:"mime"`
+	ContentSHA256 string     `json:"content_sha256"`
+	ChunkIndex    int        `json:"chunk_index"` // -1 for whole-file visual evidence
+	Score         float32    `json:"score"`       // 1 - cosine_distance, in [-1, 1]
+	Snippet       string     `json:"snippet"`     // best matching chunk (text route) or caption (visual)
+	Source        string     `json:"source"`      // "text" | "visual" — which route produced this hit
+	Summary       *string    `json:"summary,omitempty"`
+	TimelineAt    *time.Time `json:"timeline_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
 }
 
 // Query is the request shape.
@@ -67,10 +73,18 @@ type Query struct {
 	UserID uuid.UUID
 	Text   string
 	Route  string // "" defaults to RouteAuto
-	Type   string // mime prefix filter, e.g. "image" => "image/%"
-	Since  *time.Time
-	Until  *time.Time
-	Limit  int
+	// RequireText makes auto retrieval fail closed when its primary text route
+	// fails. Agent context packs enable this so a provider/index fault cannot
+	// be misreported as "no memory". The visual route remains optional because
+	// supported text-only deployments do not install CLIP.
+	RequireText  bool
+	Type         string // mime prefix filter, e.g. "image" => "image/%"
+	PathPrefix   string // optional requested virtual-folder scope
+	AllowedPaths []string
+	Since        *time.Time
+	Until        *time.Time
+	Limit        int
+	SnippetChars int // default 240; context packs request a larger evidence window
 }
 
 // Search dispatches by route. Returns hits sorted by score descending,
@@ -88,6 +102,12 @@ func (s *Service) Search(ctx context.Context, q Query) ([]Hit, error) {
 	}
 	if q.Limit > 100 {
 		q.Limit = 100
+	}
+	if q.SnippetChars <= 0 {
+		q.SnippetChars = 240
+	}
+	if q.SnippetChars > 16_000 {
+		q.SnippetChars = 16_000
 	}
 	if s.worker == nil || !s.worker.Enabled() {
 		return nil, fmt.Errorf("search disabled: worker not configured")
@@ -107,7 +127,10 @@ func (s *Service) Search(ctx context.Context, q Query) ([]Hit, error) {
 
 // searchText runs the original text-embedding ANN route.
 func (s *Service) searchText(ctx context.Context, q Query, text string) ([]Hit, error) {
-	embSpec := s.userEmbeddingSpec(ctx, q.UserID)
+	embSpec, err := s.userEmbeddingSpec(ctx, q.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve text embedding space: %w", err)
+	}
 	embCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	vec, err := s.worker.EmbedTextWith(embCtx, text, embSpec)
@@ -142,28 +165,44 @@ func (s *Service) searchVisual(ctx context.Context, q Query, text string) ([]Hit
 
 // searchAuto runs text + visual in parallel, merges by file_id keeping the
 // best-scoring row per file, re-sorts by score.
+type autoResult struct {
+	hits []Hit
+	err  error
+}
+
 func (s *Service) searchAuto(ctx context.Context, q Query, text string) ([]Hit, error) {
-	type result struct {
-		hits []Hit
-		err  error
-	}
-	textCh := make(chan result, 1)
-	visualCh := make(chan result, 1)
+	textCh := make(chan autoResult, 1)
+	visualCh := make(chan autoResult, 1)
 
 	go func() {
 		hits, err := s.searchText(ctx, q, text)
-		textCh <- result{hits, err}
+		textCh <- autoResult{hits, err}
 	}()
 	go func() {
 		hits, err := s.searchVisual(ctx, q, text)
-		visualCh <- result{hits, err}
+		visualCh <- autoResult{hits, err}
 	}()
 	tr := <-textCh
 	vr := <-visualCh
+	return s.mergeAutoResults(q, tr, vr)
+}
 
-	// Tolerate one-route failures (e.g. no visual embeddings exist yet).
+func (s *Service) mergeAutoResults(q Query, tr, vr autoResult) ([]Hit, error) {
 	if tr.err != nil && vr.err != nil {
 		return nil, fmt.Errorf("both routes failed: text=%v; visual=%v", tr.err, vr.err)
+	}
+	if q.RequireText && tr.err != nil {
+		return nil, fmt.Errorf("incomplete auto retrieval: text route failed: %w", tr.err)
+	}
+	// Interactive search may tolerate one failed route when the other route
+	// produced evidence. Never turn a failed route plus an empty fallback into
+	// a successful empty result, because that is indistinguishable from "no
+	// memory" to callers.
+	if tr.err != nil && len(vr.hits) == 0 {
+		return nil, fmt.Errorf("text route failed and visual route returned no evidence: %w", tr.err)
+	}
+	if vr.err != nil && len(tr.hits) == 0 {
+		return nil, fmt.Errorf("visual route failed and text route returned no evidence: %w", vr.err)
 	}
 
 	// Merge by file_id, keep max score.
@@ -194,10 +233,8 @@ func (s *Service) searchAuto(ctx context.Context, q Query, text string) ([]Hit, 
 func (s *Service) runTextANN(ctx context.Context, q Query, vec []float32) ([]Hit, error) {
 	args := []any{vectorLiteral(vec), q.UserID}
 	where := []string{"f.user_id = $2"}
-	if q.Type != "" {
-		args = append(args, q.Type+"/%")
-		where = append(where, fmt.Sprintf("f.mime LIKE $%d", len(args)))
-	}
+	args, where = appendPathFilters(args, where, q.PathPrefix, q.AllowedPaths)
+	args, where = appendMIMEFilter(args, where, q.Type)
 	if q.Since != nil {
 		args = append(args, *q.Since)
 		where = append(where, fmt.Sprintf("COALESCE(f.timeline_at, f.created_at) >= $%d", len(args)))
@@ -210,13 +247,17 @@ func (s *Service) runTextANN(ctx context.Context, q Query, vec []float32) ([]Hit
 	limitIdx := len(args)
 
 	sql := fmt.Sprintf(`
-		SELECT file_id, name, path, mime, score, snippet, summary, timeline_at, created_at
+		SELECT evidence_id, file_id, name, path, mime, content_sha256,
+		       chunk_index, score, snippet, summary, timeline_at, created_at
 		FROM (
 		  SELECT DISTINCT ON (f.id)
+		    e.id::text    AS evidence_id,
 		    f.id          AS file_id,
 		    f.name        AS name,
 		    f.path        AS path,
 		    f.mime        AS mime,
+		    f.sha256      AS content_sha256,
+		    e.chunk_index AS chunk_index,
 		    1 - (e.embedding <=> $1::vector) AS score,
 		    e.chunk_text  AS snippet,
 		    f.summary     AS summary,
@@ -231,17 +272,15 @@ func (s *Service) runTextANN(ctx context.Context, q Query, vec []float32) ([]Hit
 		LIMIT $%d
 	`, strings.Join(where, " AND "), limitIdx)
 
-	return s.scanHits(ctx, sql, args, RouteText)
+	return s.scanHits(ctx, sql, args, RouteText, q.SnippetChars)
 }
 
 // runVisualANN issues the visual-route SQL.
 func (s *Service) runVisualANN(ctx context.Context, q Query, vec []float32) ([]Hit, error) {
 	args := []any{vectorLiteral(vec), q.UserID}
 	where := []string{"f.user_id = $2"}
-	if q.Type != "" {
-		args = append(args, q.Type+"/%")
-		where = append(where, fmt.Sprintf("f.mime LIKE $%d", len(args)))
-	}
+	args, where = appendPathFilters(args, where, q.PathPrefix, q.AllowedPaths)
+	args, where = appendMIMEFilter(args, where, q.Type)
 	if q.Since != nil {
 		args = append(args, *q.Since)
 		where = append(where, fmt.Sprintf("COALESCE(f.timeline_at, f.created_at) >= $%d", len(args)))
@@ -256,7 +295,8 @@ func (s *Service) runVisualANN(ctx context.Context, q Query, vec []float32) ([]H
 	// One row per file in embeddings_visual — no DISTINCT ON needed.
 	// The "snippet" for visual hits is the file caption (if any).
 	sql := fmt.Sprintf(`
-		SELECT f.id, f.name, f.path, f.mime,
+		SELECT 'visual:' || f.id::text AS evidence_id,
+		       f.id, f.name, f.path, f.mime, f.sha256, -1 AS chunk_index,
 		       (1 - (e.embedding <=> $1::vector))::real AS score,
 		       COALESCE(f.caption, '') AS snippet,
 		       f.summary, f.timeline_at, f.created_at
@@ -264,14 +304,14 @@ func (s *Service) runVisualANN(ctx context.Context, q Query, vec []float32) ([]H
 		  JOIN files f ON f.id = e.file_id
 		 WHERE %s
 		 ORDER BY e.embedding <=> $1::vector ASC
-		 LIMIT $%d
+	 LIMIT $%d
 	`, strings.Join(where, " AND "), limitIdx)
 
-	return s.scanHits(ctx, sql, args, RouteVisual)
+	return s.scanHits(ctx, sql, args, RouteVisual, q.SnippetChars)
 }
 
 // scanHits is the common cursor → []Hit loop. Tags every hit with its source route.
-func (s *Service) scanHits(ctx context.Context, sql string, args []any, route string) ([]Hit, error) {
+func (s *Service) scanHits(ctx context.Context, sql string, args []any, route string, snippetChars int) ([]Hit, error) {
 	rows, err := s.pool.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, fmt.Errorf("search query (%s): %w", route, err)
@@ -282,22 +322,99 @@ func (s *Service) scanHits(ctx context.Context, sql string, args []any, route st
 	for rows.Next() {
 		var h Hit
 		if err := rows.Scan(
-			&h.FileID, &h.Name, &h.Path, &h.MIME,
+			&h.EvidenceID, &h.FileID, &h.Name, &h.Path, &h.MIME,
+			&h.ContentSHA256, &h.ChunkIndex,
 			&h.Score, &h.Snippet, &h.Summary, &h.TimelineAt, &h.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan hit: %w", err)
 		}
-		if len(h.Snippet) > 240 {
-			// Truncate on a byte budget but drop any partial trailing
-			// multibyte char — a raw [:237] byte slice can split a UTF-8
-			// rune (e.g. Chinese text), yielding invalid UTF-8 that later
-			// breaks gRPC marshaling in the ask/chat path.
-			h.Snippet = strings.ToValidUTF8(h.Snippet[:237], "") + "..."
-		}
+		h.Snippet = truncateRunes(h.Snippet, snippetChars)
 		h.Source = route
 		out = append(out, h)
 	}
 	return out, rows.Err()
+}
+
+func appendPathFilters(args []any, where []string, requested string, allowed []string) ([]any, []string) {
+	if requested != "" && requested != "/" {
+		args = append(args, requested)
+		n := len(args)
+		where = append(where, fmt.Sprintf(
+			"(f.path = $%d OR left(f.path, length($%d) + 1) = $%d || '/')",
+			n, n, n,
+		))
+	}
+	if len(allowed) == 0 {
+		return args, where
+	}
+	for _, p := range allowed {
+		if p == "/" {
+			return args, where
+		}
+	}
+	clauses := make([]string, 0, len(allowed))
+	for _, p := range allowed {
+		if p == "" {
+			continue
+		}
+		args = append(args, p)
+		n := len(args)
+		clauses = append(clauses, fmt.Sprintf(
+			"(f.path = $%d OR left(f.path, length($%d) + 1) = $%d || '/')",
+			n, n, n,
+		))
+	}
+	if len(clauses) > 0 {
+		where = append(where, "("+strings.Join(clauses, " OR ")+")")
+	} else {
+		// A non-empty but invalid/legacy allow-list must never broaden access.
+		where = append(where, "FALSE")
+	}
+	return args, where
+}
+
+// appendMIMEFilter translates the product-level search categories into MIME
+// predicates shared by the text and visual routes. "any" means no filter;
+// "doc" is intentionally broader than the nonexistent "doc/*" MIME tree.
+func appendMIMEFilter(args []any, where []string, raw string) ([]any, []string) {
+	kind := strings.ToLower(strings.TrimSpace(raw))
+	switch kind {
+	case "", "any":
+		return args, where
+	case "doc", "document":
+		patterns := []string{
+			"text/%",
+			"application/pdf",
+			"application/msword",
+			"application/vnd.openxmlformats-officedocument.%",
+			"application/vnd.oasis.opendocument.%",
+			"application/rtf",
+			"application/epub+zip",
+		}
+		args = append(args, patterns)
+		where = append(where, fmt.Sprintf("f.mime LIKE ANY($%d::text[])", len(args)))
+		return args, where
+	default:
+		if strings.Contains(kind, "/") {
+			args = append(args, kind)
+			where = append(where, fmt.Sprintf("f.mime = $%d", len(args)))
+			return args, where
+		}
+		args = append(args, kind+"/%")
+		where = append(where, fmt.Sprintf("f.mime LIKE $%d", len(args)))
+		return args, where
+	}
+}
+
+func truncateRunes(s string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	rs := []rune(s)
+	if len(rs) <= limit {
+		return s
+	}
+	return string(rs[:limit]) + "..."
 }
 
 // sortHitsByScoreDesc — small enough corpus that sort.Slice is fine.
@@ -307,19 +424,31 @@ func sortHitsByScoreDesc(hits []Hit) {
 	})
 }
 
-// userEmbeddingSpec reads the user's saved embedding provider. Empty string
-// means "fall back to worker default" (which then matches the original
-// indexing run).
-func (s *Service) userEmbeddingSpec(ctx context.Context, userID uuid.UUID) string {
+// userEmbeddingSpec resolves one explicit vector space. Existing corpus
+// metadata takes precedence over mutable worker environment defaults.
+func (s *Service) userEmbeddingSpec(ctx context.Context, userID uuid.UUID) (string, error) {
 	var spec string
 	err := s.pool.QueryRow(ctx,
 		`SELECT spec FROM provider_settings WHERE user_id = $1 AND kind = 'embedding'`,
 		userID,
 	).Scan(&spec)
-	if err != nil {
-		return ""
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return "", err
 	}
-	return spec
+	corpusProvider, hasCorpus, err := indexmeta.TextProvider(ctx, s.pool, userID)
+	if err != nil {
+		return "", err
+	}
+	if hasCorpus {
+		if spec != "" && spec != corpusProvider {
+			return "", fmt.Errorf(
+				"configured provider %q differs from corpus provider %q",
+				spec, corpusProvider,
+			)
+		}
+		return corpusProvider, nil
+	}
+	return spec, nil
 }
 
 // vectorLiteral matches indexer.vectorLiteral — kept private here to avoid an

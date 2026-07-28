@@ -1,6 +1,10 @@
 # 本地运行 mem 全栈（裸机 · 无 Docker）
 
-这台机器没有 Docker，所以整套栈用**本地进程**拉起，不走 `docker compose`。
+本文用于启动完整开发栈和手工 smoke。可重复的单元、Race、PostgreSQL 集成、
+Web 浏览器验收及其通过标准统一见 [TESTING.md](TESTING.md)。
+
+在没有 Docker 的 macOS 开发环境中，整套栈可用**本地进程**拉起，不走
+`docker compose`。
 一条命令起、一条命令停，运行时数据全部落在 `.dev/`（已 gitignore）。
 
 ```
@@ -9,7 +13,7 @@
 │ :50051   │           │  :8787   │           │          │
 └────┬─────┘           └────┬─────┘           └──────────┘
      │ Ollama :11434        │ pgvector :5432
-     │ (nomic + llama3.1)   │ MinIO    :9100
+     │ (nomic + VLM 可选)   │ MinIO    :9100
      ▼                      ▼
   本地 Ollama          PostgreSQL + MinIO（本地进程）
 ```
@@ -51,16 +55,25 @@
      make build-memd build-mem   # -> bin/memd, bin/mem
      ```
 
-2. **Ollama**：必须已在 `http://localhost:11434` 运行，且已 pull：
+2. **Ollama（仅文件向量/多模态链路需要）**：要验证文件语义检索时，需在
+   `http://localhost:11434` 运行并 pull：
    - `nomic-embed-text`（768 维文本 embedding，对上 schema `embeddings_text vector(768)`）
-   - `llama3.1`（RAG 问答的 chat LLM）
    - 视觉模型（minicpm-v）**可选缺失**：影响的是 caption 文本，不影响图搜图本身。
      图片的视觉向量由 **CLIP**（`clip:ViT-B-32`，见下）产出，与 Ollama 无关。
    - **图搜图 = CLIP**：装了 `--extra clip` 后，图片入库时由 CLIP image-tower
      编码成 512 维视觉向量写进 `embeddings_visual`，搜索时 query 文本由 CLIP
      text-tower 编码到同一空间做 ANN——这才是"以文搜图"。若 CLIP 没装，图片
-     走优雅降级（caption 文本向量是 768 维，被维度守卫 `VISUAL_EMBED_DIM=512`
-     拒绝跳过），`embeddings_visual` 为空、图搜图搜不到东西。
+     仍会保留 caption / EXIF 等元数据，但不会伪造不兼容的视觉向量；
+     `embeddings_visual` 为空时，图搜图不会返回该图片。
+   - **中文质量边界**：当前默认 `clip:ViT-B-32:openai` 是已经跑通的英文基线，
+     不是已达标的中文模型。“草地上的金毛”在固定三图集上尚未稳定命中金毛；
+     不要把中文命令能执行误写成中文召回已验收。候选多语言模型必须先通过
+     `worker/tests/test_multilingual_visual_acceptance.py`，并配套全量重建带版本的
+     visual index，才能切换生产默认值。当前证据见
+     [acceptance/VISUAL_SEARCH_BASELINE.md](acceptance/VISUAL_SEARCH_BASELINE.md)。
+
+   结构化记忆的 `remember → context --source memory` 只依赖 PostgreSQL 和
+   memd，不调用 Worker、embedding、VLM 或回答模型，可在这些模型全部离线时验证。
 
 ## 用户回来怎么用（日常）
 
@@ -79,21 +92,132 @@ export MEM_TOKEN=$(curl -s -X POST http://localhost:8787/v1/auth/login \
 # 文本搜索（文档语义检索）
 bin/mem --server http://localhost:8787 search "a dog on a meadow" --format json
 
+# Agent 写入结构化记忆（无需回答模型，提交后立即可召回）
+bin/mem --server http://localhost:8787 remember \
+  "合同复核优先检查自动续费条款" \
+  --kind decision --path /Contracts \
+  --idempotency-key local-contract-review-v1 --agent-id codex
+
+# 只召回结构化记忆；也可用 --source all 联合文件与记忆
+bin/mem --server http://localhost:8787 context \
+  "合同复核优先检查什么" \
+  --source memory --memory-kind decision --scope /Contracts --format json
+
+# Claude Code / Codex 共用的版本化任务交接（示例不依赖 Worker）
+cat <<'JSON' | bin/mem --server http://localhost:8787 checkpoint \
+  --input - --idempotency-key contract-review-handoff-v1
+{
+  "contract": "mem.handoff",
+  "schema_version": 1,
+  "checkpoint_kind": "handoff",
+  "task_key": "contract-review/v1",
+  "base_checkpoint_id": null,
+  "scope_path": "/Contracts",
+  "state": {
+    "status": "ready",
+    "goal": "完成合同复核并给出可追溯的风险结论",
+    "progress": {
+      "summary": "已确认优先检查自动续费条款",
+      "completed": ["建立结构化复核决定"]
+    },
+    "decisions": [],
+    "next_steps": [
+      {"summary": "检查解约窗口和违约责任", "references": []}
+    ],
+    "blockers": [],
+    "open_questions": [],
+    "artifacts": []
+  },
+  "producer": {"agent_id": "claude-code", "session_id": "local-demo"}
+}
+JSON
+
+# 另一个 Agent/设备只需同一 workspace 的 read token 即可恢复确定性状态
+bin/mem --server http://localhost:8787 resume \
+  "contract-review/v1" --format json
+
+# 整个 Agent workspace 跨工具/跨设备迁移。导出不会覆盖已有文件；
+# 确认要替换时显式加 --force。
+bin/mem --server http://localhost:8787 workspace export \
+  --output ./agent-workspace.membundle
+
+# 在目标 mem 实例或目标 workspace 中恢复。当前只实现 fresh 模式：
+# 目标中任何对象冲突都会以 409 列出冲突项，不会静默合并。
+# 脚本/CI 没有交互式 TTY，必须显式传 --yes。
+bin/mem --server http://target-host:8787 workspace import \
+  --input ./agent-workspace.membundle --mode fresh --yes
+
+# 两个命令都要求：
+#   1) admin token（admin 是当前 scope 模型的层级超集）；
+#   2) Token 没有局部 paths[] 限制（/ 视为完整路径）；
+#   3) 当前 workspace 角色为 owner 或 admin。
+# capabilities 会分别返回 permissions.workspace_export /
+# permissions.workspace_import，以及当前真实支持的 restore modes 和 bundle schema。
+
+# REST 等价写入：幂等键必须放 Header，不放 body
+curl -i -X POST http://localhost:8787/v1/memories \
+  -H "Authorization: Bearer $MEM_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: local-rest-decision-v1' \
+  -d '{"kind":"decision","content":"合同复核优先检查自动续费条款","path":"/Contracts","source":{"type":"agent"},"producer":{"agent_id":"codex"}}'
+# 首次为 201/replayed:false；原请求重试为 200/replayed:true；
+# 同 key 修改归一化后的 payload 为 409/idempotency_conflict。
+
 # 图搜图（以文搜图，走 CLIP 视觉空间）：
 #   --route visual 只搜图片；--route auto（默认）text+visual 并行融合
 bin/mem put scripts/demo_data/images/golden_retriever_grass.jpg   # 先灌示例照片
 bin/mem search "golden retriever on grass" --route visual          # 金毛排首位
 bin/mem search "a cat" --route visual
 
-# RAG 问答（llama3.1 生成 + 出处）
-curl -s -X POST http://localhost:8787/v1/ask \
+# 为外部 Agent 召回带出处的上下文（mem 不生成答案）
+curl -s -X POST http://localhost:8787/v1/context \
   -H "Authorization: Bearer $MEM_TOKEN" -H 'Content-Type: application/json' \
-  -d '{"question":"What breed is the dog and what is it like?"}' | jq
+  -d '{"query":"What breed is the dog and what is it like?","source":"file","limit":8,"max_chars":12000}' | jq
+
+# source=all 时调用方必须检查 partial/warnings；source=memory 可单独验证
+# 模型离线时的记忆闭环。Agent Token 推荐 search,read,write，并且 path 必须落在
+# Token paths[] 范围内。workspace 通过 --workspace / X-Workspace-ID 选择；
+# 已绑定 workspace 的 Token 不能借此切换到其他 workspace。
 
 # 4. 收工（保留数据，下次秒起）
 bash scripts/dev_down.sh
 # 或彻底清空数据： bash scripts/dev_down.sh --purge
 ```
+
+### Workspace 迁移资源保护
+
+导入和导出默认共用 8 GiB 的归档硬上限、30 分钟总超时，并且每个 memd
+最多并行处理 2 个迁移请求。超过归档上限返回 `413`；并发额度已满时返回
+`429` 和 `Retry-After`；临时卷空间或配额耗尽时返回
+`507 workspace_transfer_storage_exhausted`。这些限制不会改变普通请求的
+60 秒超时。
+
+```bash
+export MEM_WORKSPACE_TRANSFER_TIMEOUT=30m
+export MEM_WORKSPACE_BUNDLE_MAX_BYTES=8589934592
+export MEM_WORKSPACE_TRANSFER_MAX_CONCURRENT=2
+
+# 可选：将临时归档放到专用目录。目录必须恰好是 0700。
+install -d -m 700 .dev/workspace-transfer
+export MEM_WORKSPACE_TRANSFER_TMP_DIR="$PWD/.dev/workspace-transfer"
+```
+
+`MEM_WORKSPACE_BUNDLE_MAX_BYTES` 同时约束上传体和导出归档；memd 会先完整生成并
+检查导出归档大小，再发送任何响应内容。临时文件权限为 `0600`，请求结束后清理；
+memd 不会递归删除所配置的临时目录。
+
+### 从未记录 embedding provider 的旧库升级
+
+迁移会把旧文本向量标成 `legacy:unknown`，不会根据今天的配置猜测历史模型。
+这是有意的 fail-closed 行为：先显式选择一个与当前向量列维度相符的模型，再重建：
+
+```bash
+mem provider set embedding ollama:nomic-embed-text
+mem provider reindex
+```
+
+重建期间 text route 暂停返回不确定结果；所有文件完成后，查询和语料都会固定到
+同一个 provider。模型切换的最终形态仍是版本化 index generation + 原子激活。
 
 ## Web 前端接真后端
 
@@ -132,8 +256,8 @@ npm run build      # 产物在 web/dist/
   让整个索引事务回滚把文件标记 `failed`。
 - **图片 visual provider 显式化**：indexer 对 `image/*` 文件显式下发
   `visual_embedding_provider=clip:ViT-B-32`（`server/internal/indexer/indexer.go`），
-  不再依赖 worker 默认值碰巧是 CLIP。用户也可在 `provider_settings` 里存
-  `kind='visual_embedding'` 覆盖。
+  不再依赖 worker 默认值碰巧是 CLIP。当前不允许在线覆盖 visual provider，
+  避免索引与查询进入不同向量空间；待 versioned index generation 落地后再开放。
 
 ## 放自己的照片（图搜图）
 
@@ -148,19 +272,26 @@ bin/mem put ~/Pictures/your_photo.jpg
 bin/mem put ~/Pictures --recursive
 
 # 等 index_status=done 后，以文搜图：
-bin/mem search "草地上的金毛" --route visual
+bin/mem search "a golden retriever standing on green grass" --route visual
 bin/mem search "snowy mountain at sunset" --route visual
 ```
 
 `scripts/demo_data/images/` 下自带 3 张开放许可示例照片（Wikimedia Commons：
 金毛犬 / 猫 / 河流风景），可直接 `bin/mem put` 进去验证图搜图。换成你自己的照片
-只需放进任意目录再 `put` 即可——CLIP 是通用视觉模型，对真实照片才有意义
-（纯噪声/占位图搜不出有意义结果）。
+只需放进任意目录再 `put` 即可。默认 checkpoint 的英文描述能力已通过这组三图
+基线；中文查询仍受上面的质量边界约束。纯噪声或占位图本身也无法形成有意义的
+语义召回。
 
 ## 常见问题排查
 
 - `dev_up.sh` 卡在某个 `wait_for`：去 `.dev/logs/<svc>.log` 看尾部。
-- `seed_demo_data.sh` 断言超时：CPU 跑 llama3.1/nomic 慢，调大
+- `seed_demo_data.sh` 断言超时：CPU 跑 nomic/CLIP 较慢，调大
   `MEM_INGEST_TIMEOUT_SEC=600 bash scripts/seed_demo_data.sh`。
 - `CREATE EXTENSION vector failed`：当前 postgres 版本没有匹配的 pgvector
   `.so`；装 `brew install postgresql@17` 并重跑 `dev_up.sh`。
+- `idempotency_conflict`：同一幂等键已绑定另一份归一化请求；重试原请求或换一个
+  能稳定标识新事件的 key，不要随机重试冲突请求。
+- `path_forbidden`：记忆路径或来源文件超出 Token `paths[]`；缩小目标路径或使用
+  被明确授权的 Token。
+- `token_workspace_forbidden`：Token 已绑定其他 workspace；切回其绑定 workspace，
+  或在目标 workspace 中重新创建 Token。

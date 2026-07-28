@@ -42,8 +42,8 @@ type ProcessorServiceClient interface {
 	//  3. Run the Processor + Provider(s)
 	//  4. Return a ProcessResponse with everything needed to persist
 	Process(ctx context.Context, in *ProcessRequest, opts ...grpc.CallOption) (*ProcessResponse, error)
-	// Chat is an LLM-completion bridge used by the server's RAG `Ask` flow.
-	// The worker forwards messages to the user's configured LLMProvider.
+	// Retired compatibility slot. Implementations MUST return UNIMPLEMENTED;
+	// final reasoning and answer generation belong to the external Agent.
 	Chat(ctx context.Context, in *ChatRequest, opts ...grpc.CallOption) (*ChatResponse, error)
 	// Liveness / readiness probe. Always cheap. Does NOT require external
 	// services (Ollama, S3) to be reachable.
@@ -98,8 +98,8 @@ type ProcessorServiceServer interface {
 	//  3. Run the Processor + Provider(s)
 	//  4. Return a ProcessResponse with everything needed to persist
 	Process(context.Context, *ProcessRequest) (*ProcessResponse, error)
-	// Chat is an LLM-completion bridge used by the server's RAG `Ask` flow.
-	// The worker forwards messages to the user's configured LLMProvider.
+	// Retired compatibility slot. Implementations MUST return UNIMPLEMENTED;
+	// final reasoning and answer generation belong to the external Agent.
 	Chat(context.Context, *ChatRequest) (*ChatResponse, error)
 	// Liveness / readiness probe. Always cheap. Does NOT require external
 	// services (Ollama, S3) to be reachable.

@@ -61,6 +61,7 @@ FROM python:3.11-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    MEM_WORKER_GRPC_HOST=0.0.0.0 \
     PATH="/app/.venv/bin:$PATH"
 
 # Minimal runtime libs (libgomp for some numeric wheels; libstdc++ comes by default).

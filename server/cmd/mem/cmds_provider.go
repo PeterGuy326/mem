@@ -24,22 +24,24 @@ type providerListResp struct {
 }
 
 type providerSetResp struct {
-	Setting        ProviderSetting `json:"setting"`
-	ReindexQueued  bool            `json:"reindex_queued"`
-	ReindexFiles   int             `json:"reindex_files,omitempty"`
-	PreviousDim    *int            `json:"previous_dim,omitempty"`
-	DimMigrationOK bool            `json:"dim_migration_ok"`
+	Setting         ProviderSetting `json:"setting"`
+	ReindexQueued   bool            `json:"reindex_queued"`
+	ReindexFiles    int             `json:"reindex_files,omitempty"`
+	ReindexRequired bool            `json:"reindex_required,omitempty"`
+	PreviousDim     *int            `json:"previous_dim,omitempty"`
+	DimMigrationOK  bool            `json:"dim_migration_ok"`
 }
 
 func newProviderCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "provider",
-		Short: "Manage AI model providers (Embedding / LLM / VLM)",
-		Long:  `View, set, and test the model providers used for indexing and search.`,
+		Short: "Manage indexing model providers (Embedding / VLM)",
+		Long:  `View, set, and test the models used to index and retrieve memory. The calling Agent owns answer generation.`,
 	}
 	cmd.AddCommand(newProviderListCmd())
 	cmd.AddCommand(newProviderSetCmd())
 	cmd.AddCommand(newProviderTestCmd())
+	cmd.AddCommand(newProviderReindexCmd())
 	return cmd
 }
 
@@ -93,19 +95,20 @@ func newProviderListCmd() *cobra.Command {
 func newProviderSetCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "set <kind> <vendor:model>",
-		Short: "Set provider for a kind. Embedding switches trigger an automatic re-index.",
+		Short: "Set an indexing provider",
 		Long: `Examples:
   mem provider set embedding ollama:nomic-embed-text
   mem provider set embedding openai:text-embedding-3-small
-  mem provider set llm anthropic:claude-opus-4-7
   mem provider set vlm ollama:minicpm-v
 
-When switching the embedding provider to one with a different output dimension,
-mem will automatically:
+Before setting the embedding provider, mem will:
   1. Probe the new provider to learn its output dim
-  2. ALTER embeddings_text.embedding TO vector(N) (TRUNCATE first)
-  3. Mark all your files as index_status='pending'
-  4. Enqueue an indexing task per file (visible in worker logs)`,
+  2. Reject a model whose dimension differs from the current vector schema
+  3. Refuse vector-space changes once a corpus exists, until a staged index
+     generation can be built and activated atomically
+
+Visual embeddings are currently fixed to clip:ViT-B-32 so indexing and query
+vectors cannot silently enter different spaces.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := resolveConfig("")
@@ -132,11 +135,14 @@ mem will automatically:
 				if resp.PreviousDim != nil {
 					prev = fmt.Sprintf("%d", *resp.PreviousDim)
 				}
-				fmt.Printf("dim migration: %s -> %d (embeddings_text re-typed, files marked pending)\n",
+				fmt.Printf("schema dimension compatible: %s -> %d\n",
 					prev, *resp.Setting.Dim)
 			}
 			if resp.ReindexQueued {
 				fmt.Printf("re-index queued: %d files\n", resp.ReindexFiles)
+			}
+			if resp.ReindexRequired {
+				fmt.Println("re-index required: run `mem provider reindex`")
 			}
 			return nil
 		},
@@ -144,11 +150,50 @@ mem will automatically:
 	return cmd
 }
 
+func newProviderReindexCmd() *cobra.Command {
+	var format string
+	cmd := &cobra.Command{
+		Use:   "reindex",
+		Short: "Rebuild all file indexes with the selected embedding provider",
+		Long: `Reprocess every file with the currently selected text embedding model.
+Use this explicit recovery operation after upgrading a legacy corpus whose
+historical provider identity was not recorded.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := resolveConfig("")
+			if err != nil {
+				return err
+			}
+			if cfg.Token == "" {
+				return newCliError(3, "not logged in", "run `mem auth login` first")
+			}
+			var resp struct {
+				Provider string `json:"provider"`
+				Files    int    `json:"files"`
+				Queued   int    `json:"queued"`
+				Failed   int    `json:"failed"`
+			}
+			if err := newHTTPClient(cfg).doJSON(
+				"POST", "/v1/providers/embedding/reindex", map[string]any{}, &resp,
+			); err != nil {
+				return err
+			}
+			if format == "json" {
+				return jsonOut(resp)
+			}
+			fmt.Printf("provider: %s\nfiles: %d\nqueued: %d\nfailed: %d\n",
+				resp.Provider, resp.Files, resp.Queued, resp.Failed)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&format, "format", "text", "text|json")
+	return cmd
+}
+
 func newProviderTestCmd() *cobra.Command {
 	var spec string
 	cmd := &cobra.Command{
 		Use:   "test <kind>",
-		Short: "Probe the provider for a kind (defaults to your saved spec)",
+		Short: "Probe an indexing provider (VLM makes one minimal real request)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := resolveConfig("")

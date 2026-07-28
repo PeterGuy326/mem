@@ -114,8 +114,7 @@ func newLogoutCmd() *cobra.Command {
 }
 
 func newAuthStatusCmd() *cobra.Command {
-	var server string
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:   "status",
 		Short: "Verify the current login and show its workspace access",
 		Args:  cobra.NoArgs,
@@ -128,7 +127,7 @@ func newAuthStatusCmd() *cobra.Command {
 				return fmt.Errorf("--format must be text or json, got %q", format)
 			}
 
-			cfg, err := resolveConfig(server)
+			cfg, err := resolveConfig("")
 			if err != nil {
 				return err
 			}
@@ -169,8 +168,6 @@ func newAuthStatusCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&server, "server", "", "memd base URL")
-	return cmd
 }
 
 type authWorkspace struct {
@@ -230,6 +227,7 @@ func newTokenCreateCmd() *cobra.Command {
 	var (
 		name      string
 		scopes    string
+		paths     []string
 		expiresIn string
 		format    string
 	)
@@ -250,6 +248,9 @@ func newTokenCreateCmd() *cobra.Command {
 				"name":   name,
 				"scopes": scopeList,
 			}
+			if len(paths) > 0 {
+				body["paths"] = paths
+			}
 			if expiresIn != "" {
 				body["expires_in"] = expiresIn
 			}
@@ -264,6 +265,12 @@ func newTokenCreateCmd() *cobra.Command {
 			fmt.Printf("id:     %v\n", resp["id"])
 			fmt.Printf("name:   %v\n", resp["name"])
 			fmt.Printf("scopes: %v\n", resp["scopes"])
+			if p, ok := resp["paths"]; ok {
+				fmt.Printf("paths:  %v\n", p)
+			}
+			if ws, ok := resp["workspace_id"]; ok && ws != nil {
+				fmt.Printf("workspace: %v\n", ws)
+			}
 			if exp, ok := resp["expires_at"]; ok && exp != nil {
 				fmt.Printf("expires_at: %v\n", exp)
 			}
@@ -273,6 +280,7 @@ func newTokenCreateCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&name, "name", "", "token name (required)")
 	cmd.Flags().StringVar(&scopes, "scope", "read", "comma-separated scopes (search,read,write,delete,admin)")
+	cmd.Flags().StringSliceVar(&paths, "path", nil, "allowed virtual path; repeat for multiple roots")
 	cmd.Flags().StringVar(&expiresIn, "expires", "", "Go duration (e.g. 720h)")
 	cmd.Flags().StringVar(&format, "format", "text", "text|json")
 	_ = cmd.MarkFlagRequired("name")

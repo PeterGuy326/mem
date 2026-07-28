@@ -1,0 +1,64 @@
+{
+  "contract": "mem.handoff",
+  "schema_version": 1,
+  "checkpoint_kind": "handoff",
+  "task_key": "mem-portable-agent-drive",
+  "base_checkpoint_id": null,
+  "scope_path": "/Projects/mem",
+  "state": {
+    "status": "in_progress",
+    "goal": "Build a portable drive that lets AI Agents and devices resume the same work.",
+    "progress": {
+      "summary": "The shared memory plane is working; the portable handoff contract is being implemented.",
+      "completed": [
+        "Added model-independent structured memory",
+        "Connected API, CLI and MCP to the same memory backend",
+        "Kept natural-language image search as a core product capability"
+      ]
+    },
+    "decisions": [
+      {
+        "summary": "Use a versioned, vendor-neutral handoff instead of copying private Agent transcripts.",
+        "rationale": "Claude Code, Codex and future Agents must interpret the same durable state.",
+        "references": [
+          "mem://memories/00000000-0000-0000-0000-000000000001"
+        ]
+      }
+    ],
+    "next_steps": [
+      {
+        "summary": "Implement checkpoint persistence and deterministic resume.",
+        "references": []
+      },
+      {
+        "summary": "Expose handoffs and restore status in the Web drive.",
+        "references": []
+      }
+    ],
+    "blockers": [],
+    "open_questions": [
+      "Which host-specific settings are safe and useful to migrate by default?"
+    ],
+    "artifacts": [
+      {
+        "uri": "mem://files/00000000-0000-0000-0000-000000000002",
+        "role": "project_goal",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "required": true
+      }
+    ],
+    "workspace_state": {
+      "working_directory": "/Projects/mem",
+      "vcs": {
+        "revision": "0123456789abcdef",
+        "branch": "codex/portable-handoff",
+        "dirty": true,
+        "status_summary": "Goal and handoff contract files are modified."
+      }
+    }
+  },
+  "producer": {
+    "agent_id": "claude-code",
+    "session_id": "session-example"
+  }
+}

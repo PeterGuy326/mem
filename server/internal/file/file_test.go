@@ -2,8 +2,10 @@ package file
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"testing"
 
@@ -148,4 +150,53 @@ func TestFileRenameValidation(t *testing.T) {
 	if err := pathx.ValidateName("perfectly fine.jpg"); err != nil {
 		t.Fatalf("unexpected rejection: %v", err)
 	}
+}
+
+func TestPutCommitFailurePreservesUploadedObject(t *testing.T) {
+	t.Parallel()
+	store := &recordingObjectStore{}
+	object := &uploadedObject{
+		store:         store,
+		key:           "users/test/object",
+		deleteOnError: true,
+	}
+	commitErr := errors.New("commit acknowledgement lost")
+	if err := commitFilePut(
+		context.Background(),
+		failingCommitter{err: commitErr},
+		object,
+	); !errors.Is(err, commitErr) {
+		t.Fatalf("commit error = %v, want %v", err, commitErr)
+	}
+
+	// Mirrors Put's deferred cleanup after commitFilePut returns an error.
+	object.cleanup()
+	if store.deleteCalls != 0 {
+		t.Fatalf("Delete calls = %d, want 0 after ambiguous commit", store.deleteCalls)
+	}
+}
+
+type failingCommitter struct {
+	err error
+}
+
+func (committer failingCommitter) Commit(context.Context) error {
+	return committer.err
+}
+
+type recordingObjectStore struct {
+	deleteCalls int
+}
+
+func (*recordingObjectStore) Put(context.Context, string, io.Reader, int64, string) error {
+	return nil
+}
+
+func (*recordingObjectStore) Get(context.Context, string) (io.ReadCloser, error) {
+	return io.NopCloser(bytes.NewReader(nil)), nil
+}
+
+func (store *recordingObjectStore) Delete(context.Context, string) error {
+	store.deleteCalls++
+	return nil
 }

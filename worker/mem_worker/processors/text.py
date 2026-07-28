@@ -4,11 +4,11 @@ W1 scope:
     1. Decode bytes as UTF-8 (with utf-8-sig + latin-1 fallbacks).
     2. Chunk into ~1000-char windows with 100-char overlap (configurable).
     3. Embed each chunk via the default text embedding provider.
-    4. Optionally summarize the whole document via the default LLM.
+    4. Optionally summarize only when a caller explicitly injects an LLM.
 
-Failures are non-fatal: if the LLM is unreachable we still return embeddings;
-if embedding fails we still return the summary. The pipeline-level status
-in the gRPC response will reflect this.
+The default indexing path is retrieval-only and does not invoke a general chat
+model. This keeps answer generation and reflective memory writes in the
+external Agent.
 """
 
 from __future__ import annotations
@@ -23,7 +23,6 @@ from ..providers import (
     Message,
     ProviderError,
     get_embedding_provider,
-    get_llm_provider,
 )
 from .base import EmbeddingRow, EmbeddingSet, FileRef, ProcessResult
 
@@ -67,11 +66,6 @@ class TextProcessor:
             self._embedder = get_embedding_provider(get_settings().default_embedding)
         return self._embedder
 
-    def _resolve_llm(self) -> LLMProvider:
-        if self._llm is None:
-            self._llm = get_llm_provider(get_settings().default_llm)
-        return self._llm
-
     # ---- main entrypoint ----
 
     def process(self, file: FileRef) -> ProcessResult:
@@ -114,11 +108,12 @@ class TextProcessor:
             log.warning("text.embed_failed", file_id=file.file_id, error=str(exc))
             result.metadata["embed_error"] = str(exc)
 
-        # 2. Summary (only for non-trivially-short documents).
-        if len(text) >= 200:
+        # 2. Optional summary. The default registry does not inject an LLM:
+        # external Agents own reasoning and write-back. Kept as an explicit
+        # hook for offline consolidation jobs.
+        if len(text) >= 200 and self._llm is not None:
             try:
-                llm = self._resolve_llm()
-                summary = llm.complete(
+                summary = self._llm.complete(
                     [
                         Message(
                             role="system",

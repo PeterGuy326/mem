@@ -13,8 +13,6 @@ Adding a new vendor:
 
 from __future__ import annotations
 
-from typing import Optional
-
 from . import anthropic as anthropic_mod
 from . import ollama as ollama_mod
 from . import openai as openai_mod
@@ -94,21 +92,3 @@ def get_asr_provider(spec: str) -> ASRProvider:
 
         return whisper_mod.FasterWhisperASRProvider(model=model)
     raise ProviderError(f"no ASRProvider for vendor {vendor!r}")
-
-
-# Convenience: build all three from defaults in one call.
-def build_default_providers(
-    *,
-    embedding_spec: Optional[str] = None,
-    llm_spec: Optional[str] = None,
-    vlm_spec: Optional[str] = None,
-) -> tuple[EmbeddingProvider, LLMProvider, VLMProvider]:
-    """Return ``(embed, llm, vlm)`` using settings defaults when not overridden."""
-    from ..config import get_settings  # local import to avoid cycles
-
-    settings = get_settings()
-    return (
-        get_embedding_provider(embedding_spec or settings.default_embedding),
-        get_llm_provider(llm_spec or settings.default_llm),
-        get_vlm_provider(vlm_spec or settings.default_vlm),
-    )

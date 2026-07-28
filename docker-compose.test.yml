@@ -1,0 +1,54 @@
+# Disposable test-only stack. Callers must provide a checkout/run-specific
+# project name so this cannot collide with development or another test run.
+name: ${MEM_TEST_PROJECT:?set MEM_TEST_PROJECT to an isolated Compose project name}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16@sha256:00ba258a66dac104fd5171074a0084462a64a1369d8513f3d0a634e2f24d15bc
+    environment:
+      POSTGRES_USER: mem
+      POSTGRES_PASSWORD: mem
+      POSTGRES_DB: ${MEM_TEST_DB_NAME:-mem_integration_test}
+    ports:
+      - "127.0.0.1:${MEM_TEST_PG_PORT:-55432}:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mem -d $${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    stop_grace_period: 5s
+
+  minio:
+    profiles: ["e2e"]
+    image: minio/minio:latest@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: mem
+      MINIO_ROOT_PASSWORD: mem-minio-password
+    ports:
+      - "127.0.0.1:${MEM_TEST_S3_PORT:-59100}:9000"
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    stop_grace_period: 5s
+
+  minio-init:
+    profiles: ["e2e"]
+    image: minio/mc:latest@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -eu
+      - -c
+      - |
+        mc alias set local http://minio:9000 mem mem-minio-password
+        mc mb --ignore-existing local/mem
+        mc anonymous set none local/mem

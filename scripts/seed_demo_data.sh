@@ -75,7 +75,7 @@ MEM_SERVER="${MEM_SERVER:-http://localhost:8787}"
 ADMIN_EMAIL="${MEM_ADMIN_EMAIL:-demo@mem.local}"
 ADMIN_PASSWORD="${MEM_ADMIN_PASSWORD:-demo-password-change-me}"
 TARGET_FOLDER="${MEM_DEMO_FOLDER:-/demo}"
-# llama3.1/nomic embedding on CPU is slow; default the ingest poll generously.
+# nomic embedding/CLIP on CPU can be slow; default the ingest poll generously.
 INGEST_TIMEOUT_SEC="${MEM_INGEST_TIMEOUT_SEC:-300}"
 # Bare-metal DB connection for the admin bootstrap (matches server/.env.example).
 MEM_DB_URL="${MEM_DB_URL:-postgres://mem:mem@localhost:5432/mem?sslmode=disable}"

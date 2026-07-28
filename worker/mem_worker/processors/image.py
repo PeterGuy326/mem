@@ -1,13 +1,12 @@
 """ImageProcessor — handles ``image/*``.
 
-W1 scope (this file):
+Current scope:
     1. Decode bytes via Pillow.
     2. Extract EXIF: capture datetime, GPS lat/lng (if any), camera make/model.
     3. Call a VLM provider to caption the image (default ``ollama:minicpm-v``).
-    4. Call an embedding provider to encode the *caption* as a placeholder
-       visual embedding. W2 will swap this for a real CLIP encoder.
+    4. Encode the image with CLIP into the shared visual search space.
     5. Return :class:`ProcessResult` with metadata, caption, tags, and
-       ``embeddings = {"visual": ..., "text": ...}``.
+       ``embeddings = {"visual": ...}``.
 
 Provider construction is deferred until ``process()`` so the worker can
 boot without Ollama running (gRPC HealthCheck still answers).
@@ -129,6 +128,13 @@ class ImageProcessor:
             result.metadata["vlm_error"] = str(exc)
         result.caption = caption or None
 
+        # Provider availability probes only need to prove that the selected
+        # VLM can inspect an image and return a caption. Stop here so a probe
+        # never loads CLIP/face models or calls unrelated providers.
+        if file.options.get("provider_probe") is True:
+            result.metadata["provider_probe"] = True
+            return result
+
         # 3. Visual embedding via the configured visual embedder.
         # If it has an embed_image() method (CLIP), use that for true visual
         # encoding; otherwise fall back to caption-text-embedding (W1 path).
@@ -192,6 +198,9 @@ class ImageProcessor:
                 )
         except (ProviderError, NotImplementedError) as exc:
             log.warning("image.embed_failed", file_id=file.file_id, error=str(exc))
+            result.metadata["embed_error"] = str(exc)
+        except Exception as exc:  # noqa: BLE001 — keep image metadata on provider bugs
+            log.exception("image.embed_unexpected", file_id=file.file_id)
             result.metadata["embed_error"] = str(exc)
 
         # 4. Face detection (opt-in via `face` extra). Each detected face

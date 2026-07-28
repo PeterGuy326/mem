@@ -143,6 +143,18 @@ def test_text_processor_chunks_and_embeds(monkeypatch):
     assert embedder.calls[0] == [row.chunk_text for row in r.embeddings["text"].rows]
 
 
+def test_text_processor_default_path_does_not_call_general_llm():
+    proc = TextProcessor(embedder=FakeEmbedder())
+    fref = FileRef(
+        file_id="f1", storage_uri="file:///x.txt", mime="text/plain",
+        sha256="", user_id="u", data=("long source text. " * 100).encode("utf-8"),
+    )
+    r = proc.process(fref)
+    assert "text" in r.embeddings
+    assert r.summary is None
+    assert "summary_error" not in r.metadata
+
+
 def test_text_processor_short_doc_skips_summary():
     embedder = FakeEmbedder()
     llm = FakeLLM()
@@ -197,6 +209,37 @@ def test_image_processor_runs_vlm_and_embeds():
     assert r.metadata["format"] == "PNG"
     assert r.metadata["width"] == 4
     assert r.metadata["height"] == 3
+
+
+def test_image_processor_provider_probe_stops_after_caption():
+    class MustNotRunEmbedder:
+        name = "unexpected:embedder"
+
+        def embed_image(self, images):
+            raise AssertionError("provider probe must not run visual embedding")
+
+        def embed_text(self, texts):
+            raise AssertionError("provider probe must not run text embedding")
+
+    vlm = FakeVLM(caption="a red probe image")
+    proc = ImageProcessor(vlm=vlm, embedder=MustNotRunEmbedder())
+    fref = FileRef(
+        file_id="provider-probe",
+        storage_uri="data:image/png;base64,...",
+        mime="image/png",
+        sha256="",
+        user_id="",
+        data=_png_bytes(),
+        options={"provider_probe": True},
+    )
+
+    r = proc.process(fref)
+
+    assert r.caption == "a red probe image"
+    assert r.metadata["provider_probe"] is True
+    assert r.embeddings == {}
+    assert r.entities == []
+    assert vlm.calls == 1
 
 
 def test_image_processor_handles_undecodable_bytes():

@@ -44,6 +44,9 @@ func TestCORSPreflightAllowedOrigin(t *testing.T) {
 	if allow := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(allow, "X-Workspace-ID") {
 		t.Fatalf("Allow-Headers = %q", allow)
 	}
+	if allow := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(allow, "Idempotency-Key") {
+		t.Fatalf("Allow-Headers missing Idempotency-Key = %q", allow)
+	}
 	if rec.Header().Get("Access-Control-Allow-Credentials") != "" {
 		t.Fatal("credentials must not be allowed")
 	}

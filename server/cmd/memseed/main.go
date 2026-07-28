@@ -28,7 +28,7 @@ func main() {
 		}
 	}
 	fmt.Println("user_id:", u.ID)
-	pt, t, err := a.CreateToken(ctx, u.ID, "demo", []string{"admin", "write", "read", "search", "delete"}, []string{}, nil, false)
+	pt, t, err := a.CreateToken(ctx, u.ID, nil, "demo", []string{"admin", "write", "read", "search", "delete"}, []string{}, nil, false)
 	if err != nil {
 		panic(err)
 	}

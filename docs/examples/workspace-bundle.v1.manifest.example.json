@@ -1,0 +1,96 @@
+{
+  "contract": "mem.workspace_bundle",
+  "schema_version": 1,
+  "bundle_id": "10000000-0000-4000-8000-000000000002",
+  "created_at": "2026-07-28T12:00:00Z",
+  "archive": {
+    "format": "zip64",
+    "layout": "fixed-v1",
+    "media_type": "application/vnd.mem.workspace-bundle+zip"
+  },
+  "source": {
+    "workspace_id": "10000000-0000-4000-8000-000000000001",
+    "workspace_name": "Portable Agent Drive",
+    "exporter": "memd",
+    "exporter_version": "0.4.0"
+  },
+  "scope": {
+    "path": "/",
+    "complete": true
+  },
+  "restore": {
+    "modes": [
+      "fresh",
+      "merge_conservative"
+    ],
+    "preserve_object_ids": true,
+    "path_rewrite": false
+  },
+  "indexes": {
+    "folders": {
+      "path": "objects/folders.ndjson",
+      "count": 1
+    },
+    "files": {
+      "path": "objects/files.ndjson",
+      "count": 2
+    },
+    "memories": {
+      "path": "objects/memories.ndjson",
+      "count": 1
+    },
+    "memory_events": {
+      "path": "objects/memory_events.ndjson",
+      "count": 1
+    },
+    "tasks": {
+      "path": "objects/tasks.ndjson",
+      "count": 1
+    },
+    "checkpoints": {
+      "path": "objects/checkpoints.ndjson",
+      "count": 2
+    },
+    "checkpoint_refs": {
+      "path": "objects/checkpoint_refs.ndjson",
+      "count": 2
+    }
+  },
+  "checkpoint_payloads": {
+    "path_prefix": "payloads/checkpoints/",
+    "count": 2
+  },
+  "blobs": {
+    "path_prefix": "blobs/sha256/",
+    "count": 1,
+    "total_size": 20
+  },
+  "checksums": {
+    "path": "checksums.sha256",
+    "algorithm": "sha256"
+  },
+  "exclusions": [
+    "auth.users",
+    "auth.password_hashes",
+    "auth.tokens",
+    "auth.token_hashes",
+    "auth.sessions",
+    "auth.workspace_memberships",
+    "provenance.user_ids",
+    "provenance.token_ids",
+    "memory.raw_idempotency_keys",
+    "storage.storage_keys",
+    "storage.presigned_urls",
+    "providers.settings",
+    "providers.credentials",
+    "runtime.environment",
+    "derived.embeddings_text",
+    "derived.embeddings_visual",
+    "derived.embeddings_face",
+    "derived.entities",
+    "derived.file_entities",
+    "derived.file_relations",
+    "runtime.worker_jobs",
+    "runtime.index_state"
+  ]
+}

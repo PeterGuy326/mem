@@ -20,6 +20,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/PeterGuy326/mem/server/internal/pathx"
 )
 
 // ScopeSearch / ScopeRead / ... are the canonical scope strings (SPEC §3 F7.3).
@@ -43,15 +45,16 @@ type User struct {
 
 // Token represents a row in the tokens table (without the plaintext secret).
 type Token struct {
-	ID         uuid.UUID
-	UserID     uuid.UUID
-	Name       string
-	Scopes     []string
-	Paths      []string
-	RedactPII  bool
-	ExpiresAt  *time.Time
-	LastUsedAt *time.Time
-	CreatedAt  time.Time
+	ID          uuid.UUID
+	UserID      uuid.UUID
+	Name        string
+	Scopes      []string
+	Paths       []string
+	WorkspaceID *uuid.UUID
+	RedactPII   bool
+	ExpiresAt   *time.Time
+	LastUsedAt  *time.Time
+	CreatedAt   time.Time
 }
 
 // Service wires user + token persistence.
@@ -153,7 +156,16 @@ func (s *Service) VerifyPassword(ctx context.Context, email, password string) (*
 //
 // `scopes` is validated against AllScopes; empty defaults to [read].
 // `expires` may be nil for no expiry.
-func (s *Service) CreateToken(ctx context.Context, userID uuid.UUID, name string, scopes []string, paths []string, expires *time.Time, redactPII bool) (plaintext string, t *Token, err error) {
+func (s *Service) CreateToken(
+	ctx context.Context,
+	userID uuid.UUID,
+	workspaceID *uuid.UUID,
+	name string,
+	scopes []string,
+	paths []string,
+	expires *time.Time,
+	redactPII bool,
+) (plaintext string, t *Token, err error) {
 	if name == "" {
 		return "", nil, errors.New("token name is required")
 	}
@@ -165,11 +177,9 @@ func (s *Service) CreateToken(ctx context.Context, userID uuid.UUID, name string
 			return "", nil, fmt.Errorf("invalid scope: %q", sc)
 		}
 	}
-	// `paths` column is text[] NOT NULL DEFAULT '{}'. pgx encodes a Go nil
-	// slice as SQL NULL — which violates the NOT NULL constraint. Normalize
-	// to an empty slice so the SQL value is '{}' instead of NULL.
-	if paths == nil {
-		paths = []string{}
+	paths, err = normalizeTokenPaths(paths)
+	if err != nil {
+		return "", nil, err
 	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
@@ -181,15 +191,15 @@ func (s *Service) CreateToken(ctx context.Context, userID uuid.UUID, name string
 	id := uuid.New()
 	created := time.Now().UTC()
 	_, err = s.pool.Exec(ctx,
-		`INSERT INTO tokens (id, user_id, name, hash, scopes, paths, expires_at, redact_pii, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-		id, userID, name, hash, scopes, paths, expires, redactPII, created,
+		`INSERT INTO tokens (id, user_id, workspace_id, name, hash, scopes, paths, expires_at, redact_pii, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		id, userID, workspaceID, name, hash, scopes, paths, expires, redactPII, created,
 	)
 	if err != nil {
 		return "", nil, fmt.Errorf("insert token: %w", err)
 	}
 	t = &Token{
-		ID: id, UserID: userID, Name: name,
+		ID: id, UserID: userID, WorkspaceID: workspaceID, Name: name,
 		Scopes: scopes, Paths: paths,
 		ExpiresAt: expires, RedactPII: redactPII, CreatedAt: created,
 	}
@@ -199,7 +209,7 @@ func (s *Service) CreateToken(ctx context.Context, userID uuid.UUID, name string
 // ListTokens returns all tokens for a user.
 func (s *Service) ListTokens(ctx context.Context, userID uuid.UUID) ([]Token, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, user_id, name, scopes, paths, expires_at, redact_pii, last_used_at, created_at
+		`SELECT id, user_id, workspace_id, name, scopes, paths, expires_at, redact_pii, last_used_at, created_at
 		 FROM tokens WHERE user_id = $1 ORDER BY created_at DESC`, userID)
 	if err != nil {
 		return nil, fmt.Errorf("query tokens: %w", err)
@@ -208,7 +218,7 @@ func (s *Service) ListTokens(ctx context.Context, userID uuid.UUID) ([]Token, er
 	var out []Token
 	for rows.Next() {
 		var t Token
-		if err := rows.Scan(&t.ID, &t.UserID, &t.Name, &t.Scopes, &t.Paths, &t.ExpiresAt, &t.RedactPII, &t.LastUsedAt, &t.CreatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.UserID, &t.WorkspaceID, &t.Name, &t.Scopes, &t.Paths, &t.ExpiresAt, &t.RedactPII, &t.LastUsedAt, &t.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -229,6 +239,25 @@ func (s *Service) RevokeToken(ctx context.Context, userID, tokenID uuid.UUID) er
 	return nil
 }
 
+// RevokeTokenInWorkspace deletes a token only when it belongs to both the
+// actor and the bound workspace. It prevents a delegated workspace admin from
+// revoking the user's unbound session or tokens for another workspace.
+func (s *Service) RevokeTokenInWorkspace(
+	ctx context.Context,
+	userID, tokenID, workspaceID uuid.UUID,
+) error {
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM tokens WHERE id = $1 AND user_id = $2 AND workspace_id = $3`,
+		tokenID, userID, workspaceID)
+	if err != nil {
+		return fmt.Errorf("delete workspace token: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrTokenNotFound
+	}
+	return nil
+}
+
 // ResolveToken looks up a plaintext token, returns the user + token info, and
 // validates expiry. Updates last_used_at best-effort.
 func (s *Service) ResolveToken(ctx context.Context, plaintext string) (*User, *Token, error) {
@@ -239,11 +268,11 @@ func (s *Service) ResolveToken(ctx context.Context, plaintext string) (*User, *T
 	var t Token
 	var u User
 	err := s.pool.QueryRow(ctx,
-		`SELECT t.id, t.user_id, t.name, t.scopes, t.paths, t.expires_at, t.redact_pii, t.last_used_at, t.created_at,
+		`SELECT t.id, t.user_id, t.workspace_id, t.name, t.scopes, t.paths, t.expires_at, t.redact_pii, t.last_used_at, t.created_at,
 		        u.email, u.created_at
 		 FROM tokens t JOIN users u ON u.id = t.user_id
 		 WHERE t.hash = $1`, hash,
-	).Scan(&t.ID, &t.UserID, &t.Name, &t.Scopes, &t.Paths, &t.ExpiresAt, &t.RedactPII, &t.LastUsedAt, &t.CreatedAt,
+	).Scan(&t.ID, &t.UserID, &t.WorkspaceID, &t.Name, &t.Scopes, &t.Paths, &t.ExpiresAt, &t.RedactPII, &t.LastUsedAt, &t.CreatedAt,
 		&u.Email, &u.CreatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -252,6 +281,12 @@ func (s *Service) ResolveToken(ctx context.Context, plaintext string) (*User, *T
 		return nil, nil, fmt.Errorf("query token: %w", err)
 	}
 	u.ID = t.UserID
+	// Tokens created by older releases may contain non-canonical path entries.
+	// Fail closed: an empty string must never be reinterpreted as root access.
+	t.Paths, err = normalizeTokenPaths(t.Paths)
+	if err != nil {
+		return nil, nil, ErrInvalidToken
+	}
 	if t.ExpiresAt != nil && t.ExpiresAt.Before(time.Now()) {
 		return nil, nil, ErrTokenExpired
 	}
@@ -286,6 +321,34 @@ func validScope(s string) bool {
 		}
 	}
 	return false
+}
+
+func normalizeTokenPaths(paths []string) ([]string, error) {
+	// `paths` is text[] NOT NULL DEFAULT '{}'. pgx encodes nil as SQL NULL,
+	// so unrestricted access is represented by an explicit empty array.
+	if len(paths) == 0 {
+		return []string{}, nil
+	}
+	normalized := make([]string, 0, len(paths))
+	seen := map[string]struct{}{}
+	for _, raw := range paths {
+		if raw == "" {
+			return nil, errors.New("invalid token path: empty entry; omit paths for unrestricted access or use '/' explicitly")
+		}
+		p, err := pathx.Normalize(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid token path %q: %w", raw, err)
+		}
+		if p == pathx.Root {
+			return []string{pathx.Root}, nil
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		normalized = append(normalized, p)
+	}
+	return normalized, nil
 }
 
 // Sentinel errors for the auth layer.

@@ -63,11 +63,15 @@ try {
     rec('T3 搜索', false, '头部找不到搜索输入框');
   }
 
-  // T4 — Ask 页
+  // T4 — Ask 产品入口已退役
   await page.goto(BASE + '/ask', { waitUntil: 'networkidle' });
-  await page.waitForTimeout(800);
-  await page.screenshot({ path: `${SHOTS}/04-ask.png`, fullPage: true });
-  rec('T4 Ask 页', (await page.locator('body').innerText()).includes('Ask') || page.url().includes('/ask'), '渲染完成');
+  await page.screenshot({ path: `${SHOTS}/04-ask-retired.png`, fullPage: true });
+  const retiredText = await page.locator('body').innerText();
+  rec(
+    'T4 Ask 入口退役',
+    retiredText.includes('404') && (await page.locator('input').count()) === 0,
+    '/ask 不再提供聊天界面',
+  );
 
   // T5 — Faces 页
   await page.goto(BASE + '/faces', { waitUntil: 'networkidle' });
@@ -80,7 +84,11 @@ try {
   await page.waitForTimeout(1500);
   await page.screenshot({ path: `${SHOTS}/06-providers.png`, fullPage: true });
   const provText = await page.locator('body').innerText();
-  rec('T6 Providers 页', provText.includes('embedding') || provText.includes('ollama'), '渲染完成');
+  rec(
+    'T6 索引模型页',
+    provText.includes('embedding') && !provText.toLowerCase().includes('llm'),
+    '只展示索引链路模型',
+  );
 
   // T7 — 控制台无报错
   rec('T7 浏览器控制台', consoleErrors.length === 0,

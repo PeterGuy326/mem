@@ -21,13 +21,19 @@ echo "VITE_USE_MOCK=false" > .env.local
 npm run dev          # /v1/* 通过 Vite proxy 转到 http://localhost:8787
 ```
 
-### 构建 / Lint / 类型检查
+### 构建 / Lint / 类型检查 / 浏览器回归
 
 ```bash
 npm run build        # 产出 dist/
 npm run lint         # ESLint 严格 0 警告
 npm run typecheck    # tsc --noEmit
+npm run test:memory  # 自启 Vite + MSW，验证 Memory 生命周期与权限态
+npm run test:transfer # 自启 Vite + MSW，验证 workspace transfer
 ```
+
+首次运行浏览器回归前执行 `npx playwright install chromium`。这两个标准验收脚本
+不需要 memd、Worker 或 PostgreSQL；完整测试环境、预期结果和清理方法见
+[`docs/TESTING.md`](../docs/TESTING.md)。
 
 ---
 

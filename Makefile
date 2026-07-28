@@ -1,9 +1,15 @@
 # mem — Phase 1 MVP Makefile
 
-.PHONY: help up down logs reset proto proto-go proto-python server cli mcp worker web test fmt lint \
-        build build-memd build-mem build-mem-mcp
+.PHONY: help up down logs reset proto server cli mcp worker web bootstrap \
+        test test-server test-worker test-web test-race test-env-up \
+        test-env-down test-integration test-integration-race test-acceptance \
+        test-all fmt lint build build-memd build-mem build-mem-mcp \
+        proto-go proto-python
 
 BIN_DIR ?= bin
+MEM_TEST_PG_PORT ?= 55432
+MEM_TEST_DB ?= postgres://mem:mem@127.0.0.1:$(MEM_TEST_PG_PORT)/mem_integration_test?sslmode=disable
+MEM_TEST_PROJECT ?= mem-test-$(shell pwd -P | cksum | awk '{print $$1}')
 
 help:
 	@echo "mem dev commands:"
@@ -19,7 +25,15 @@ help:
 	@echo "  make mcp          - 跑 MCP server（go run, stdio）"
 	@echo "  make worker       - 启动 Python AI worker"
 	@echo "  make web          - 启动 React 前端 (vite dev)"
-	@echo "  make test         - 跑所有测试"
+	@echo "  make bootstrap    - 安装锁定依赖并生成 Worker protobuf"
+	@echo "  make test         - Go/Worker/Web 无数据库回归"
+	@echo "  make test-race    - 高风险 Go 路径 race 回归"
+	@echo "  make test-env-up  - 启动隔离 PostgreSQL 测试环境 (:$(MEM_TEST_PG_PORT))"
+	@echo "  make test-integration      - PostgreSQL migration + 集成回归"
+	@echo "  make test-integration-race - PostgreSQL 集成 race 回归"
+	@echo "  make test-acceptance - 隔离进程级 HTTP/CLI/MCP Agent-memory 验收"
+	@echo "  make test-env-down         - 删除隔离测试环境"
+	@echo "  make test-all     - 执行全部回归与进程验收（要求测试 DB 已启动）"
 	@echo "  make build        - 编译三个二进制到 $(BIN_DIR)/ (memd, mem, mem-mcp)"
 	@echo "  make build-mem-mcp- 单独编译 MCP server，可放到 PATH 给 Claude Desktop 用"
 
@@ -41,12 +55,9 @@ proto: proto-go proto-python
 proto-go:
 	@echo "[proto] generating Go stubs -> server/internal/workerpb/"
 	@protoc -I worker/proto \
-		--go_out=. --go_opt=paths=import \
-		--go-grpc_out=. --go-grpc_opt=paths=import \
+		--go_out=server/internal/workerpb --go_opt=paths=source_relative \
+		--go-grpc_out=server/internal/workerpb --go-grpc_opt=paths=source_relative \
 		worker/proto/processor.proto
-	@# protoc writes under the go_package import path; move them into place.
-	@mv -f github.com/PeterGuy326/mem/server/internal/workerpb/*.pb.go server/internal/workerpb/
-	@rm -rf github.com
 
 proto-python:
 	@echo "[proto] generating Python stubs -> worker/mem_worker/proto/"
@@ -67,9 +78,56 @@ worker:
 web:
 	cd web && npm run dev
 
+bootstrap:
+	cd server && go mod download
+	cd worker && uv sync --locked --extra test
+	$(MAKE) -C worker proto
+	cd web && npm ci
+	cd web && if [ "$$(uname -s)" = Linux ]; then \
+		npx playwright install --with-deps chromium; \
+	else \
+		npx playwright install chromium; \
+	fi
+
 test:
-	cd server && go test ./...
-	cd worker && uv run pytest
+	./scripts/verify.sh unit
+
+test-server:
+	./scripts/verify.sh server
+
+test-worker:
+	./scripts/verify.sh worker
+
+test-web:
+	./scripts/verify.sh web
+
+test-race:
+	./scripts/verify.sh race
+
+test-env-up:
+	MEM_TEST_PROJECT='$(MEM_TEST_PROJECT)' \
+	MEM_TEST_PG_PORT=$(MEM_TEST_PG_PORT) \
+		docker compose -p '$(MEM_TEST_PROJECT)' \
+			-f docker-compose.test.yml up -d --wait
+
+test-env-down:
+	MEM_TEST_PROJECT='$(MEM_TEST_PROJECT)' \
+	MEM_TEST_PG_PORT=$(MEM_TEST_PG_PORT) \
+		docker compose -p '$(MEM_TEST_PROJECT)' \
+			-f docker-compose.test.yml down --volumes --remove-orphans
+
+test-integration:
+	MEM_TEST_DB='$(MEM_TEST_DB)' ./scripts/verify.sh integration
+
+test-integration-race:
+	MEM_TEST_DB='$(MEM_TEST_DB)' ./scripts/verify.sh integration-race
+
+test-acceptance:
+	./scripts/acceptance_agent_memory.sh
+
+test-all:
+	MEM_TEST_DB='$(MEM_TEST_DB)' ./scripts/verify.sh all
+	./scripts/acceptance_agent_memory.sh
 
 fmt:
 	cd server && gofmt -w .

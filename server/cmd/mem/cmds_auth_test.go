@@ -13,6 +13,7 @@ import (
 )
 
 func TestAuthCommandTreeUsesCanonicalNamespaceAndHidesLegacyAliases(t *testing.T) {
+	clearCLIOverrides(t)
 	root := newRootCmd()
 
 	for _, path := range [][]string{
@@ -83,6 +84,7 @@ func TestAuthCommandTreeUsesCanonicalNamespaceAndHidesLegacyAliases(t *testing.T
 }
 
 func TestAuthStatusVerifiesTokenAndPrintsJSON(t *testing.T) {
+	clearCLIOverrides(t)
 	var requestCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount.Add(1)
@@ -91,6 +93,9 @@ func TestAuthStatusVerifiesTokenAndPrintsJSON(t *testing.T) {
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer status-token" {
 			t.Errorf("Authorization = %q", got)
+		}
+		if got := r.Header.Get("X-Workspace-ID"); got != "workspace-requested" {
+			t.Errorf("X-Workspace-ID = %q", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
@@ -114,6 +119,7 @@ func TestAuthStatusVerifiesTokenAndPrintsJSON(t *testing.T) {
 	t.Setenv("MEM_CONFIG", filepath.Join(t.TempDir(), "missing-config.yaml"))
 	t.Setenv("MEM_SERVER", server.URL)
 	t.Setenv("MEM_TOKEN", "status-token")
+	t.Setenv("MEM_WORKSPACE", "workspace-requested")
 
 	root := newRootCmd()
 	var stdout bytes.Buffer
@@ -142,6 +148,7 @@ func TestAuthStatusVerifiesTokenAndPrintsJSON(t *testing.T) {
 }
 
 func TestAuthStatusWithoutTokenReturnsAuthExitCode(t *testing.T) {
+	clearCLIOverrides(t)
 	t.Setenv("MEM_CONFIG", filepath.Join(t.TempDir(), "missing-config.yaml"))
 	t.Setenv("MEM_TOKEN", "")
 
@@ -158,4 +165,16 @@ func TestAuthStatusWithoutTokenReturnsAuthExitCode(t *testing.T) {
 	if cliErr.code != 3 || cliErr.hint != "run `mem auth login` first" {
 		t.Fatalf("cli error = %#v", cliErr)
 	}
+}
+
+func clearCLIOverrides(t *testing.T) {
+	t.Helper()
+	oldServer := cliServerOverride
+	oldWorkspace := cliWorkspaceOverride
+	cliServerOverride = ""
+	cliWorkspaceOverride = ""
+	t.Cleanup(func() {
+		cliServerOverride = oldServer
+		cliWorkspaceOverride = oldWorkspace
+	})
 }

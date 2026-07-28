@@ -24,6 +24,7 @@ import (
 	"github.com/PeterGuy326/mem/server/internal/folder"
 	"github.com/PeterGuy326/mem/server/internal/pathx"
 	"github.com/PeterGuy326/mem/server/internal/storage"
+	"github.com/PeterGuy326/mem/server/internal/workspacelock"
 )
 
 // File mirrors the `files` table.
@@ -58,29 +59,68 @@ type PutResult struct {
 // Path-related filters are mutually exclusive — pass at most one of:
 //
 //	Path:   exact folder match (folder_id resolved from this)
-//	Prefix: subtree match via `files.path LIKE prefix || '/%'` (plus exact equal)
+//	Prefix: subtree match (plus exact equal)
 type ListFilter struct {
-	Tag    string
-	Type   string // mime prefix, e.g. "image" -> "image/%"
-	Path   string // exact folder absolute path; "" = no filter
-	Prefix string // subtree absolute path; "" = no filter
-	Since  *time.Time
-	Until  *time.Time
-	Limit  int
-	Page   int
+	Tag          string
+	Type         string // mime prefix, e.g. "image" -> "image/%"
+	Path         string // exact folder absolute path; "" = no filter
+	Prefix       string // subtree absolute path; "" = no filter
+	AllowedPaths []string
+	Since        *time.Time
+	Until        *time.Time
+	Limit        int
+	Page         int
 }
 
 // Service is the file service.
 type Service struct {
 	pool    *pgxpool.Pool
-	store   *storage.Store
+	store   objectStore
 	folders *folder.Service
 }
 
+type objectStore interface {
+	Put(context.Context, string, io.Reader, int64, string) error
+	Get(context.Context, string) (io.ReadCloser, error)
+	Delete(context.Context, string) error
+}
+
+type txCommitter interface {
+	Commit(context.Context) error
+}
+
+type uploadedObject struct {
+	store         objectStore
+	key           string
+	deleteOnError bool
+}
+
+func (object *uploadedObject) cleanup() {
+	if object == nil || !object.deleteOnError {
+		return
+	}
+	_ = object.store.Delete(context.Background(), object.key)
+}
+
+// commitFilePut disarms object cleanup before asking PostgreSQL to commit. A
+// commit acknowledgement can be lost after the transaction became durable;
+// deleting the object on that error would leave a committed file row pointing
+// at missing content. A genuinely rolled-back commit may leave an orphan, which
+// is safe for retry and belongs to object garbage collection.
+func commitFilePut(ctx context.Context, tx txCommitter, object *uploadedObject) error {
+	object.deleteOnError = false
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit file put: %w", err)
+	}
+	return nil
+}
+
 // New constructs a file Service.
-func New(pool *pgxpool.Pool, store *storage.Store, folders *folder.Service) *Service {
+func New(pool *pgxpool.Pool, store objectStore, folders *folder.Service) *Service {
 	return &Service{pool: pool, store: store, folders: folders}
 }
+
+var _ objectStore = (*storage.Store)(nil)
 
 // Pool exposes the underlying connection pool for sibling packages that need
 // to run their own queries against the files table (timeline, related, …).
@@ -105,20 +145,9 @@ func (s *Service) Put(ctx context.Context, userID uuid.UUID, name, declaredMIME,
 	if err := pathx.ValidateName(name); err != nil {
 		return nil, err
 	}
-	// Resolve / mkdir -p destination folder. Empty / "/" stays at root.
 	destPath, err := pathx.Normalize(targetPath)
 	if err != nil {
 		return nil, fmt.Errorf("target path: %w", err)
-	}
-	var folderID *uuid.UUID
-	if destPath != pathx.Root {
-		f, err := s.folders.Create(ctx, userID, destPath)
-		if err != nil {
-			return nil, fmt.Errorf("mkdir -p: %w", err)
-		}
-		if f != nil {
-			folderID = &f.ID
-		}
 	}
 
 	// Buffer to temp file? For W1 we keep it simple: hash-then-upload by
@@ -171,6 +200,31 @@ func (s *Service) Put(ctx context.Context, userID uuid.UUID, name, declaredMIME,
 	if err := s.store.Put(ctx, key, tmp, written, mime); err != nil {
 		return nil, fmt.Errorf("s3 put: %w", err)
 	}
+	object := &uploadedObject{store: s.store, key: key, deleteOnError: true}
+	defer object.cleanup()
+
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("begin file put transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// The workspace lock must be the first database action in this
+	// transaction. Keep it through mkdir -p and file insertion so a concurrent
+	// folder rewrite cannot split files.path from files.folder_id.
+	if _, err := workspacelock.ForContentWriteByOwner(ctx, tx, userID); err != nil {
+		return nil, err
+	}
+	var folderID *uuid.UUID
+	if destPath != pathx.Root {
+		folderRecord, err := s.folders.ResolveOrCreateLockedTx(ctx, tx, userID, destPath)
+		if err != nil {
+			return nil, fmt.Errorf("mkdir -p: %w", err)
+		}
+		if folderRecord != nil {
+			folderID = &folderRecord.ID
+		}
+	}
 
 	now := time.Now().UTC()
 	if tags == nil {
@@ -191,7 +245,7 @@ func (s *Service) Put(ctx context.Context, userID uuid.UUID, name, declaredMIME,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
-	_, err = s.pool.Exec(ctx,
+	_, err = tx.Exec(ctx,
 		`INSERT INTO files
 		 (id, user_id, name, path, folder_id, size, sha256, mime, storage_key, tags, index_status, created_at, updated_at)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
@@ -199,9 +253,10 @@ func (s *Service) Put(ctx context.Context, userID uuid.UUID, name, declaredMIME,
 		f.Tags, f.IndexStatus, f.CreatedAt, f.UpdatedAt,
 	)
 	if err != nil {
-		// best-effort cleanup of orphaned object
-		_ = s.store.Delete(context.Background(), key)
 		return nil, fmt.Errorf("insert file: %w", err)
+	}
+	if err := commitFilePut(ctx, tx, object); err != nil {
+		return nil, err
 	}
 	return &PutResult{File: f, Deduped: false}, nil
 }
@@ -276,9 +331,44 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID, f ListFilter) ([]F
 		if norm == pathx.Root {
 			// no constraint — entire user subtree is the prefix
 		} else {
-			q.WriteString(fmt.Sprintf(" AND (path = $%d OR path LIKE $%d)", idx, idx+1))
-			args = append(args, norm, norm+"/%")
-			idx += 2
+			q.WriteString(fmt.Sprintf(
+				" AND (path = $%d OR left(path, length($%d) + 1) = $%d || '/')",
+				idx, idx, idx,
+			))
+			args = append(args, norm)
+			idx++
+		}
+	}
+	if len(f.AllowedPaths) > 0 {
+		normalized := make([]string, 0, len(f.AllowedPaths))
+		unrestricted := false
+		for _, raw := range f.AllowedPaths {
+			if raw == "" {
+				return nil, errors.New("allowed path is empty")
+			}
+			norm, err := pathx.Normalize(raw)
+			if err != nil {
+				return nil, fmt.Errorf("allowed path: %w", err)
+			}
+			if norm == pathx.Root {
+				unrestricted = true
+				break
+			}
+			normalized = append(normalized, norm)
+		}
+		clauses := make([]string, 0, len(normalized))
+		if !unrestricted {
+			for _, norm := range normalized {
+				clauses = append(clauses, fmt.Sprintf(
+					"(path = $%d OR left(path, length($%d) + 1) = $%d || '/')",
+					idx, idx, idx,
+				))
+				args = append(args, norm)
+				idx++
+			}
+		}
+		if len(clauses) > 0 {
+			q.WriteString(" AND (" + strings.Join(clauses, " OR ") + ")")
 		}
 	}
 	if f.Since != nil {
@@ -356,21 +446,25 @@ func (s *Service) Move(ctx context.Context, userID, fileID uuid.UUID, newPath st
 	if err != nil {
 		return nil, err
 	}
-	var folderID *uuid.UUID
-	if dest != pathx.Root {
-		f, err := s.folders.Create(ctx, userID, dest)
-		if err != nil {
-			return nil, fmt.Errorf("mkdir -p: %w", err)
-		}
-		if f != nil {
-			folderID = &f.ID
-		}
-	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := workspacelock.ForContentWriteByOwner(ctx, tx, userID); err != nil {
+		return nil, err
+	}
+	var folderID *uuid.UUID
+	if dest != pathx.Root {
+		folderRecord, err := s.folders.ResolveOrCreateLockedTx(ctx, tx, userID, dest)
+		if err != nil {
+			return nil, fmt.Errorf("mkdir -p: %w", err)
+		}
+		if folderRecord != nil {
+			folderID = &folderRecord.ID
+		}
+	}
 
 	now := time.Now().UTC()
 	tag, err := tx.Exec(ctx,

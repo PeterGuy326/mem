@@ -1,34 +1,67 @@
 /**
- * Provider settings page (SPEC §F8.5).
- * List current settings, set a new spec, optionally test it before saving.
- * Switching embedding to a different-dim provider kicks off a server-side
- * reindex (visible in the response).
+ * Advanced indexing-model settings.
+ * This surface intentionally excludes answer-generation models: the web
+ * product is a file workspace, while these models create searchable file
+ * representations in the background.
  */
 import * as React from 'react';
-import { Settings, FlaskConical, Save, RefreshCw } from 'lucide-react';
+import {
+  AudioLines,
+  FlaskConical,
+  Image,
+  RefreshCw,
+  Save,
+  ScanText,
+  Settings,
+  TextSearch,
+  type LucideIcon,
+} from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Skeleton } from '@/components/ui/Skeleton';
 import {
+  isIndexProviderKind,
   listProviders,
   setProvider,
   testProvider,
+  type IndexProviderKind,
   type ProviderSetting,
 } from '@/lib/ai';
 import { ApiException } from '@/lib/api';
 
-const SAMPLE_SPECS: Record<string, string[]> = {
+const DEFAULT_INDEX_KINDS: IndexProviderKind[] = ['embedding', 'vlm'];
+
+const KIND_DETAILS: Record<
+  IndexProviderKind,
+  { label: string; description: string; icon: LucideIcon }
+> = {
+  embedding: {
+    label: 'Text retrieval',
+    description: 'Turns document chunks into vectors for semantic search.',
+    icon: TextSearch,
+  },
+  vlm: {
+    label: 'Image understanding',
+    description: 'Produces searchable captions and visual metadata during indexing.',
+    icon: Image,
+  },
+  asr: {
+    label: 'Audio transcription',
+    description: 'Transcribes speech before audio is indexed.',
+    icon: AudioLines,
+  },
+  ocr: {
+    label: 'Text recognition',
+    description: 'Extracts text from scans and image-based documents.',
+    icon: ScanText,
+  },
+};
+
+const SAMPLE_SPECS: Partial<Record<IndexProviderKind, string[]>> = {
   embedding: [
     'ollama:nomic-embed-text',
     'ollama:mxbai-embed-large',
     'openai:text-embedding-3-small',
     'openai:text-embedding-3-large',
-  ],
-  llm: [
-    'ollama:llama3.1:latest',
-    'openai:gpt-4o-mini',
-    'openai:gpt-4o',
-    'anthropic:claude-opus-4-7',
-    'anthropic:claude-haiku-4-5-20251001',
   ],
   vlm: [
     'ollama:minicpm-v',
@@ -44,6 +77,11 @@ export function ProvidersPage() {
   const [editing, setEditing] = React.useState<Record<string, string>>({});
   const [savingKind, setSavingKind] = React.useState<string | null>(null);
   const [lastResult, setLastResult] = React.useState<string | null>(null);
+
+  const indexKinds = React.useMemo(() => {
+    const advertised = data?.kinds.filter(isIndexProviderKind) ?? [];
+    return advertised.length > 0 ? advertised : DEFAULT_INDEX_KINDS;
+  }, [data]);
 
   async function refresh() {
     setBusy(true);
@@ -61,11 +99,11 @@ export function ProvidersPage() {
     refresh();
   }, []);
 
-  function currentFor(kind: string): ProviderSetting | undefined {
+  function currentFor(kind: IndexProviderKind): ProviderSetting | undefined {
     return data?.settings.find((s) => s.kind === kind);
   }
 
-  async function doSave(kind: string) {
+  async function doSave(kind: IndexProviderKind) {
     const spec = (editing[kind] ?? '').trim();
     if (!spec) return;
     setSavingKind(kind);
@@ -77,9 +115,10 @@ export function ProvidersPage() {
       if (r.setting.dim) msg += ` (dim=${r.setting.dim})`;
       if (r.dim_migration_ok) {
         const prev = r.previous_dim ?? '(none)';
-        msg += ` · schema migrated ${prev} → ${r.setting.dim}`;
+        msg += ` · schema compatible ${prev} → ${r.setting.dim}`;
       }
       if (r.reindex_queued) msg += ` · reindex queued: ${r.reindex_files ?? 0} file(s)`;
+      if (r.reindex_required) msg += ' · full rebuild required: run `mem provider reindex`';
       setLastResult(msg);
       setEditing((m) => {
         const { [kind]: _, ...rest } = m;
@@ -93,7 +132,7 @@ export function ProvidersPage() {
     }
   }
 
-  async function doTest(kind: string, spec?: string) {
+  async function doTest(kind: IndexProviderKind, spec?: string) {
     setErr(null);
     setLastResult(null);
     try {
@@ -108,16 +147,20 @@ export function ProvidersPage() {
     <div className="mx-auto max-w-3xl px-8 py-10">
       <div className="flex items-center gap-3 mb-1">
         <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
-          <Settings className="h-5 w-5 text-accent" /> Providers
+          <Settings className="h-5 w-5 text-accent" /> Index models
         </h1>
+        <span className="rounded-full border border-border bg-bg-inset px-2 py-0.5 text-2xs uppercase tracking-wider text-fg-subtle">
+          Advanced
+        </span>
         <Button variant="ghost" size="sm" onClick={refresh} disabled={busy}>
           <RefreshCw className={busy ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
           Refresh
         </Button>
       </div>
       <p className="text-sm text-fg-muted mb-6">
-        Pick which AI provider serves each role. Switching embedding to a different dim triggers an
-        automatic schema migration + reindex (you'll see the file count in the response).
+        Control the models that turn files into searchable text, image, and media indexes.
+        Text-vector changes are allowed only before a corpus exists; visual vectors stay
+        fixed to CLIP until versioned index generations are available.
       </p>
 
       {err && (
@@ -139,14 +182,24 @@ export function ProvidersPage() {
         </div>
       ) : (
         <div className="space-y-4">
-          {(data?.kinds ?? ['embedding', 'llm', 'vlm']).map((kind) => {
+          {indexKinds.map((kind) => {
             const cur = currentFor(kind);
             const samples = SAMPLE_SPECS[kind] ?? [];
             const draft = editing[kind] ?? cur?.spec ?? '';
+            const detail = KIND_DETAILS[kind];
+            const KindIcon = detail.icon;
             return (
               <section key={kind} className="surface p-4">
                 <div className="flex items-center justify-between mb-2">
-                  <div className="text-sm font-medium uppercase tracking-wider">{kind}</div>
+                  <div className="flex min-w-0 items-start gap-2.5">
+                    <div className="mt-0.5 grid h-8 w-8 flex-none place-items-center rounded-md border border-border bg-bg-inset text-accent">
+                      <KindIcon className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium">{detail.label}</div>
+                      <div className="mt-0.5 text-2xs font-mono text-fg-subtle">{kind}</div>
+                    </div>
+                  </div>
                   <div className="text-2xs text-fg-subtle">
                     {cur ? (
                       <>
@@ -158,6 +211,7 @@ export function ProvidersPage() {
                     )}
                   </div>
                 </div>
+                <p className="mb-3 pl-[42px] text-xs text-fg-muted">{detail.description}</p>
 
                 <div className="flex gap-2 items-stretch">
                   <input

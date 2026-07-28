@@ -1,6 +1,17 @@
 import * as React from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Search, Filter, Image as ImageIcon, FileText, Music, FileQuestion, ArrowLeft } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowLeft,
+  FileQuestion,
+  FileText,
+  Filter,
+  History,
+  Image as ImageIcon,
+  Music,
+  Search,
+  X,
+} from 'lucide-react';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
@@ -9,18 +20,17 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Kbd } from '@/components/ui/Kbd';
 import { cn } from '@/lib/cn';
 import { AuthedImage } from '@/components/ui/AuthedImage';
-import { History, X } from 'lucide-react';
 import { useSearch } from '@/hooks/useFiles';
 import { useHistory } from '@/hooks/useHistory';
 import { listFaces, getFaceFiles, nameFace, type FaceCluster, type FaceFile } from '@/lib/ai';
 import { useT } from '@/i18n';
 import { formatDate } from '@/lib/format';
 import type { FileKind, SearchResult, SearchTypeFilter } from '@/lib/types';
+import { ApiException } from '@/lib/api';
 
 const TYPE_OPTIONS: { value: SearchTypeFilter; labelKey: string }[] = [
   { value: 'any', labelKey: 'search.typeAny' },
   { value: 'image', labelKey: 'search.typeImage' },
-  { value: 'doc', labelKey: 'search.typeDoc' },
   { value: 'audio', labelKey: 'search.typeAudio' },
 ];
 
@@ -32,13 +42,23 @@ const SAMPLE_QUERIES = [
   '妈妈的合影',
 ];
 
+function parseTypeFilter(value: string | null): SearchTypeFilter {
+  return value === 'image' || value === 'audio' ? value : 'any';
+}
+
+function searchErrorText(error: unknown): string {
+  if (error instanceof ApiException) return error.hint || error.message;
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
 export function SearchPage() {
   const { t } = useT();
   const [params, setParams] = useSearchParams();
   const initialQ = params.get('q') ?? '';
   const [q, setQ] = React.useState(initialQ);
   const [type, setType] = React.useState<SearchTypeFilter>(
-    (params.get('type') as SearchTypeFilter) ?? 'any',
+    parseTypeFilter(params.get('type')),
   );
   const [since, setSince] = React.useState<string>(params.get('since') ?? '');
   const [until, setUntil] = React.useState<string>(params.get('until') ?? '');
@@ -60,7 +80,7 @@ export function SearchPage() {
     setParams(next, { replace: true });
   }, [debouncedQ, type, since, until, setParams]);
 
-  const { data, isFetching } = useSearch(
+  const { data, isFetching, isError, error, refetch } = useSearch(
     {
       q: debouncedQ,
       type: type === 'any' ? undefined : type,
@@ -216,6 +236,24 @@ export function SearchPage() {
         </div>
       ) : isFetching && !data ? (
         <ResultGridSkeleton />
+      ) : isError ? (
+        <EmptyState
+          icon={<AlertTriangle />}
+          title={t('search.failed')}
+          description={
+            <span>
+              {t('search.failedHint')}
+              <span className="mt-1 block font-mono text-2xs text-fg-subtle">
+                {searchErrorText(error)}
+              </span>
+            </span>
+          }
+          action={
+            <Button variant="secondary" size="sm" onClick={() => refetch()}>
+              {t('common.retry')}
+            </Button>
+          }
+        />
       ) : results.length === 0 ? (
         <EmptyState
           icon={<Search />}
@@ -468,11 +506,22 @@ function kindIcon(kind: FileKind) {
 }
 
 function ScoreBadge({ score }: { score: number }) {
-  // Convert raw score (~0-3) to a 0-100% feel for display.
-  const pct = Math.min(99, Math.max(1, Math.round(score * 30)));
+  // Search scores are cosine similarity in [-1, 1]. Keep this a compact,
+  // bounded relevance indicator rather than implying calibrated probability.
+  const pct = Math.min(100, Math.max(0, Math.round(score * 100)));
   return (
     <Badge tone="muted" className="font-mono">
       {pct}
+    </Badge>
+  );
+}
+
+function ChannelBadge({ channel }: { channel: SearchResult['channel'] }) {
+  const { t } = useT();
+  if (!channel) return null;
+  return (
+    <Badge tone={channel === 'visual' ? 'accent' : 'neutral'}>
+      {t(`search.channel.${channel}`)}
     </Badge>
   );
 }
@@ -507,15 +556,24 @@ function ImageResultCard({ result }: { result: SearchResult }) {
                      bg-gradient-to-t from-bg/95 via-bg/40 to-transparent flex items-end p-3"
         >
           <div className="text-xs text-fg leading-snug line-clamp-3">
-            {f.caption ?? f.name}
+            {result.snippet ?? f.caption ?? f.name}
           </div>
         </div>
       </div>
-      <div className="px-3 py-2 flex items-center gap-2">
-        <div className="text-2xs text-fg-subtle flex-1 truncate">
-          {f.timeline_at ? formatDate(f.timeline_at) : '—'}
+      <div className="space-y-2 px-3 py-2.5">
+        <div className="truncate text-xs text-fg" title={f.name}>{f.name}</div>
+        {result.snippet && (
+          <div className="line-clamp-2 text-2xs leading-4 text-fg-muted">
+            {result.snippet}
+          </div>
+        )}
+        <div className="flex items-center gap-2">
+          <div className="text-2xs text-fg-subtle flex-1 truncate">
+            {f.timeline_at ? formatDate(f.timeline_at) : '—'}
+          </div>
+          <ChannelBadge channel={result.channel} />
+          <ScoreBadge score={result.score} />
         </div>
-        <ScoreBadge score={result.score} />
       </div>
     </Link>
   );
@@ -542,7 +600,10 @@ function DocResultRow({ result }: { result: SearchResult }) {
           </div>
         )}
         <div className="text-2xs text-fg-subtle mt-1.5">
-          {formatDate(f.timeline_at ?? f.created_at)}
+          <span className="inline-flex flex-wrap items-center gap-2">
+            {formatDate(f.timeline_at ?? f.created_at)}
+            <ChannelBadge channel={result.channel} />
+          </span>
         </div>
       </div>
       <ScoreBadge score={result.score} />
@@ -566,4 +627,3 @@ function ResultGridSkeleton() {
     </div>
   );
 }
-

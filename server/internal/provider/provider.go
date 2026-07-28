@@ -1,15 +1,15 @@
-// Package provider manages per-user model provider settings: which embedding /
-// LLM / VLM vendor + model to use for indexing and search.
+// Package provider manages per-user indexing-model settings: text embedding
+// and VLM choices used to derive searchable observations. The visual vector
+// space stays fixed to CLIP until versioned index generations exist.
 //
 // SPEC §F8 — vendor adapter is in the Python worker; this package stores the
 // user choice and exposes:
 //
 //   - List / Get / Set settings
 //   - Test (probe the worker → confirm it works and record output dim)
-//   - Validate embedding dim against the fixed schema and queue tenant reindex
+//   - Validate embedding dim against the fixed schema and reject unsafe live switches
 //
-// Defaults: when no row exists, falls back to the worker process defaults
-// (MEM_DEFAULT_EMBEDDING / _LLM / _VLM).
+// Defaults: when no row exists, falls back to the worker process defaults.
 package provider
 
 import (
@@ -17,12 +17,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/PeterGuy326/mem/server/internal/indexmeta"
 	"github.com/PeterGuy326/mem/server/internal/queue"
 	"github.com/PeterGuy326/mem/server/internal/workerclient"
 )
@@ -31,28 +34,36 @@ import (
 const (
 	KindEmbedding       = "embedding"
 	KindVisualEmbedding = "visual_embedding"
-	KindLLM             = "llm"
 	KindVLM             = "vlm"
 )
 
 // ValidKinds is the canonical ordered list.
-var ValidKinds = []string{KindEmbedding, KindVisualEmbedding, KindLLM, KindVLM}
+var ValidKinds = []string{KindEmbedding, KindVLM}
 
 // Setting is one row of provider_settings.
 type Setting struct {
 	UserID    uuid.UUID `json:"user_id"`
 	Kind      string    `json:"kind"`
 	Spec      string    `json:"spec"`          // "<vendor>:<model>"
-	Dim       *int      `json:"dim,omitempty"` // embedding output dim (NULL for LLM/VLM)
+	Dim       *int      `json:"dim,omitempty"` // embedding output dim (NULL for VLM)
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Service is the provider settings service.
 type Service struct {
 	pool   *pgxpool.Pool
-	worker *workerclient.Client
+	worker probeWorker
 	queue  *queue.Client // for tenant reindex enqueue after embedding provider changes
 	log    *slog.Logger
+}
+
+// probeWorker is the subset of workerclient.Client used by provider probes.
+// Keeping this small also lets the probe behavior be unit-tested without a
+// live gRPC worker or real model credentials.
+type probeWorker interface {
+	Enabled() bool
+	EmbedTextWith(context.Context, string, string) ([]float32, error)
+	ProbeVLM(context.Context, string) (string, error)
 }
 
 // New constructs a provider Service.
@@ -67,13 +78,16 @@ func New(pool *pgxpool.Pool, worker *workerclient.Client, q *queue.Client, log *
 var (
 	ErrNotFound             = errors.New("provider setting not found")
 	ErrEmbeddingDimConflict = errors.New("embedding dimension cannot be changed online")
+	ErrEmbeddingGeneration  = errors.New("embedding model switch requires a staged index generation")
 )
 
 // List returns all settings for the user (one row per kind, possibly empty).
 func (s *Service) List(ctx context.Context, userID uuid.UUID) ([]Setting, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT user_id, kind, spec, dim, updated_at
-		   FROM provider_settings WHERE user_id = $1 ORDER BY kind`,
+		   FROM provider_settings
+		  WHERE user_id = $1 AND kind IN ('embedding', 'vlm')
+		  ORDER BY kind`,
 		userID,
 	)
 	if err != nil {
@@ -111,19 +125,22 @@ func (s *Service) Get(ctx context.Context, userID uuid.UUID, kind string) (*Sett
 	return &x, nil
 }
 
-// SetResult is returned by Set; it surfaces whether a dim change triggered a
-// reindex so callers (CLI / Web) can show progress.
+// SetResult keeps the existing response envelope while provider switching is
+// intentionally conservative. Reindex fields stay false until versioned index
+// generations can rebuild and activate a corpus atomically.
 type SetResult struct {
-	Setting        Setting `json:"setting"`
-	ReindexQueued  bool    `json:"reindex_queued"`
-	ReindexFiles   int     `json:"reindex_files,omitempty"`
-	PreviousDim    *int    `json:"previous_dim,omitempty"`
-	DimMigrationOK bool    `json:"dim_migration_ok"`
+	Setting         Setting `json:"setting"`
+	ReindexQueued   bool    `json:"reindex_queued"`
+	ReindexFiles    int     `json:"reindex_files,omitempty"`
+	ReindexRequired bool    `json:"reindex_required,omitempty"`
+	PreviousDim     *int    `json:"previous_dim,omitempty"`
+	DimMigrationOK  bool    `json:"dim_migration_ok"`
 }
 
 // Set persists a new provider spec. For text embedding providers it probes the
-// output dim, rejects dimensions incompatible with the fixed table schema, and
-// enqueues reindexing only for the selected resource owner.
+// output dim and rejects dimensions incompatible with the fixed table schema.
+// Once a corpus has embeddings, changing vector space is refused until a
+// versioned generation can be rebuilt and activated atomically.
 //
 // The dim probe happens BEFORE writing the row, so a broken provider spec or
 // incompatible dimension fails without changing settings or shared data.
@@ -139,6 +156,37 @@ func (s *Service) Set(ctx context.Context, userID uuid.UUID, kind, spec string) 
 	var newDim *int
 
 	if kind == KindEmbedding {
+		unlockSwitch := indexmeta.LockProviderSwitch(userID)
+		defer unlockSwitch()
+
+		prev, getErr := s.Get(ctx, userID, kind)
+		if getErr != nil && !errors.Is(getErr, ErrNotFound) {
+			return nil, getErr
+		}
+		if prev == nil || prev.Spec != spec {
+			inFlight, err := s.hasIndexingInFlight(ctx, userID)
+			if err != nil {
+				return nil, fmt.Errorf("check in-flight indexing: %w", err)
+			}
+			if inFlight {
+				return nil, fmt.Errorf(
+					"%w: wait for pending/processing files before changing the embedding provider",
+					ErrEmbeddingGeneration,
+				)
+			}
+		}
+		corpusProvider, hasCorpus, err := indexmeta.TextProvider(ctx, s.pool, userID)
+		if err != nil {
+			if errors.Is(err, indexmeta.ErrUnknownProvider) ||
+				errors.Is(err, indexmeta.ErrMixedProviders) {
+				res.ReindexRequired = true
+			} else {
+				return nil, fmt.Errorf("%w: %v", ErrEmbeddingGeneration, err)
+			}
+		} else if hasCorpus && corpusProvider != spec {
+			return nil, ErrEmbeddingGeneration
+		}
+
 		// Probe the worker with the override active to learn the dim.
 		dim, err := s.probeEmbeddingDim(ctx, spec)
 		if err != nil {
@@ -146,7 +194,6 @@ func (s *Service) Set(ctx context.Context, userID uuid.UUID, kind, spec string) 
 		}
 		newDim = &dim
 
-		prev, _ := s.Get(ctx, userID, kind)
 		var prevDim *int
 		if prev != nil {
 			prevDim = prev.Dim
@@ -176,22 +223,24 @@ func (s *Service) Set(ctx context.Context, userID uuid.UUID, kind, spec string) 
 	}
 	res.Setting = Setting{UserID: userID, Kind: kind, Spec: spec, Dim: newDim, UpdatedAt: upd}
 
-	if kind == KindEmbedding && res.DimMigrationOK {
-		count, err := s.queueReindexAll(ctx, userID)
-		if err != nil {
-			// Best effort: log but don't fail the Set. User can `mem reindex` manually.
-			s.log.Error("queue.reindex_all_failed", "err", err)
-		} else {
-			res.ReindexQueued = true
-			res.ReindexFiles = count
-		}
-	}
 	return res, nil
+}
+
+func (s *Service) hasIndexingInFlight(ctx context.Context, userID uuid.UUID) (bool, error) {
+	var exists bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM files
+			 WHERE user_id = $1
+			   AND index_status IN ('pending', 'processing')
+		)`, userID).Scan(&exists)
+	return exists, err
 }
 
 // Test probes the worker with the current (or supplied) spec and returns a
 // short verification payload — used by the CLI/Web for "does my config
-// actually work" buttons.
+// actually work" buttons. A VLM probe makes one minimal real image request and
+// may therefore incur a small amount of latency and provider usage.
 func (s *Service) Test(ctx context.Context, userID uuid.UUID, kind, specOverride string) (any, error) {
 	if !validKind(kind) {
 		return nil, fmt.Errorf("invalid kind %q", kind)
@@ -204,16 +253,33 @@ func (s *Service) Test(ctx context.Context, userID uuid.UUID, kind, specOverride
 		}
 		spec = cur.Spec
 	}
-	if kind == KindEmbedding {
+	switch kind {
+	case KindEmbedding:
 		dim, err := s.probeEmbeddingDim(ctx, spec)
 		if err != nil {
 			return nil, err
 		}
 		return map[string]any{"kind": kind, "spec": spec, "dim": dim, "ok": true}, nil
+	case KindVLM:
+		started := time.Now()
+		replyChars, err := s.probeVLMProvider(ctx, spec)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"kind":        kind,
+			"spec":        spec,
+			"ok":          true,
+			"reply_chars": replyChars,
+			"latency_ms":  time.Since(started).Milliseconds(),
+		}, nil
+	default:
+		// A visual-embedding probe needs an image-aware worker RPC. Keep its
+		// legacy behavior explicit instead of accidentally claiming that a
+		// VLM probe covered it.
+		return map[string]any{"kind": kind, "spec": spec, "ok": true,
+			"note": "visual embedding probe not implemented yet; will exercise on next use"}, nil
 	}
-	// For llm / vlm we don't have a probe wired yet (W4). Return a soft OK.
-	return map[string]any{"kind": kind, "spec": spec, "ok": true,
-		"note": "non-embedding probe not implemented yet; will exercise on next use"}, nil
 }
 
 // --- internals ---
@@ -244,12 +310,62 @@ func (s *Service) probeEmbeddingDim(ctx context.Context, spec string) (int, erro
 	defer cancel()
 	vec, err := s.worker.EmbedTextWith(cctx, "probe", spec)
 	if err != nil {
-		return 0, err
+		return 0, safeGenerativeProbeError(cctx, KindEmbedding, err)
 	}
 	if len(vec) == 0 {
 		return 0, fmt.Errorf("worker returned empty vector")
 	}
 	return len(vec), nil
+}
+
+// probeVLMProvider uses a dedicated image Process probe so the selected model
+// must successfully inspect an image and return a caption.
+func (s *Service) probeVLMProvider(ctx context.Context, spec string) (int, error) {
+	if err := validateProviderSpec(spec); err != nil {
+		return 0, err
+	}
+	if s.worker == nil || !s.worker.Enabled() {
+		return 0, fmt.Errorf("worker not configured")
+	}
+
+	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	reply, err := s.worker.ProbeVLM(cctx, spec)
+	if err != nil {
+		return 0, safeGenerativeProbeError(cctx, KindVLM, err)
+	}
+	reply = strings.TrimSpace(reply)
+	if reply == "" {
+		return 0, fmt.Errorf("%s provider probe returned an empty reply", KindVLM)
+	}
+	return utf8.RuneCountInString(reply), nil
+}
+
+func validateProviderSpec(spec string) error {
+	vendor, model, ok := strings.Cut(spec, ":")
+	if !ok || strings.TrimSpace(vendor) == "" || strings.TrimSpace(model) == "" {
+		return fmt.Errorf("invalid provider spec: expected '<vendor>:<model>'")
+	}
+	return nil
+}
+
+func safeGenerativeProbeError(ctx context.Context, kind string, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		if errors.Is(ctxErr, context.DeadlineExceeded) {
+			return fmt.Errorf("%s provider probe timed out", kind)
+		}
+		return ctxErr
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%s provider probe timed out", kind)
+	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	// The worker's provider errors may contain an upstream response body. Do
+	// not reflect that body to the API caller: some gateways echo request
+	// headers, including Authorization, in diagnostics.
+	return fmt.Errorf("%s provider probe failed", kind)
 }
 
 // embeddingSchemaDim reads the table-level pgvector dimension without changing

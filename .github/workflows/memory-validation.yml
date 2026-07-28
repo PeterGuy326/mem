@@ -1,0 +1,132 @@
+name: Validate Agent memory
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mem-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  meta:
+    name: Workflow, scripts and Compose
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      MEM_TEST_PROJECT: mem-test-meta-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: server/go.mod
+          cache: false
+
+      - name: Validate workflow
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+
+      - name: Validate project scripts
+        run: |
+          git ls-files -z 'scripts/*.sh' | xargs -0 -n1 bash -n
+          shellcheck scripts/verify.sh scripts/acceptance_agent_memory.sh
+          test -z "$(gofmt -l scripts/testdb.go scripts/mcp_acceptance.go)"
+
+      - name: Validate test Compose model
+        run: docker compose -f docker-compose.test.yml config >/dev/null
+
+  web-acceptance:
+    name: Web memory and transfer acceptance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install locked web dependencies and Chromium
+        working-directory: web
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Run memory and workspace-transfer browser acceptance
+        working-directory: web
+        run: |
+          npm run test:memory
+          npm run test:transfer
+
+  postgres:
+    name: PostgreSQL integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      MEM_TEST_DB: postgres://mem:mem@127.0.0.1:5432/mem_integration_test?sslmode=disable
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16@sha256:00ba258a66dac104fd5171074a0084462a64a1369d8513f3d0a634e2f24d15bc
+        env:
+          POSTGRES_USER: mem
+          POSTGRES_PASSWORD: mem
+          POSTGRES_DB: mem_integration_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mem -d mem_integration_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+
+      - name: Migration and PostgreSQL regression
+        run: ./scripts/verify.sh integration
+
+      - name: PostgreSQL race regression
+        run: ./scripts/verify.sh integration-race
+
+  acceptance:
+    name: HTTP, CLI and MCP lifecycle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+
+      - name: Run isolated Agent-memory lifecycle
+        run: ./scripts/acceptance_agent_memory.sh

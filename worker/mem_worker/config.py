@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     )
 
     # ---- gRPC server ----
-    grpc_host: str = Field(default="0.0.0.0", alias="MEM_WORKER_GRPC_HOST")
+    grpc_host: str = Field(default="127.0.0.1", alias="MEM_WORKER_GRPC_HOST")
     grpc_port: int = Field(default=50051, alias="MEM_WORKER_GRPC_PORT")
     grpc_max_workers: int = Field(default=8, alias="MEM_WORKER_GRPC_MAX_WORKERS")
 
@@ -71,7 +71,6 @@ class Settings(BaseSettings):
         default="clip:ViT-B-32",  # 512-d shared image+text space (Phase 2)
         alias="MEM_DEFAULT_VISUAL_EMBEDDING",
     )
-    default_llm: str = Field(default="ollama:qwen2.5:7b", alias="MEM_DEFAULT_LLM")
     default_vlm: str = Field(default="ollama:minicpm-v", alias="MEM_DEFAULT_VLM")
     default_asr: str = Field(default="faster-whisper:tiny", alias="MEM_DEFAULT_ASR")
 

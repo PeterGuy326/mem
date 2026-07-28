@@ -9,6 +9,10 @@ func TestLoadPolicyDefaultsAndSessionTTL(t *testing.T) {
 	t.Setenv("MEM_DEPLOYMENT_MODE", "")
 	t.Setenv("MEM_REGISTRATION_MODE", "")
 	t.Setenv("MEM_SESSION_TTL", "90m")
+	t.Setenv("MEM_WORKSPACE_TRANSFER_TIMEOUT", "")
+	t.Setenv("MEM_WORKSPACE_BUNDLE_MAX_BYTES", "")
+	t.Setenv("MEM_WORKSPACE_TRANSFER_MAX_CONCURRENT", "")
+	t.Setenv("MEM_WORKSPACE_TRANSFER_TMP_DIR", "")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -18,6 +22,12 @@ func TestLoadPolicyDefaultsAndSessionTTL(t *testing.T) {
 	}
 	if cfg.SessionTTL != 90*time.Minute {
 		t.Fatalf("session TTL = %s", cfg.SessionTTL)
+	}
+	if cfg.WorkspaceTransferTimeout != DefaultWorkspaceTransferTimeout ||
+		cfg.WorkspaceBundleMaxBytes != DefaultWorkspaceBundleMaxBytes ||
+		cfg.WorkspaceTransferMaxConcurrent != DefaultWorkspaceTransferMaxConcurrent ||
+		cfg.WorkspaceTransferTmpDir != "" {
+		t.Fatalf("unexpected workspace transfer defaults: %#v", cfg)
 	}
 }
 
@@ -30,6 +40,61 @@ func TestLoadRejectsInvalidPolicies(t *testing.T) {
 			t.Setenv(key, value)
 			if _, err := Load(); err == nil {
 				t.Fatalf("expected %s validation error", key)
+			}
+		})
+	}
+}
+
+func TestLoadWorkspaceTransferOverrides(t *testing.T) {
+	t.Setenv("MEM_WORKSPACE_TRANSFER_TIMEOUT", "45m")
+	t.Setenv("MEM_WORKSPACE_BUNDLE_MAX_BYTES", "1073741824")
+	t.Setenv("MEM_WORKSPACE_TRANSFER_MAX_CONCURRENT", "4")
+	t.Setenv("MEM_WORKSPACE_TRANSFER_TMP_DIR", " /var/tmp/mem-transfer ")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.WorkspaceTransferTimeout != 45*time.Minute {
+		t.Fatalf("transfer timeout = %s", cfg.WorkspaceTransferTimeout)
+	}
+	if cfg.WorkspaceBundleMaxBytes != 1<<30 {
+		t.Fatalf("bundle max bytes = %d", cfg.WorkspaceBundleMaxBytes)
+	}
+	if cfg.WorkspaceTransferMaxConcurrent != 4 {
+		t.Fatalf(
+			"transfer max concurrent = %d",
+			cfg.WorkspaceTransferMaxConcurrent,
+		)
+	}
+	if cfg.WorkspaceTransferTmpDir != "/var/tmp/mem-transfer" {
+		t.Fatalf("transfer tmp dir = %q", cfg.WorkspaceTransferTmpDir)
+	}
+}
+
+func TestLoadRejectsInvalidWorkspaceTransferResources(t *testing.T) {
+	tests := []struct {
+		key   string
+		value string
+	}{
+		{"MEM_WORKSPACE_TRANSFER_TIMEOUT", "not-a-duration"},
+		{"MEM_WORKSPACE_TRANSFER_TIMEOUT", "0s"},
+		{"MEM_WORKSPACE_TRANSFER_TIMEOUT", "-1s"},
+		{"MEM_WORKSPACE_BUNDLE_MAX_BYTES", "nope"},
+		{"MEM_WORKSPACE_BUNDLE_MAX_BYTES", "0"},
+		{"MEM_WORKSPACE_BUNDLE_MAX_BYTES", "-1"},
+		{"MEM_WORKSPACE_TRANSFER_MAX_CONCURRENT", "nope"},
+		{"MEM_WORKSPACE_TRANSFER_MAX_CONCURRENT", "0"},
+		{"MEM_WORKSPACE_TRANSFER_MAX_CONCURRENT", "-1"},
+	}
+	for _, test := range tests {
+		t.Run(test.key+"="+test.value, func(t *testing.T) {
+			t.Setenv("MEM_WORKSPACE_TRANSFER_TIMEOUT", "")
+			t.Setenv("MEM_WORKSPACE_BUNDLE_MAX_BYTES", "")
+			t.Setenv("MEM_WORKSPACE_TRANSFER_MAX_CONCURRENT", "")
+			t.Setenv(test.key, test.value)
+			if _, err := Load(); err == nil {
+				t.Fatalf("expected validation error for %s=%q", test.key, test.value)
 			}
 		})
 	}

@@ -1,21 +1,28 @@
 /**
- * Global top nav: logo + drive/ask/faces/providers links + global search box
- * + account menu. Rendered by AppLayout for the simple pages, and directly by
+ * Global top nav: logo + drive/providers links + global search box + account
+ * menu. Rendered by AppLayout for the simple pages, and directly by
  * ExplorerPage (which passes its breadcrumb in via `children`).
  */
 import * as React from 'react';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
-import { LogOut, FolderOpen, Settings, Search } from 'lucide-react';
+import {
+  ArrowLeftRight,
+  BookOpenText,
+  LogOut,
+  FolderOpen,
+  ScrollText,
+  Settings,
+  Search,
+} from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Logo } from './Logo';
 import { useAuth } from '@/hooks/useAuth';
 import { cn } from '@/lib/cn';
 import { useT, LANGS } from '@/i18n';
+import { useCapabilities } from '@/hooks/useWorkspace';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 
-// Ask is no longer a page — it's the floating assistant bubble (AskWidget),
-// reachable from anywhere — so it's intentionally absent from the top nav.
-const navItems = [
+const baseNavItems = [
   { to: '/drive', labelKey: 'nav.drive', icon: FolderOpen, match: '/drive' },
   { to: '/providers', labelKey: 'nav.providers', icon: Settings, match: '/providers' },
 ];
@@ -25,31 +32,60 @@ export function TopBar({ children }: { children?: React.ReactNode }) {
   const location = useLocation();
   const { user, logout } = useAuth();
   const { t, lang, setLang } = useT();
+  const capabilities = useCapabilities();
   const [q, setQ] = React.useState('');
 
   const isActive = (prefix: string) => location.pathname.startsWith(prefix);
+  const navItems = React.useMemo(() => {
+    const items = [baseNavItems[0]!];
+    if (capabilities.data?.permissions.read && capabilities.data.features.memory !== false) {
+      items.push({
+        to: '/memories',
+        labelKey: 'nav.memories',
+        icon: BookOpenText,
+        match: '/memories',
+      });
+    }
+    if (capabilities.data?.features?.handoff && capabilities.data.permissions.read) {
+      items.push({
+        to: '/tasks',
+        labelKey: 'nav.tasks',
+        icon: ScrollText,
+        match: '/tasks',
+      });
+    }
+    items.push({
+      to: '/transfer',
+      labelKey: 'nav.transfer',
+      icon: ArrowLeftRight,
+      match: '/transfer',
+    });
+    items.push(baseNavItems[1]!);
+    return items;
+  }, [capabilities.data]);
 
   return (
     <header className="sticky top-0 z-30 h-12 flex-none border-b border-border bg-bg/85 backdrop-blur-md">
-      <div className="h-full px-4 flex items-center gap-3">
+      <div className="h-full px-2.5 sm:px-4 flex items-center gap-2 sm:gap-3">
         <Logo />
         <div className="h-5 w-px bg-border" aria-hidden />
-        <nav className="flex items-center gap-1">
+        <nav className="flex min-w-0 items-center gap-0.5 sm:gap-1">
           {navItems.map((it) => {
             const Icon = it.icon;
             return (
               <Link
                 key={it.to}
                 to={it.to}
+                aria-label={t(it.labelKey)}
                 className={cn(
-                  'inline-flex items-center gap-1.5 rounded-md px-2.5 h-8 text-sm transition-colors',
+                  'inline-flex items-center gap-1.5 rounded-md px-2 lg:px-2.5 h-8 text-sm transition-colors',
                   isActive(it.match)
                     ? 'bg-bg-inset text-fg'
                     : 'text-fg-muted hover:text-fg hover:bg-bg-inset/60',
                 )}
               >
-                <Icon className="h-3.5 w-3.5" />
-                {t(it.labelKey)}
+                <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                <span className="hidden lg:inline">{t(it.labelKey)}</span>
               </Link>
             );
           })}
@@ -58,7 +94,7 @@ export function TopBar({ children }: { children?: React.ReactNode }) {
         {children}
 
         <form
-          className="ml-auto relative"
+          className="ml-auto relative hidden md:block"
           onSubmit={(e) => {
             e.preventDefault();
             const v = q.trim();
