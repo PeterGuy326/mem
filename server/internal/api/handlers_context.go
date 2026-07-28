@@ -11,6 +11,7 @@ import (
 	"github.com/PeterGuy326/mem/server/internal/auth"
 	"github.com/PeterGuy326/mem/server/internal/contextpack"
 	"github.com/PeterGuy326/mem/server/internal/pathx"
+	"github.com/PeterGuy326/mem/server/internal/search"
 	"github.com/PeterGuy326/mem/server/internal/workspace"
 )
 
@@ -97,10 +98,49 @@ func (s *Server) handleContext(w http.ResponseWriter, r *http.Request) {
 		t = t.Add(24*time.Hour - time.Nanosecond)
 		input.Until = &t
 	}
-	pack, err := s.Context.Build(r.Context(), input)
-	if err != nil {
+	var managed *managedSearchExecutor
+	var pack *contextpack.Pack
+	var retrievalErr error
+	if source != contextpack.SourceMemory && s.DeploymentMode == "saas" {
+		searchQuery := search.Query{
+			UserID:     u.ID,
+			Route:      search.RouteAuto,
+			Type:       req.Type,
+			PathPrefix: input.Scope,
+			Limit:      req.Limit,
+		}
+		requestSearcher, managedRequest, managedErr := s.managedSearcher(
+			r,
+			"context.query",
+			req,
+			searchQuery,
+		)
+		if managedErr != nil {
+			writeManagedEmbeddingError(w, managedErr)
+			return
+		}
+		managed = managedRequest
+		pack, retrievalErr = s.Context.BuildWithSearcher(r.Context(), input, requestSearcher)
+	} else {
+		pack, retrievalErr = s.Context.Build(r.Context(), input)
+	}
+	if managed != nil {
+		if summary, ok, replayed := managed.result(); ok {
+			setManagedUsageHeaders(w, summary, replayed)
+		}
+	}
+	if retrievalErr != nil {
 		if s.Log != nil {
-			s.Log.Error("context.retrieve_failed", "err", err)
+			if managed != nil {
+				// Do not persist provider-controlled error bodies in logs.
+				s.Log.Error("context.managed_retrieve_failed")
+			} else {
+				s.Log.Error("context.retrieve_failed", "err", retrievalErr)
+			}
+		}
+		if managed != nil {
+			writeManagedEmbeddingError(w, retrievalErr)
+			return
 		}
 		writeError(w, http.StatusBadGateway, "context_unavailable", "memory retrieval is temporarily unavailable")
 		return

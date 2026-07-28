@@ -158,18 +158,22 @@ func TestMemContext_PostsEvidenceRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := reg.Call(context.Background(), "mem_context", map[string]any{
-		"query":       "project decision",
-		"scope":       "/Work",
-		"source":      "memory",
-		"memory_kind": "decision",
-		"limit":       float64(6),
-		"max_chars":   float64(9000),
+		"query":           "project decision",
+		"scope":           "/Work",
+		"source":          "memory",
+		"memory_kind":     "decision",
+		"limit":           float64(6),
+		"max_chars":       float64(9000),
+		"idempotency_key": "context-request-1",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if fs.lastMethod != http.MethodPost || fs.lastPath != "/v1/context" {
 		t.Fatalf("unexpected request: %s %s", fs.lastMethod, fs.lastPath)
+	}
+	if got := fs.lastHeaders.Get("Idempotency-Key"); got != "context-request-1" {
+		t.Fatalf("Idempotency-Key = %q", got)
 	}
 	var body map[string]any
 	if err := json.Unmarshal(fs.lastBody, &body); err != nil {
@@ -180,6 +184,40 @@ func TestMemContext_PostsEvidenceRequest(t *testing.T) {
 	}
 	if body["source"] != "memory" || body["memory_kind"] != "decision" {
 		t.Fatalf("memory filters missing from body = %#v", body)
+	}
+	if _, ok := body["idempotency_key"]; ok {
+		t.Fatalf("idempotency_key leaked into body = %#v", body)
+	}
+}
+
+func TestMemSearch_PostsManagedRequestKey(t *testing.T) {
+	fs := newFakeServer(`{"results":[]}`, http.StatusOK, "application/json")
+	defer fs.Close()
+	reg := tools.New()
+	if err := registerSearch(reg, apiclient.New(fs.URL, "tok")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := reg.Call(context.Background(), "mem_search", map[string]any{
+		"query":           "project decision",
+		"scope":           "/Work",
+		"route":           "text",
+		"idempotency_key": "search-request-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fs.lastHeaders.Get("Idempotency-Key"); got != "search-request-1" {
+		t.Fatalf("Idempotency-Key = %q", got)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(fs.lastBody, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["query"] != "project decision" || body["scope"] != "/Work" {
+		t.Fatalf("body = %#v", body)
+	}
+	if _, ok := body["idempotency_key"]; ok {
+		t.Fatalf("idempotency_key leaked into body = %#v", body)
 	}
 }
 

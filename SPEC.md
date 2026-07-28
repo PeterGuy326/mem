@@ -181,6 +181,11 @@ REST 写入契约：`Idempotency-Key` 是必填 HTTP Header，不放在 body 中
 | F7.3 | Scope：search / read / write / delete / admin |
 | F7.4 | 配额：calls/day、storage、索引模型 calls/tokens per day |
 | F7.5 | 429 错误必须返回 retry-after |
+| F7.6 | workspace membership 与商业 entitlement 分表；前者先完成授权，后者只决定平台托管 embedding 是否可用 |
+| F7.7 | 托管调用必须先原子预占再调用 provider，成功后 finalize；并发最后一个 unit 不得超卖 |
+| F7.8 | 幂等域为 workspace + operation；同 key 同请求重放且不重复调用/计费，不同请求返回 409 |
+| F7.9 | provider 超时或结果不确定时保守标记 indeterminate，不自动重试、不重复扣费 |
+| F7.10 | `GET /v1/entitlements/current` 只读返回当前 workspace 的 plan、reserved/consumed/remaining 与 reset |
 
 当前路由 scope：`POST /v1/memories` 需要 `write`，若关联
 `source.file_id` 额外需要 `read`；memory list/detail 需要 `read`；
@@ -191,6 +196,14 @@ workspace 角色；
 若引用 `mem://` 证据还需要 `read`；`resume` 的确定性 checkpoint 恢复只需要
 `read`，只有可选的语义 Context Pack 增强需要 `search`。
 
+`private` 部署不经过商业门禁；SaaS 只有当实际解析出的文本向量 provider 与
+服务端 `MEM_MANAGED_EMBEDDING_PROVIDER` 完全一致时才进入托管额度链路，本地和
+BYOM provider 不收费。SaaS entitlement 存储/配置不可用时必须 fail closed，
+且无 workspace 成员资格的请求在查询 entitlement 或调用 provider 之前返回
+`403`。托管接口区分 `402 plan_required`、`429 quota_exhausted`（含
+`Retry-After`）、`502`、`504`；`504` 的 provider 结果不确定，客户端不得自动
+重试。
+
 ### F8 · Provider 可插拔
 
 | ID | 需求 |
@@ -200,6 +213,8 @@ workspace 角色；
 | F8.3 | Phase 1 内置：Ollama、OpenAI、Anthropic |
 | F8.4 | 用户 API Key 仅本地存储，不上报任何服务 |
 | F8.5 | 配置：`mem provider set <type> <vendor>:<model>` |
+| F8.6 | 自部署默认推荐而不强制某一开源向量模型；结构化/关键词记忆可完全不使用向量模型 |
+| F8.7 | 平台托管向量服务是可选会员权益，账单系统不进入 mem 核心；使用记录不得保存 query、内容、向量或密钥 |
 
 这里的 Provider 只服务于文件理解与索引。上层 Agent 使用哪个回答模型不由 mem
 配置，也不会通过 mem Worker 代理调用。
@@ -496,7 +511,7 @@ embeddings_face (
 - **`--format json`**：机器可读
 - **`-q / --quiet`**：只输出关键字段
 - **`--stream`**：流式输出（支持该能力的检索命令）
-- **退出码**：`0` ok · `2` not_found · `3` auth · `4` quota · `5` provider_error
+- **退出码**：`0` ok · `2` not_found · `3` auth · `4` plan/quota · `5` provider/timeout
 
 ### 7.2 命令清单（Phase 1）
 
@@ -527,7 +542,8 @@ mem ls --tag <tag>
 mem info <file_id>                        # 详情（含 AI 摘要）
 
 # 搜
-mem search <query> [--type ...] [--since ...] [--until ...] [--face <name>] [--limit N]
+mem search <query> [--type ...] [--since ...] [--until ...] [--face <name>] [--limit N] \
+  [--idempotency-key <stable-key>]
 mem search <query> --format json --stream
 
 # 关联
@@ -540,7 +556,8 @@ mem remember <content> --kind <kind> --path <path> \
   [--agent-id <id>] [--session-id <id>] [--task-id <id>]
 mem memory <memory-id> [--scope <path>] [--format json]
 mem context <query> [--scope <path>] [--source all|file|memory] \
-  [--memory-kind <kind>] [--limit N] [--max-chars N] [--format json]
+  [--memory-kind <kind>] [--limit N] [--max-chars N] \
+  [--idempotency-key <stable-key>] [--format json]
 mem checkpoint --input <handoff.json|-> --idempotency-key <stable-key>
 mem tasks [--scope <path>] [--limit N] [--after <task-uuid>] [--format json]
 mem checkpoints <task-key> [--scope <path>] [--limit N] \
@@ -680,6 +697,7 @@ CLI 的 `--idempotency-key` 由适配器转换为 HTTP `Idempotency-Key` Header�
       until: { type: string, format: date }
       face:  { type: string }
       limit: { type: integer, default: 10 }
+      idempotency_key: { type: string, description: "托管请求的稳定重放 key；省略时为本次调用生成" }
     required: [query]
   output:
     results: [{ id, name, snippet, score, preview_url, timeline_at }]
@@ -794,6 +812,7 @@ CLI 的 `--idempotency-key` 由适配器转换为 HTTP `Idempotency-Key` Header�
       until:     { type: string, format: date }
       limit:     { type: integer, default: 8 }
       max_chars: { type: integer, default: 12000 }
+      idempotency_key: { type: string, description: "托管请求的稳定重放 key；省略时为本次调用生成" }
     required: [query]
   output:
     source: string

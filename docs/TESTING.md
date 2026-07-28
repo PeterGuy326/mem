@@ -138,11 +138,12 @@ marker before it can drop anything. The control role therefore needs
 
 1. validates migrations on a fresh owned database and applies `0001` through
    the declared head;
-2. asserts the current privacy schema, performs the explicit `13 → 11 → 13`
+2. asserts the current privacy schema, performs the explicit `14 → 11 → 14`
    rollback round trip, and asserts both intermediate schema states;
 3. creates separate fresh databases for normal and race runs, then executes
    the real PostgreSQL memory, handoff, workspace-transfer, HTTP-router,
-   folder/file path-locking, folder-lifecycle and relator tests serially; and
+   folder/file path-locking, folder-lifecycle, relator, managed-entitlement,
+   replay-authorization and HTTP-ordering tests serially; and
 4. fails if any required integration test is skipped.
 
 Required tests:
@@ -155,8 +156,11 @@ Required tests:
 - `TestWorkspacePathLockingIntegration`
 - `TestFilePathLockingIntegration`
 - `TestRecomputePerson`
+- `TestManagedEmbeddingEntitlementPostgres`
+- `TestManagedSearchReplayPostgres`
+- `TestManagedEmbeddingHTTPAuthorizationPostgres`
 
-Expected result: migrations reach the declared current head (currently `13`),
+Expected result: migrations reach the declared current head (currently `14`),
 both rollback-state assertions pass, every named test prints `PASS`, all
 commands exit `0`, and the race run reports no data race.
 
@@ -239,10 +243,10 @@ Use this table in pull requests and add implementation-specific scenarios:
 | --- | --- | --- | --- |
 | V1 | Server, CLI and MCP build and preserve unit contracts | `make test-server` | Exit `0`; no skipped DB claim |
 | V2 | Worker processing regressions remain hermetic | `make test-worker` | Exit `0`; real-model gate explicitly skipped |
-| V3 | Memory and transfer control surfaces work in a browser | `make test-web` | Typecheck/lint/build and both acceptance suites pass |
+| V3 | Memory, transfer and managed-embedding control surfaces work in a browser | `make test-web` | Typecheck/lint/build, both browser acceptance suites and managed status mapping pass |
 | V4 | High-risk Go paths are race-free | `make test-race` | Exit `0`; no data-race warning |
-| V5 | Fresh schema, rollback and PostgreSQL semantics hold | `make test-integration` | Migration head and eight named tests pass, none skipped |
-| V6 | DB concurrency paths are race-free | `make test-integration-race` | The same eight tests pass under `-race` |
+| V5 | Fresh schema, rollback and PostgreSQL semantics hold | `make test-integration` | Migration head and eleven named tests pass, none skipped |
+| V6 | DB concurrency paths are race-free | `make test-integration-race` | The same eleven tests pass under `-race` |
 | V7 | Real service boundaries agree | `make test-acceptance` | HTTP, CLI and MCP share one isolated service; memory citation/provenance, bounded checkpoint listing, full checkpoint get, lifecycle and forget redaction pass |
 | V8 | Multilingual visual quality meets the chosen checkpoint | Opt-in command in section 6 | All fixed ranking assertions pass |
 

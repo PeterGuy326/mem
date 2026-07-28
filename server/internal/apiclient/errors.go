@@ -20,8 +20,10 @@ const (
 	KindAuth               // 401 / 403
 	KindNotFound           // 404
 	KindConflict           // 409
+	KindPlan               // 402
 	KindQuota              // 429
 	KindProvider           // 502 / 503
+	KindTimeout            // 504
 	KindBadInput           // 400
 )
 
@@ -53,10 +55,14 @@ func (e *APIError) Kind() ErrorKind {
 		return KindNotFound
 	case http.StatusConflict:
 		return KindConflict
+	case http.StatusPaymentRequired:
+		return KindPlan
 	case http.StatusTooManyRequests:
 		return KindQuota
 	case http.StatusBadGateway, http.StatusServiceUnavailable:
 		return KindProvider
+	case http.StatusGatewayTimeout:
+		return KindTimeout
 	case http.StatusBadRequest:
 		return KindBadInput
 	}

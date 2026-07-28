@@ -6,6 +6,7 @@ package contextpack
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -170,6 +171,28 @@ func (s *Service) Build(ctx context.Context, req Request) (*Pack, error) {
 	if s == nil {
 		return nil, fmt.Errorf("context retrieval is not configured")
 	}
+	return s.build(ctx, req, s.search)
+}
+
+// BuildWithSearcher applies one request-scoped file retrieval adapter. Hosted
+// managed embeddings use this to enforce the exact same entitlement and
+// idempotency gate as /v1/search while preserving the lexical-memory lane.
+func (s *Service) BuildWithSearcher(
+	ctx context.Context,
+	req Request,
+	fileSearcher Searcher,
+) (*Pack, error) {
+	if s == nil {
+		return nil, fmt.Errorf("context retrieval is not configured")
+	}
+	return s.build(ctx, req, fileSearcher)
+}
+
+func (s *Service) build(
+	ctx context.Context,
+	req Request,
+	fileSearcher Searcher,
+) (*Pack, error) {
 	req.Query = strings.TrimSpace(req.Query)
 	if req.Query == "" {
 		return nil, fmt.Errorf("query is empty")
@@ -215,11 +238,11 @@ func (s *Service) Build(ctx context.Context, req Request) (*Pack, error) {
 		perEvidence = 4_000
 	}
 
-	runFiles := source == SourceFile || (source == SourceAll && s.search != nil)
+	runFiles := source == SourceFile || (source == SourceAll && fileSearcher != nil)
 	// An existing MIME filter retains its historical file-only meaning.
 	runMemories := source == SourceMemory ||
 		(source == SourceAll && req.Type == "" && s.memories != nil)
-	if source == SourceFile && s.search == nil {
+	if source == SourceFile && fileSearcher == nil {
 		return nil, fmt.Errorf("file retrieval is not configured")
 	}
 	if source == SourceMemory && s.memories == nil {
@@ -239,7 +262,7 @@ func (s *Service) Build(ctx context.Context, req Request) (*Pack, error) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			files.hits, files.err = s.search.Search(ctx, search.Query{
+			files.hits, files.err = fileSearcher.Search(ctx, search.Query{
 				UserID:       req.UserID,
 				Text:         req.Query,
 				Route:        search.RouteAuto,
@@ -298,10 +321,12 @@ func (s *Service) Build(ctx context.Context, req Request) (*Pack, error) {
 		Retrieved: time.Now().UTC(),
 	}
 	if runFiles && files.err != nil {
-		pack.Warnings = append(pack.Warnings, Warning{
-			Source: SourceFile, Code: "file_retrieval_unavailable",
-			Message: "file evidence could not be retrieved",
-		})
+		pack.Warnings = append(pack.Warnings, warningForError(
+			SourceFile,
+			"file_retrieval_unavailable",
+			"file evidence could not be retrieved",
+			files.err,
+		))
 	}
 	if runMemories && memories.err != nil {
 		pack.Warnings = append(pack.Warnings, Warning{
@@ -324,6 +349,21 @@ func (s *Service) Build(ctx context.Context, req Request) (*Pack, error) {
 		pack.TotalChars += len([]rune(candidate.Excerpt))
 	}
 	return pack, nil
+}
+
+type contextWarningError interface {
+	ContextWarning() (code, message string)
+}
+
+func warningForError(source, fallbackCode, fallbackMessage string, err error) Warning {
+	var described contextWarningError
+	if errors.As(err, &described) {
+		code, message := described.ContextWarning()
+		if code != "" && message != "" {
+			return Warning{Source: source, Code: code, Message: message}
+		}
+	}
+	return Warning{Source: source, Code: fallbackCode, Message: fallbackMessage}
 }
 
 func fileEvidence(h search.Hit) Evidence {

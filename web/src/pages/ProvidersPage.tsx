@@ -26,7 +26,11 @@ import {
   type IndexProviderKind,
   type ProviderSetting,
 } from '@/lib/ai';
-import { ApiException } from '@/lib/api';
+import {
+  getEntitlementSummary,
+  presentManagedEmbeddingError,
+  type EntitlementResponse,
+} from '@/lib/managed-embeddings';
 
 const DEFAULT_INDEX_KINDS: IndexProviderKind[] = ['embedding', 'vlm'];
 
@@ -72,8 +76,10 @@ const SAMPLE_SPECS: Partial<Record<IndexProviderKind, string[]>> = {
 
 export function ProvidersPage() {
   const [data, setData] = React.useState<{ settings: ProviderSetting[]; kinds: string[] } | null>(null);
+  const [entitlement, setEntitlement] = React.useState<EntitlementResponse | null>(null);
   const [busy, setBusy] = React.useState(true);
   const [err, setErr] = React.useState<string | null>(null);
+  const [entitlementErr, setEntitlementErr] = React.useState<string | null>(null);
   const [editing, setEditing] = React.useState<Record<string, string>>({});
   const [savingKind, setSavingKind] = React.useState<string | null>(null);
   const [lastResult, setLastResult] = React.useState<string | null>(null);
@@ -86,14 +92,27 @@ export function ProvidersPage() {
   async function refresh() {
     setBusy(true);
     setErr(null);
-    try {
-      const r = await listProviders();
-      setData(r);
-    } catch (e) {
-      setErr(e instanceof ApiException ? e.message : String(e));
-    } finally {
-      setBusy(false);
+    setEntitlementErr(null);
+    const [providersResult, entitlementResult] = await Promise.allSettled([
+      listProviders(),
+      getEntitlementSummary(),
+    ]);
+    if (providersResult.status === 'fulfilled') {
+      setData(providersResult.value);
+    } else {
+      const presentation = presentManagedEmbeddingError(providersResult.reason);
+      setErr(`${presentation.title}: ${presentation.message}`);
     }
+    if (entitlementResult.status === 'fulfilled') {
+      setEntitlement(entitlementResult.value);
+    } else {
+      // Entitlements describe the optional managed service. Their control
+      // plane must never hide otherwise healthy local/BYOM provider settings.
+      setEntitlement(null);
+      const presentation = presentManagedEmbeddingError(entitlementResult.reason);
+      setEntitlementErr(`${presentation.title}: ${presentation.message}`);
+    }
+    setBusy(false);
   }
   React.useEffect(() => {
     refresh();
@@ -126,7 +145,8 @@ export function ProvidersPage() {
       });
       await refresh();
     } catch (e) {
-      setErr(e instanceof ApiException ? e.message : String(e));
+      const presentation = presentManagedEmbeddingError(e);
+      setErr(`${presentation.title}: ${presentation.message}`);
     } finally {
       setSavingKind(null);
     }
@@ -139,7 +159,8 @@ export function ProvidersPage() {
       const r = await testProvider(kind, spec);
       setLastResult(`test ${kind}: ${JSON.stringify(r)}`);
     } catch (e) {
-      setErr(e instanceof ApiException ? e.message : String(e));
+      const presentation = presentManagedEmbeddingError(e);
+      setErr(`${presentation.title}: ${presentation.message}`);
     }
   }
 
@@ -162,6 +183,53 @@ export function ProvidersPage() {
         Text-vector changes are allowed only before a corpus exists; visual vectors stay
         fixed to CLIP until versioned index generations are available.
       </p>
+
+      {entitlement && (
+        <section
+          className="mb-4 rounded-md border border-border bg-bg-subtle px-4 py-3 text-sm"
+          data-testid="managed-embedding-entitlement"
+        >
+          {entitlement.deployment_mode === 'private' ? (
+            <>
+              <div className="font-medium text-fg">Self-hosted providers stay subscription-free</div>
+              <p className="mt-1 text-xs text-fg-muted">
+                Local and BYOM embedding providers are controlled by this workspace. No
+                commercial plan gate is applied.
+              </p>
+            </>
+          ) : entitlement.managed_embedding ? (
+            <>
+              <div className="flex items-center justify-between gap-4">
+                <span className="font-medium text-fg">
+                  Managed embeddings · {entitlement.managed_embedding.plan}
+                </span>
+                <span className="font-mono text-xs text-fg-muted">
+                  {entitlement.managed_embedding.managed_embedding_units_remaining} remaining
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-fg-muted">
+                {entitlement.upgrade_required
+                  ? 'An active workspace membership is required. Local/BYOM providers remain available.'
+                  : `Quota resets ${new Date(
+                      entitlement.managed_embedding.reset_at,
+                    ).toLocaleString()}.`}
+              </p>
+            </>
+          ) : (
+            <div className="text-fg-muted">Managed embedding status is unavailable.</div>
+          )}
+        </section>
+      )}
+
+      {entitlementErr && (
+        <div
+          className="mb-4 rounded-md border border-border bg-bg-subtle px-4 py-3 text-sm text-fg-muted"
+          data-testid="managed-embedding-entitlement-error"
+        >
+          Managed embedding status unavailable: {entitlementErr} Local/BYOM provider settings
+          remain available below.
+        </div>
+      )}
 
       {err && (
         <div className="mb-4 rounded-md border border-danger/40 bg-danger/5 px-4 py-3 text-sm text-danger">

@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/PeterGuy326/mem/server/internal/apiclient"
+	"github.com/google/uuid"
 )
 
 // cliError carries the exit-code mapping from SPEC §7.1.
@@ -35,9 +37,9 @@ func fromAPIError(err error) error {
 		code = 3
 	case apiclient.KindNotFound:
 		code = 2
-	case apiclient.KindQuota:
+	case apiclient.KindPlan, apiclient.KindQuota:
 		code = 4
-	case apiclient.KindProvider:
+	case apiclient.KindProvider, apiclient.KindTimeout:
 		code = 5
 	}
 	return newCliError(code, fmt.Sprintf("%s (HTTP %d)", ae.Message, ae.StatusCode), ae.Hint)
@@ -54,8 +56,34 @@ func newHTTPClient(cfg *cliConfig) *httpClient {
 	return &httpClient{api: apiclient.New(cfg.Server, cfg.Token).WithWorkspace(cfg.Workspace)}
 }
 
+func managedRequestKey(operation, configured string) (string, error) {
+	configured = strings.TrimSpace(configured)
+	if len(configured) > 200 {
+		return "", fmt.Errorf("--idempotency-key must be at most 200 characters")
+	}
+	if configured != "" {
+		return configured, nil
+	}
+	return "cli-" + operation + "-" + uuid.NewString(), nil
+}
+
 func (c *httpClient) doJSON(method, path string, body, out any) error {
 	return fromAPIError(c.api.DoJSON(context.Background(), method, path, body, out))
+}
+
+func (c *httpClient) doJSONWithHeaders(
+	method, path string,
+	body, out any,
+	headers map[string]string,
+) error {
+	return fromAPIError(c.api.DoJSONWithHeaders(
+		context.Background(),
+		method,
+		path,
+		body,
+		out,
+		headers,
+	))
 }
 
 func (c *httpClient) doMultipartUpload(_, _ /*fieldName,fileName—now derived*/, name string, mimeType, targetFolder string, file io.Reader, tags []string, out any) error {
