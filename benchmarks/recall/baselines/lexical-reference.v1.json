@@ -26,7 +26,7 @@
   "disclaimer": "not production recall",
   "engine": "lexical-reference",
   "failures": [],
-  "generated_at": "2026-07-28T15:52:11.303152+00:00",
+  "generated_at": "2026-07-28T15:55:17.807778+00:00",
   "metric_rules": {
     "citation_denominator": "all deduplicated returned results through rank 10; empty is zero",
     "dedupe": "first occurrence of a document id wins before scoring",
@@ -518,8 +518,8 @@
     }
   ],
   "repository": {
-    "commit": "82bfefaf5fbff9354a0bc943e69b99a2c8ce82a0",
-    "dirty": true
+    "commit": "f00987156586115d9a20a4818975667151c46b1d",
+    "dirty": false
   },
   "runtime": {
     "cpu_count": 12,
