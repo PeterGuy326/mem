@@ -63,10 +63,12 @@ The project is not yet publishing stable semantic-versioned releases.
 - Namespaced login, logout and token management under `mem auth`; legacy
   top-level paths remain hidden compatibility aliases with deprecation
   warnings.
-- Split mem-specific development, test-environment and regression rules into
-  project documentation. Organization-wide defaults are being centralized in
-  `fullstack-ai-infra/.github`; the repository fallback remains until those
-  defaults are active.
+- Inherit organization-wide contribution, issue, pull-request, conduct, and
+  support defaults from `fullstack-ai-infra/.github`; keep only `mem`-specific
+  development, security, triage, ownership, release, and validation rules in
+  this repository.
+- Align pull-request policy with the inherited controlled exceptions for
+  trusted Dependabot updates and maintainer-labeled security advisories.
 - Removed the repository-specific cloud-model credential and model-probing
   helpers. Core Agent memory remains model-independent; optional indexing
   providers stay behind the Worker contract.

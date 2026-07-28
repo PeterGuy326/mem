@@ -1,10 +1,15 @@
 # Security Policy
 
+The organization-wide
+[security policy](https://github.com/fullstack-ai-infra/.github/blob/main/SECURITY.md)
+defines confidential reporting, coordinated disclosure, and safe-research
+requirements. This file adds only the versions, scope, response target, and
+private intake route specific to `mem`.
+
 ## Supported versions
 
 Security fixes are applied to the current `main` branch. After stable releases
-begin, the latest stable release will also receive security fixes. Older
-commits, forks, and prereleases are supported on a best-effort basis only.
+begin, the latest stable release will also receive security fixes.
 
 | Version | Supported |
 | --- | --- |
@@ -12,50 +17,23 @@ commits, forks, and prereleases are supported on a best-effort basis only.
 | Latest stable release | Yes, once available |
 | Older versions and prereleases | Best effort |
 
-## Report a vulnerability privately
+## Private reporting
 
-Do not open a public issue, discussion, or pull request for a suspected
-vulnerability.
-
-Use GitHub's
-[private vulnerability reporting form](https://github.com/fullstack-ai-infra/mem/security/advisories/new).
-If that form is unavailable, contact an organization owner through their
-GitHub profile and ask for a private reporting channel without including
-vulnerability details in the public message.
-
-Include, when available:
-
-- affected versions, commits, and components;
-- impact and a realistic attack scenario;
-- minimal reproduction steps or a proof of concept;
-- required configuration or privileges;
-- suggested mitigation; and
-- whether anyone else has received the report.
-
-Remove credentials, personal data, and third-party secrets from all evidence.
-Use test accounts and the least destructive proof necessary.
-
-## What to expect
+Do not disclose a suspected vulnerability in a public issue, discussion, or
+pull request. Use the
+[`mem` private vulnerability reporting form](https://github.com/fullstack-ai-infra/mem/security/advisories/new).
+If the form is unavailable, follow the confidential fallback in the
+organization security policy and identify `fullstack-ai-infra/mem` as the
+affected repository.
 
 Maintainers aim to acknowledge a complete report within five business days.
-They will validate the report, agree on severity and disclosure timing, and
-provide status updates while a fix is in progress. These are response targets,
-not guarantees.
+This is a response target, not a guarantee.
 
-Please allow a reasonable remediation window before disclosure. Maintainers
-will credit reporters who request credit, unless legal, privacy, or safety
-constraints prevent it.
+## `mem` scope
 
-## Scope and safe research
-
-Good-faith research must:
-
-- avoid accessing or changing data that is not yours;
-- avoid service disruption, persistence, social engineering, and destructive
-  testing;
-- stop after demonstrating the minimum evidence required; and
-- comply with applicable law.
+In scope are vulnerabilities affecting the server, CLI, MCP adapter, Worker,
+Web application, authorization boundaries, memory lifecycle, workspace
+bundles, release artifacts, or secrets committed to this repository.
 
 Dependency vulnerabilities that do not affect `mem` should be reported to the
-upstream project. Reports about secrets accidentally committed to this
-repository are in scope and should be submitted privately immediately.
+upstream project.

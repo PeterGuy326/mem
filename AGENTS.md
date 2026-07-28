@@ -1,7 +1,8 @@
 # Repository Instructions for Agents
 
 These instructions apply to the entire repository. They supplement the public
-contribution rules in `CONTRIBUTING.md`.
+[organization contribution rules](https://github.com/fullstack-ai-infra/.github/blob/main/CONTRIBUTING.md)
+and the `mem`-specific contracts in `docs/DEVELOPMENT.md`.
 
 ## Required workflow
 
@@ -13,7 +14,8 @@ contribution rules in `CONTRIBUTING.md`.
    dirty.
 4. Keep the diff scoped to the issue. Add tests, documentation, and an
    `[Unreleased]` changelog entry when applicable.
-5. Open a PR that links the issue and contains a completed validation ledger.
+5. Open a PR that links the applicable issue, advisory, or trusted dependency
+   update record and contains a completed validation ledger.
 6. Require passing CI and an approval from someone other than the author.
 7. Resolve all conversations, then squash merge. Never push directly to
    `main`.

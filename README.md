@@ -225,7 +225,8 @@ mem workspace export --output agent-workspace.membundle
 - 本地运行与验证：[docs/RUN_LOCAL.md](docs/RUN_LOCAL.md)
 - 项目开发边界：[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
 - 测试环境与回归门槛：[docs/TESTING.md](docs/TESTING.md)
-- 参与贡献：[CONTRIBUTING.md](CONTRIBUTING.md)
+- 参与贡献：[组织贡献基线](https://github.com/fullstack-ai-infra/.github/blob/main/CONTRIBUTING.md)
+  与 [mem 开发契约](docs/DEVELOPMENT.md)
 - 版本变化：[CHANGELOG.md](CHANGELOG.md)
 
 ---
@@ -263,8 +264,9 @@ the [MCP setup guide](docs/mcp.md).
 ## Verify a change
 
 CI applies the following checks to pull requests. Run the applicable groups
-locally before opening one; [CONTRIBUTING.md](CONTRIBUTING.md) explains the
-review evidence expected when a check cannot be run.
+locally before opening one; [the mem development contract](docs/DEVELOPMENT.md)
+and [testing guide](docs/TESTING.md) define the evidence expected when a check
+cannot be run.
 
 Go integration tests require an explicitly disposable PostgreSQL database
 whose name ends in `_test`. With the Docker Compose services running, this
@@ -339,10 +341,12 @@ All changes follow an issue-first, pull-request-only workflow:
 4. Open a pull request that closes or references the issue.
 5. Obtain an independent review and pass required CI checks before merge.
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) for the development and review rules,
-and [docs/maintainers/triage.md](docs/maintainers/triage.md) for the issue
-taxonomy. Security reports must follow [SECURITY.md](SECURITY.md), not a public
-issue. Release maintainers should use
+Read the
+[organization contribution baseline](https://github.com/fullstack-ai-infra/.github/blob/main/CONTRIBUTING.md)
+and the [mem-specific development contract](docs/DEVELOPMENT.md), then use
+[docs/maintainers/triage.md](docs/maintainers/triage.md) for the issue
+taxonomy. Security reports must follow [SECURITY.md](SECURITY.md), not a
+public issue. Release maintainers should use
 [docs/maintainers/releasing.md](docs/maintainers/releasing.md).
 
 ## Project status

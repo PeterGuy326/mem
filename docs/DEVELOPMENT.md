@@ -1,11 +1,14 @@
 # Developing mem
 
 This document contains rules that are specific to the `mem` product and code
-base. Organization-wide issue, branch, pull-request, review, security and
-community defaults are maintained in
+base. The active organization-wide contribution lifecycle, issue and pull
+request forms, review rules, conduct policy, and support defaults come from
 [`fullstack-ai-infra/.github`](https://github.com/fullstack-ai-infra/.github).
-Until those defaults are active on the organization default branch, this
-repository keeps [CONTRIBUTING.md](../CONTRIBUTING.md) as a safe fallback.
+This repository owns only `mem`-specific product, validation, security,
+ownership, triage, and release rules. Do not copy organization defaults back
+into this repository: GitHub treats local community files as whole-file or
+whole-directory overrides rather than composing them with organization
+defaults.
 
 ## Product boundary
 
@@ -56,6 +59,25 @@ release. A migration must:
 - update export/import schemas when portable data changes.
 
 Never point integration tests at a development or production database.
+
+## Pull-request contract evidence
+
+In addition to the organization pull request template, every `mem` change must
+record evidence for each applicable product contract:
+
+- API, CLI, MCP, and Web behavior delegates to the canonical server semantics;
+- workspace, authorization, literal-path, provenance, and secret boundaries
+  remain covered;
+- idempotent replay and conflict behavior is covered wherever state can be
+  retried;
+- partial-retrieval warnings remain explicit when recall behavior changes; and
+- database migrations preserve existing data and use an explicitly disposable
+  database whose name ends in `_test`.
+
+Use `N/A` with a reason when a contract is genuinely unaffected. The
+repository's issue labels and area taxonomy remain local; organization issue
+forms do not apply them automatically, so maintainers assign them during
+initial triage.
 
 ## Required validation
 

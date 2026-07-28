@@ -22,6 +22,11 @@ follow the private process in `SECURITY.md`.
 Use exactly one type, exactly one status, at least one area, and the strongest
 honest evidence level. Bugs also require exactly one severity.
 
+The public issue forms are inherited from the organization and intentionally
+do not own repository labels. During initial triage, a `mem` maintainer applies
+the type, status, area, evidence, and—when applicable—severity labels defined
+below.
+
 ### Type
 
 | Label | Use |
@@ -73,9 +78,10 @@ Feature and maintenance issues can begin at E0. For them, E2–E4 describe
 source-level support for the limitation, independent reproduction, and
 end-to-end confirmation of the delivered outcome.
 
-Public issue forms let reporters select only E0–E2. A maintainer assigns E3
-after someone independently reproduces the claim and E4 only after a
-non-author verifies the delivered outcome end to end.
+Organization issue forms collect the reporter's supporting evidence. A
+maintainer assigns E0–E2 during triage, E3 after someone independently
+reproduces the claim, and E4 only after a non-author verifies the delivered
+outcome end to end.
 
 ### Status
 

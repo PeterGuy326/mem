@@ -8,6 +8,8 @@ on:
       - synchronize
       - reopened
       - ready_for_review
+      - labeled
+      - unlabeled
 
 permissions:
   contents: read
@@ -32,6 +34,16 @@ jobs:
               /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9][a-z0-9._/-]*\))?!?: .+$/;
             const linkedIssue =
               /\b(?:Closes|Fixes|Resolves|Refs)\s+(?:(?:[\w.-]+\/[\w.-]+)?#\d+|https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+)\b/i;
+            const advisoryReference =
+              /\bGHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}\b/i;
+            const securityLabeled =
+              pullRequest.labels?.some(({ name }) => name === "security");
+            const trustedDependencyUpdate =
+              pullRequest.user?.login === "dependabot[bot]";
+            const hasTrackingRecord =
+              linkedIssue.test(body) ||
+              (advisoryReference.test(body) && securityLabeled) ||
+              trustedDependencyUpdate;
 
             const errors = [];
             if (!conventionalTitle.test(title)) {
@@ -40,16 +52,19 @@ jobs:
                 "`feat(memory): add scoped recall` or `fix!: reject an unsafe migration`."
               );
             }
-            if (!linkedIssue.test(body)) {
+            if (!hasTrackingRecord) {
               errors.push(
-                "Link an issue with an explicit keyword in the PR body, for example " +
+                "Link a tracking record in the PR body, for example " +
                 "`Fixes #123`, `Refs owner/repository#123`, or " +
-                "`Closes https://github.com/owner/repository/issues/123`."
+                "`Closes https://github.com/owner/repository/issues/123`. " +
+                "Controlled security work may reference its `GHSA-...` advisory " +
+                "after a maintainer applies the `security` label; " +
+                "trusted Dependabot updates use their bot update record."
               );
             }
 
             if (errors.length > 0) {
               core.setFailed(errors.join("\n"));
             } else {
-              core.info("PR title and issue reference satisfy repository policy.");
+              core.info("PR title and tracking record satisfy repository policy.");
             }
