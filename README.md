@@ -68,7 +68,7 @@ mem mcp serve
 ## 快速开始（Phase 1 MVP 完成后）
 
 ```bash
-git clone https://github.com/PeterGuy326/mem.git
+git clone https://github.com/fullstack-ai-infra/mem.git
 cd mem
 docker compose up -d
 mem auth login
