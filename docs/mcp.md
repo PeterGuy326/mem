@@ -101,8 +101,8 @@ environment variable → built-in default.
 Create a token first:
 
 ```bash
-mem login                                              # creates a 24h admin token
-mem token create --name claude-desktop --scope read,write
+mem auth login                                         # creates a 24h admin token
+mem auth token create --name claude-desktop --scope read,write
 # → copy the printed token; show-once.
 ```
 

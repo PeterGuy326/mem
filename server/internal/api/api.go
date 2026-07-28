@@ -210,7 +210,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		if err != nil {
 			status := http.StatusUnauthorized
 			code := "invalid_token"
-			hint := "create a token via `mem token create` and pass it as Authorization: Bearer <token>"
+			hint := "create a token via `mem auth token create` and pass it as Authorization: Bearer <token>"
 			if errors.Is(err, auth.ErrTokenExpired) {
 				code = "token_expired"
 				hint = "token has expired; create a new one"

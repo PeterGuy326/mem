@@ -42,9 +42,10 @@ func newRootCmd() *cobra.Command {
 	root.PersistentFlags().StringVar(&server, "server", "", "memd base URL (overrides config; e.g. http://localhost:8787)")
 	root.PersistentFlags().StringVar(&format, "format", "text", "output format: text|json")
 
-	root.AddCommand(newLoginCmd())
-	root.AddCommand(newLogoutCmd())
-	root.AddCommand(newTokenCmd())
+	root.AddCommand(newAuthCmd())
+	root.AddCommand(newLegacyAuthCommand(newLoginCmd(), "mem auth login"))
+	root.AddCommand(newLegacyAuthCommand(newLogoutCmd(), "mem auth logout"))
+	root.AddCommand(newLegacyTokenCmd())
 	root.AddCommand(newPutCmd())
 	root.AddCommand(newGetCmd())
 	root.AddCommand(newCatCmd())

@@ -374,11 +374,12 @@ embeddings_face (
 
 ```bash
 # 认证
-mem login
-mem logout
-mem token create --name <name> --scope <scopes> [--quota ...] [--expires ...]
-mem token list
-mem token revoke <token_id>
+mem auth login
+mem auth logout
+mem auth status
+mem auth token create --name <name> --scope <scopes> [--quota ...] [--expires ...]
+mem auth token list
+mem auth token revoke <token_id>
 
 # 存
 mem put <path>                            # 单文件
@@ -422,6 +423,9 @@ mem provider test <type>
 mem status                                # 索引状态、配额、配置
 mem version
 ```
+
+旧的顶层 `mem login`、`mem logout` 和 `mem token ...` 在迁移期保持隐藏兼容，
+执行时输出 deprecated 提示；新脚本必须使用 `mem auth ...`。
 
 ---
 

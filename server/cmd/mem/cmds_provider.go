@@ -54,7 +54,7 @@ func newProviderListCmd() *cobra.Command {
 				return err
 			}
 			if cfg.Token == "" {
-				return newCliError(3, "not logged in", "run `mem login` first")
+				return newCliError(3, "not logged in", "run `mem auth login` first")
 			}
 			c := newHTTPClient(cfg)
 			var resp providerListResp
@@ -113,7 +113,7 @@ mem will automatically:
 				return err
 			}
 			if cfg.Token == "" {
-				return newCliError(3, "not logged in", "run `mem login` first")
+				return newCliError(3, "not logged in", "run `mem auth login` first")
 			}
 			c := newHTTPClient(cfg)
 			kind := args[0]
@@ -156,7 +156,7 @@ func newProviderTestCmd() *cobra.Command {
 				return err
 			}
 			if cfg.Token == "" {
-				return newCliError(3, "not logged in", "run `mem login` first")
+				return newCliError(3, "not logged in", "run `mem auth login` first")
 			}
 			c := newHTTPClient(cfg)
 			kind := args[0]

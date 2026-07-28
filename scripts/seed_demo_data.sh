@@ -6,7 +6,7 @@
 #      memd / worker / ollama).
 #   2. Bootstrap an admin user via direct SQL (memd does not yet expose a
 #      /v1/auth/register endpoint — see CAPABILITY MATRIX below).
-#   3. Login via HTTP POST /v1/auth/login (we deliberately bypass `mem login`
+#   3. Login via HTTP POST /v1/auth/login (we deliberately bypass `mem auth login`
 #      because its interactive prompt uses term.ReadPassword which does not
 #      read from piped stdin — see DECISIONS at top of script).
 #   4. `mem put scripts/demo_data/*.md` (idempotent — re-runs are safe thanks
@@ -30,7 +30,7 @@
 # ============================================================================
 # DECISIONS (why this script looks the way it does)
 # ============================================================================
-#   D1: We authenticate via raw HTTP, not `mem login`, because mem login
+#   D1: We authenticate via raw HTTP, not `mem auth login`, because that command
 #       calls golang.org/x/term.ReadPassword which only reads from a TTY,
 #       not from piped stdin. The script then exports MEM_TOKEN so every
 #       subsequent `mem` invocation is auth'd without touching the user's

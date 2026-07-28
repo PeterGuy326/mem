@@ -68,7 +68,7 @@ so the stack coexists with other local Redis/MinIO instances):
 ## Bootstrap a dev user
 
 memd does not ship a public sign-up endpoint in W1. Insert a user with bcrypt
-once, then use `mem login`:
+once, then use `mem auth login`:
 
 ```bash
 # Generate a bcrypt hash (any tool works; here using Python for convenience)
@@ -80,7 +80,7 @@ psql 'postgres://mem:mem@localhost:5432/mem' -c \
   "INSERT INTO users (email, password_hash) VALUES ('dev@local','<paste-hash>');"
 
 # Login from CLI (writes ~/.mem/config.yaml)
-go run ./cmd/mem login   # prompts for email + password
+go run ./cmd/mem auth login   # prompts for email + password
 ```
 
 ## HTTP API (v1)
@@ -113,11 +113,12 @@ Error envelope (SPEC §8.2): `{"error": "<code>", "hint": "<actionable hint>"}`.
 
 | Command | Description |
 |---|---|
-| `mem login` | Prompt email + password, save token to `~/.mem/config.yaml` |
-| `mem logout` | Clear local config token |
-| `mem token create --name X --scope read,write` | Create token (one-time plaintext printed) |
-| `mem token list` | List tokens |
-| `mem token revoke <id>` | Revoke |
+| `mem auth login` | Prompt email + password, save token to `~/.mem/config.yaml` |
+| `mem auth logout` | Clear local config token |
+| `mem auth status` | Verify the saved token and show workspace access |
+| `mem auth token create --name X --scope read,write` | Create token (one-time plaintext printed) |
+| `mem auth token list` | List tokens |
+| `mem auth token revoke <id>` | Revoke |
 | `mem put <path>` | Upload a single file (auto MIME) |
 | `mem put <path> --to /Photos/2012` | Upload into a virtual folder (mkdir -p) |
 | `mem put <dir> --recursive [--to /Albums]` | Upload every file under dir, mirroring the on-disk tree into `--to` |
@@ -136,6 +137,9 @@ Error envelope (SPEC §8.2): `{"error": "<code>", "hint": "<actionable hint>"}`.
 | `mem folder move <folder_id> <new_parent_path>` | Move a folder (cascades to descendants) |
 | `mem folder rm <folder_id> [--recursive]` | Delete a folder (must be empty unless `--recursive`) |
 | `mem version` | Client + server version |
+
+Legacy `mem login`, `mem logout` and `mem token ...` paths remain hidden
+compatibility aliases and print a deprecation warning.
 
 Global flags: `--format text|json`, `--server URL`.
 Exit codes (SPEC §7.1): `0` ok · `2` not_found · `3` auth · `4` quota · `5` provider_error.

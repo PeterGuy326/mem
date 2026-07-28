@@ -71,7 +71,7 @@ mem mcp serve
 git clone https://github.com/PeterGuy326/mem.git
 cd mem
 docker compose up -d
-mem login
+mem auth login
 mem put ~/Photos --recursive
 mem search "草地上的金毛"
 ```

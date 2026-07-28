@@ -5,17 +5,49 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
 
+func newAuthCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "auth",
+		Short: "Manage authentication and API tokens",
+		Args:  cobra.NoArgs,
+	}
+	cmd.AddCommand(newLoginCmd())
+	cmd.AddCommand(newLogoutCmd())
+	cmd.AddCommand(newAuthStatusCmd())
+	cmd.AddCommand(newTokenCmd())
+	return cmd
+}
+
+func newLegacyAuthCommand(cmd *cobra.Command, replacement string) *cobra.Command {
+	cmd.Hidden = true
+	cmd.Deprecated = fmt.Sprintf("use `%s` instead", replacement)
+	return cmd
+}
+
+func newLegacyTokenCmd() *cobra.Command {
+	cmd := newLegacyAuthCommand(newTokenCmd(), "mem auth token")
+	for _, child := range cmd.Commands() {
+		child.Deprecated = fmt.Sprintf(
+			"use `mem auth token %s` instead",
+			child.Name(),
+		)
+	}
+	return cmd
+}
+
 func newLoginCmd() *cobra.Command {
 	var server string
 	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "Log in to memd (interactive email + password, dev only)",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := resolveConfig(server)
 			if err != nil {
@@ -64,6 +96,7 @@ func newLogoutCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "logout",
 		Short: "Clear local CLI session",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
@@ -80,10 +113,112 @@ func newLogoutCmd() *cobra.Command {
 	}
 }
 
+func newAuthStatusCmd() *cobra.Command {
+	var server string
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "Verify the current login and show its workspace access",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			format, err := cmd.Flags().GetString("format")
+			if err != nil {
+				return err
+			}
+			if format != "text" && format != "json" {
+				return fmt.Errorf("--format must be text or json, got %q", format)
+			}
+
+			cfg, err := resolveConfig(server)
+			if err != nil {
+				return err
+			}
+			if cfg.Token == "" {
+				return newCliError(3, "not logged in", "run `mem auth login` first")
+			}
+
+			var capabilities struct {
+				DeploymentMode   string          `json:"deployment_mode"`
+				RegistrationMode string          `json:"registration_mode"`
+				Workspace        authWorkspace   `json:"workspace"`
+				Permissions      map[string]bool `json:"permissions"`
+			}
+			if err := newHTTPClient(cfg).doJSON(
+				"GET",
+				"/v1/capabilities",
+				nil,
+				&capabilities,
+			); err != nil {
+				return err
+			}
+
+			status := authStatus{
+				LoggedIn:         true,
+				Server:           cfg.Server,
+				Email:            cfg.Email,
+				Workspace:        capabilities.Workspace,
+				Permissions:      capabilities.Permissions,
+				DeploymentMode:   capabilities.DeploymentMode,
+				RegistrationMode: capabilities.RegistrationMode,
+			}
+			if format == "json" {
+				encoder := json.NewEncoder(cmd.OutOrStdout())
+				encoder.SetIndent("", "  ")
+				return encoder.Encode(status)
+			}
+			printAuthStatus(cmd, status)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&server, "server", "", "memd base URL")
+	return cmd
+}
+
+type authWorkspace struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Role string `json:"role"`
+}
+
+type authStatus struct {
+	LoggedIn         bool            `json:"logged_in"`
+	Server           string          `json:"server"`
+	Email            string          `json:"email,omitempty"`
+	Workspace        authWorkspace   `json:"workspace"`
+	Permissions      map[string]bool `json:"permissions"`
+	DeploymentMode   string          `json:"deployment_mode,omitempty"`
+	RegistrationMode string          `json:"registration_mode,omitempty"`
+}
+
+func printAuthStatus(cmd *cobra.Command, status authStatus) {
+	out := cmd.OutOrStdout()
+	fmt.Fprintln(out, "logged in")
+	fmt.Fprintf(out, "server: %s\n", status.Server)
+	if status.Email != "" {
+		fmt.Fprintf(out, "email: %s\n", status.Email)
+	}
+	fmt.Fprintf(
+		out,
+		"workspace: %s (%s)\n",
+		status.Workspace.Name,
+		status.Workspace.ID,
+	)
+	fmt.Fprintf(out, "role: %s\n", status.Workspace.Role)
+
+	permissions := make([]string, 0, len(status.Permissions))
+	for permission, allowed := range status.Permissions {
+		if allowed {
+			permissions = append(permissions, permission)
+		}
+	}
+	slices.Sort(permissions)
+	fmt.Fprintf(out, "permissions: %s\n", strings.Join(permissions, ","))
+}
+
 func newTokenCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "token",
 		Short: "Manage API tokens",
+		Args:  cobra.NoArgs,
 	}
 	cmd.AddCommand(newTokenCreateCmd())
 	cmd.AddCommand(newTokenListCmd())
@@ -101,13 +236,14 @@ func newTokenCreateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a new API token (plaintext shown once)",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := resolveConfig("")
 			if err != nil {
 				return err
 			}
 			if cfg.Token == "" {
-				return newCliError(3, "not logged in", "run `mem login` first")
+				return newCliError(3, "not logged in", "run `mem auth login` first")
 			}
 			scopeList := splitCommas(scopes)
 			body := map[string]any{
@@ -148,6 +284,7 @@ func newTokenListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List API tokens (without secrets)",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := resolveConfig("")
 			if err != nil {
