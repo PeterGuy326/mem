@@ -209,7 +209,7 @@ func (c *Client) EmbedTextWith(ctx context.Context, q, providerSpec string) ([]f
 	return c.embedText(ctx, q, providerSpec)
 }
 
-// EmbedText returns an embedding vector for ``q`` by reusing the Process
+// EmbedText returns an embedding vector for q by reusing the Process
 // pipeline on a synthetic data: URI (chunked by the worker, first chunk wins).
 //
 // This avoids inventing a second RPC just for query-time embedding; the cost

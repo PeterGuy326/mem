@@ -67,11 +67,11 @@ func New(pool *pgxpool.Pool) *Service { return &Service{pool: pool} }
 
 // Sentinel errors.
 var (
-	ErrNotFound   = errors.New("folder not found")
-	ErrNotEmpty   = errors.New("folder is not empty")
-	ErrCycle      = errors.New("cannot move folder into itself or a descendant")
-	ErrRootOp     = errors.New("operation not allowed on root")
-	ErrConflict   = errors.New("a folder with that path already exists")
+	ErrNotFound = errors.New("folder not found")
+	ErrNotEmpty = errors.New("folder is not empty")
+	ErrCycle    = errors.New("cannot move folder into itself or a descendant")
+	ErrRootOp   = errors.New("operation not allowed on root")
+	ErrConflict = errors.New("a folder with that path already exists")
 )
 
 // Create implements mkdir -p semantics: every missing ancestor is created.

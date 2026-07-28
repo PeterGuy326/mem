@@ -54,20 +54,20 @@ type Tool struct {
 // commonly-used parts and leave room for raw extras under Extra so unusual
 // shapes (e.g. `oneOf`) remain expressible.
 type Schema struct {
-	Type        string                 `json:"type"`
-	Properties  map[string]Property    `json:"properties,omitempty"`
-	Required    []string               `json:"required,omitempty"`
-	Description string                 `json:"description,omitempty"`
-	Extra       map[string]any         `json:"-"`
+	Type        string              `json:"type"`
+	Properties  map[string]Property `json:"properties,omitempty"`
+	Required    []string            `json:"required,omitempty"`
+	Description string              `json:"description,omitempty"`
+	Extra       map[string]any      `json:"-"`
 }
 
 // Property is one field of a Schema.
 type Property struct {
-	Type        string   `json:"type"`
-	Description string   `json:"description,omitempty"`
-	Enum        []string `json:"enum,omitempty"`
-	Default     any      `json:"default,omitempty"`
-	Format      string   `json:"format,omitempty"`
+	Type        string    `json:"type"`
+	Description string    `json:"description,omitempty"`
+	Enum        []string  `json:"enum,omitempty"`
+	Default     any       `json:"default,omitempty"`
+	Format      string    `json:"format,omitempty"`
 	Items       *Property `json:"items,omitempty"`
 }
 

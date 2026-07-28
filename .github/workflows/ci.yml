@@ -1,0 +1,238 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MEM_TEST_DB: postgres://mem:mem@localhost:5432/mem_test?sslmode=disable
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: mem
+          POSTGRES_PASSWORD: mem
+          POSTGRES_DB: mem_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mem -d mem_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+
+      - name: Install protobuf compiler
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: "34.1"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Go protobuf generators
+        working-directory: server
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+
+      - name: Verify generated Go protobuf stubs
+        run: |
+          PATH="$(go env GOPATH)/bin:${PATH}"
+          export PATH
+          make proto-go
+          git diff --exit-code -- server/internal/workerpb
+
+      - name: Check formatting
+        working-directory: server
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [[ -n "${unformatted}" ]]; then
+            echo "The following Go files are not gofmt-formatted:"
+            echo "${unformatted}"
+            exit 1
+          fi
+
+      - name: Vet
+        working-directory: server
+        run: go vet ./...
+
+      - name: Apply test database migrations
+        working-directory: server
+        run: >-
+          go run github.com/pressly/goose/v3/cmd/goose@v3.22.1
+          -dir internal/db/migrations
+          postgres
+          "${MEM_TEST_DB}"
+          up
+
+      - name: Test with race detector and coverage
+        working-directory: server
+        run: |
+          go test -race -p 1 -coverpkg=./... -covermode=atomic -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out > coverage-summary.txt
+          tail -n 1 coverage-summary.txt
+
+      - name: Build Go binaries
+        working-directory: server
+        run: |
+          output="${RUNNER_TEMP}/mem-go-linux-amd64"
+          mkdir -p "${output}"
+          go build -trimpath -o "${output}/memd" ./cmd/memd
+          go build -trimpath -o "${output}/mem" ./cmd/mem
+          go build -trimpath -o "${output}/mem-mcp" ./cmd/mem-mcp
+          cp ../LICENSE "${output}/LICENSE"
+
+      - name: Upload Go coverage
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: go-coverage-${{ github.sha }}
+          path: |
+            server/coverage.out
+            server/coverage-summary.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload Go binaries
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mem-go-linux-amd64-${{ github.sha }}
+          path: ${{ runner.temp }}/mem-go-linux-amd64
+          if-no-files-found: error
+          retention-days: 14
+
+  worker:
+    name: Worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      UV_FROZEN: "1"
+      UV_NO_PROGRESS: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9
+        with:
+          enable-cache: true
+          cache-dependency-glob: worker/uv.lock
+
+      - name: Install test and development dependencies
+        working-directory: worker
+        run: uv sync --frozen --extra test --extra dev
+
+      - name: Verify generated Python protobuf stubs
+        working-directory: worker
+        run: |
+          make proto
+          git diff --exit-code -- mem_worker/proto
+
+      - name: Test with coverage
+        working-directory: worker
+        run: >-
+          uv run pytest
+          --cov=mem_worker
+          --cov-report=term-missing
+          --cov-report=xml:coverage.xml
+
+      - name: Build Python package
+        working-directory: worker
+        run: uv build
+
+      - name: Upload Worker coverage
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: worker-coverage-${{ github.sha }}
+          path: worker/coverage.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload Worker package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mem-worker-package-${{ github.sha }}
+          path: worker/dist
+          if-no-files-found: error
+          retention-days: 14
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Audit production dependencies (advisory)
+        continue-on-error: true
+        working-directory: web
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Lint
+        working-directory: web
+        run: npm run lint
+
+      - name: Type-check
+        working-directory: web
+        run: npm run typecheck
+
+      - name: Build web application
+        working-directory: web
+        run: npm run build
+
+      - name: Upload web build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mem-web-${{ github.sha }}
+          path: web/dist
+          if-no-files-found: error
+          retention-days: 14

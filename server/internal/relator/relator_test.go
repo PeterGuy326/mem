@@ -1,6 +1,7 @@
 package relator
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"testing"
@@ -30,7 +31,7 @@ func TestRecomputePerson(t *testing.T) {
 
 	svc := New(pool, nil)
 
-	// Fresh user + three files sharing a "person" entity.
+	// Fresh user + files sharing "person" entities.
 	user := mustExec1[uuid.UUID](t, ctx, pool,
 		`INSERT INTO users (email, password_hash) VALUES ($1, 'x') RETURNING id`,
 		"relator-test-"+uuid.NewString()+"@example.com")
@@ -45,6 +46,7 @@ func TestRecomputePerson(t *testing.T) {
 	fB := insertFile(t, ctx, pool, user, "B.jpg", "image/jpeg")
 	fC := insertFile(t, ctx, pool, user, "C.jpg", "image/jpeg")
 	fD := insertFile(t, ctx, pool, user, "D.jpg", "image/jpeg") // no entities → should be ignored
+	fE := insertFile(t, ctx, pool, user, "E.jpg", "image/jpeg")
 
 	xiaoming := insertPerson(t, ctx, pool, user, "小明")
 	xiaohong := insertPerson(t, ctx, pool, user, "小红")
@@ -54,9 +56,10 @@ func TestRecomputePerson(t *testing.T) {
 	linkEntity(t, ctx, pool, fB, xiaoming)
 	linkEntity(t, ctx, pool, fB, xiaohong)
 	linkEntity(t, ctx, pool, fC, xiaoming)
+	linkEntity(t, ctx, pool, fE, xiaoming)
 	// fD: nothing
 
-	if err := svc.recomputePerson(ctx, fA, user, 10); err != nil {
+	if err := svc.recomputePerson(ctx, fA, user, 2); err != nil {
 		t.Fatalf("recomputePerson: %v", err)
 	}
 
@@ -67,12 +70,26 @@ func TestRecomputePerson(t *testing.T) {
 	if len(hits) != 2 {
 		t.Fatalf("expected 2 same_person hits, got %d: %+v", len(hits), hits)
 	}
-	// B shares both (小明+小红), C shares only 小明. B must rank first.
+	// B shares both (小明+小红), while C and E each share only 小明.
+	// B must rank first and the lower file ID must win the final Top-K slot.
 	if hits[0].FileID != fB {
 		t.Fatalf("expected top hit fB=%s, got %s", fB, hits[0].FileID)
 	}
+	expectedPartial := fC
+	if bytes.Compare(fE[:], fC[:]) < 0 {
+		expectedPartial = fE
+	}
+	if hits[1].FileID != expectedPartial {
+		t.Fatalf("expected stable partial-match tiebreak %s, got %s",
+			expectedPartial, hits[1].FileID)
+	}
 	if hits[0].Score <= hits[1].Score {
-		t.Fatalf("expected fB score > fC score, got %.3f vs %.3f", hits[0].Score, hits[1].Score)
+		t.Fatalf("expected fB score > partial score, got %.3f vs %.3f",
+			hits[0].Score, hits[1].Score)
+	}
+	if hits[0].Score != 1 || hits[1].Score != 0.5 {
+		t.Fatalf("expected source-person coverage scores 1.0 and 0.5, got %.3f and %.3f",
+			hits[0].Score, hits[1].Score)
 	}
 	// D has no entities → must not appear.
 	for _, h := range hits {
@@ -82,7 +99,7 @@ func TestRecomputePerson(t *testing.T) {
 	}
 
 	// Idempotency: running again must produce the same set (no dupes, no drift).
-	if err := svc.recomputePerson(ctx, fA, user, 10); err != nil {
+	if err := svc.recomputePerson(ctx, fA, user, 2); err != nil {
 		t.Fatalf("recomputePerson (rerun): %v", err)
 	}
 	hits2, err := svc.Get(ctx, user, fA, TypeSamePerson, 10)
@@ -91,6 +108,10 @@ func TestRecomputePerson(t *testing.T) {
 	}
 	if len(hits2) != 2 {
 		t.Fatalf("expected 2 hits after rerun, got %d", len(hits2))
+	}
+	if hits2[1].FileID != expectedPartial {
+		t.Fatalf("expected stable partial-match tiebreak %s after rerun, got %s",
+			expectedPartial, hits2[1].FileID)
 	}
 }
 

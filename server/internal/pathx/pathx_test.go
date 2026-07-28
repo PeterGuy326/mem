@@ -16,10 +16,10 @@ func TestNormalize(t *testing.T) {
 		{"/Photos/2012", "/Photos/2012", false},
 		{"/Photos//2012", "/Photos/2012", false},
 		{"/Photos/2012/", "/Photos/2012", false},
-		{"Photos", "", true},      // not absolute
-		{"/./foo", "", true},      // reserved
-		{"/../foo", "", true},     // reserved
-		{"/a/\x00", "", true},     // NUL in segment
+		{"Photos", "", true},  // not absolute
+		{"/./foo", "", true},  // reserved
+		{"/../foo", "", true}, // reserved
+		{"/a/\x00", "", true}, // NUL in segment
 	}
 	for _, tc := range cases {
 		tc := tc

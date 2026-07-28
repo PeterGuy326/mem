@@ -1,0 +1,9 @@
+# Default ownership
+* @PeterGuy326 @Bindy-lbb
+
+# Changes to repository policy and security require explicit maintainer review.
+/.github/ @PeterGuy326 @Bindy-lbb
+/docs/maintainers/ @PeterGuy326 @Bindy-lbb
+/AGENTS.md @PeterGuy326 @Bindy-lbb
+/CONTRIBUTING.md @PeterGuy326 @Bindy-lbb
+/SECURITY.md @PeterGuy326 @Bindy-lbb

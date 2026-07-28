@@ -54,9 +54,9 @@ type Hit struct {
 	Name       string     `json:"name"`
 	Path       string     `json:"path"`
 	MIME       string     `json:"mime"`
-	Score      float32    `json:"score"`           // 1 - cosine_distance, in [-1, 1]
-	Snippet    string     `json:"snippet"`         // best matching chunk (text route) or caption (visual)
-	Source     string     `json:"source"`          // "text" | "visual" — which route produced this hit
+	Score      float32    `json:"score"`   // 1 - cosine_distance, in [-1, 1]
+	Snippet    string     `json:"snippet"` // best matching chunk (text route) or caption (visual)
+	Source     string     `json:"source"`  // "text" | "visual" — which route produced this hit
 	Summary    *string    `json:"summary,omitempty"`
 	TimelineAt *time.Time `json:"timeline_at,omitempty"`
 	CreatedAt  time.Time  `json:"created_at"`

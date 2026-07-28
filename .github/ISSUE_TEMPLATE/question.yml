@@ -1,0 +1,60 @@
+name: Question
+description: Ask a focused usage, design, or contribution question
+title: "question: "
+labels:
+  - "type:question"
+  - "status:needs-triage"
+body:
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched the documentation and open and closed issues first.
+          required: true
+        - label: This question does not disclose a security vulnerability or private data.
+          required: true
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: Ask one focused question and state the answer or decision you need.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Explain your goal, relevant configuration, and what you already tried.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Primary area
+      description: Choose the closest existing area; maintainers may add other applicable area labels.
+      options:
+        - "area:server"
+        - "area:worker"
+        - "area:web"
+        - "area:cli"
+        - "area:mcp"
+        - "area:docs"
+        - "area:infra"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: evidence
+    attributes:
+      label: Current evidence level
+      description: Choose E0–E2 based on the submitted context. Maintainers assign E3 after independent reproduction and E4 after verifying the answer or outcome.
+      options:
+        - "evidence:e0-unreviewed — New question; context has not been assessed"
+        - "evidence:e1-report — A clear question and relevant context are available"
+        - "evidence:e2-source — Source, code, or specification supports the question"
+    validations:
+      required: true

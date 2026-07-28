@@ -6,7 +6,7 @@
 #   make test      # pytest
 #   make run       # python -m mem_worker.server
 #   make lint      # ruff + mypy
-#   make clean     # remove generated code + caches
+#   make clean     # remove local environments, build output, and caches
 
 PYTHON ?= python3.11
 UV     ?= uv
@@ -16,7 +16,7 @@ PROTO_OUT := mem_worker/proto
 .PHONY: install proto test run lint fmt clean docker
 
 install:
-	$(UV) sync --extra test
+	$(UV) sync --extra test --extra dev
 
 # Regenerate Python protobuf + grpc stubs.
 # We rewrite the "import processor_pb2" -> "from . import processor_pb2"
@@ -50,9 +50,7 @@ fmt:
 	$(UV) run ruff check --fix mem_worker tests
 
 clean:
-	rm -rf .venv .pytest_cache .ruff_cache .mypy_cache \
-	       $(PROTO_OUT)/processor_pb2.py \
-	       $(PROTO_OUT)/processor_pb2_grpc.py
+	rm -rf .venv dist build *.egg-info .pytest_cache .ruff_cache .mypy_cache
 	find . -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null || true
 
 docker:

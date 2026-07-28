@@ -2,7 +2,8 @@
 //
 // Transport: newline-delimited JSON-RPC 2.0 over stdio.
 // Protocol:  MCP 2024-11-05 baseline (initialize, tools/list, tools/call,
-//            notifications/initialized).
+//
+//	notifications/initialized).
 //
 // Configuration is read from flags or environment:
 //

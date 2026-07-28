@@ -46,13 +46,13 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type entry struct {
-		ID        string    `json:"id"`
-		Name      string    `json:"name"`
-		Path      string    `json:"path"`
-		MIME      string    `json:"mime"`
-		At        time.Time `json:"at"`
-		Summary   *string   `json:"summary,omitempty"`
-		Caption   *string   `json:"caption,omitempty"`
+		ID      string    `json:"id"`
+		Name    string    `json:"name"`
+		Path    string    `json:"path"`
+		MIME    string    `json:"mime"`
+		At      time.Time `json:"at"`
+		Summary *string   `json:"summary,omitempty"`
+		Caption *string   `json:"caption,omitempty"`
 	}
 	groups := map[string][]entry{}
 	order := []string{}

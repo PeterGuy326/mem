@@ -1,6 +1,6 @@
 # mem — Phase 1 MVP Makefile
 
-.PHONY: help up down logs reset proto server cli mcp worker web test fmt lint \
+.PHONY: help up down logs reset proto proto-go proto-python server cli mcp worker web test fmt lint \
         build build-memd build-mem build-mem-mcp
 
 BIN_DIR ?= bin
@@ -12,6 +12,8 @@ help:
 	@echo "  make logs         - 跟踪 docker logs"
 	@echo "  make reset        - ⚠️ 删除所有 volume 数据后重启"
 	@echo "  make proto        - 编译 .proto -> Go/Python stubs"
+	@echo "  make proto-go     - 仅生成 Go protobuf stubs"
+	@echo "  make proto-python - 仅生成 Python protobuf stubs"
 	@echo "  make server       - 启动 Go 服务 (memd)"
 	@echo "  make cli          - 跑 CLI（go run）"
 	@echo "  make mcp          - 跑 MCP server（go run, stdio）"
@@ -34,7 +36,9 @@ reset:
 	docker compose down -v
 	docker compose up -d
 
-proto:
+proto: proto-go proto-python
+
+proto-go:
 	@echo "[proto] generating Go stubs -> server/internal/workerpb/"
 	@protoc -I worker/proto \
 		--go_out=. --go_opt=paths=import \
@@ -43,6 +47,8 @@ proto:
 	@# protoc writes under the go_package import path; move them into place.
 	@mv -f github.com/PeterGuy326/mem/server/internal/workerpb/*.pb.go server/internal/workerpb/
 	@rm -rf github.com
+
+proto-python:
 	@echo "[proto] generating Python stubs -> worker/mem_worker/proto/"
 	@cd worker && $(MAKE) proto
 
@@ -63,16 +69,16 @@ web:
 
 test:
 	cd server && go test ./...
-	cd worker && pytest
+	cd worker && uv run pytest
 
 fmt:
 	cd server && gofmt -w .
-	cd worker && ruff format .
+	cd worker && uv run ruff format .
 	cd web && npm run format
 
 lint:
 	cd server && go vet ./...
-	cd worker && ruff check .
+	cd worker && uv run ruff check .
 	cd web && npm run lint
 
 # --- release builds ---

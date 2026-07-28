@@ -22,7 +22,7 @@ const (
 	KindConflict           // 409
 	KindQuota              // 429
 	KindProvider           // 502 / 503
-	KindBadInput          // 400
+	KindBadInput           // 400
 )
 
 // APIError preserves the {error, hint} pair that memd returns on non-2xx

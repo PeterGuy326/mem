@@ -4,7 +4,8 @@
 // decoupled from the virtual path tree the user sees in `mem ls`.
 //
 // Key format (set by callers, not by this package):
-//   users/<user_id>/<file_id>/<name>
+//
+//	users/<user_id>/<file_id>/<name>
 //
 // Renames and folder moves are pure DB updates — they never touch S3.
 package storage

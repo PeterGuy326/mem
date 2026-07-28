@@ -54,13 +54,8 @@ web/coverage/
 web/.turbo/
 
 # === Generated proto ===
-**/*_pb2.py
-**/*_pb2_grpc.py
-**/*.pb.go
-server/internal/workerpb/*.pb.go
-worker/mem_worker/proto/*_pb2.py
-worker/mem_worker/proto/*_pb2_grpc.py
-worker/mem_worker/proto/*_pb2.pyi
+# Generated Go and Python protobuf stubs are checked in so a fresh clone builds.
+# Regenerate them with `make proto`; CI verifies that the checked-in output is current.
 
 # === Local data / scratch ===
 # Root-anchored so we don't accidentally swallow Go packages named "storage".

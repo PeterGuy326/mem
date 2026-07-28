@@ -12,14 +12,11 @@ env/
 .mypy_cache/
 *.egg-info/
 .coverage
+coverage.xml
 htmlcov/
 
-# Generated gRPC stubs (regenerate with `make proto`)
-mem_worker/proto/processor_pb2.py
-mem_worker/proto/processor_pb2_grpc.py
-mem_worker/proto/*_pb2.py
-mem_worker/proto/*_pb2_grpc.py
-mem_worker/proto/*.pyi
+# Generated gRPC stubs are checked in so a fresh clone can run and build.
+# Regenerate them with `make proto`.
 
 # Env
 .env
