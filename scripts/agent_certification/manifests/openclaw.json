@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "host_id": "openclaw",
+  "display_name": "OpenClaw",
+  "transport": "stdio",
+  "fixture": "fixtures/openclaw.json",
+  "scope": "OPENCLAW_CONFIG_PATH and OPENCLAW_STATE_DIR under one temporary root",
+  "command_shape": "mcp.servers.mem.command string plus args array",
+  "environment_shape": "mcp.servers.mem.env object with runtime ${VAR} expansion",
+  "version": "2026.3.28",
+  "status": "NOT RUN",
+  "evidence": {
+    "official_docs": "https://github.com/openclaw/openclaw/blob/v2026.3.28/docs/cli/mcp.md",
+    "source_revision": "v2026.3.28",
+    "report": "docs/integrations/agent-host-certification.json#/hosts/openclaw"
+  },
+  "real_probe": {
+    "binary": "openclaw",
+    "version_args": [
+      "--version"
+    ],
+    "commands": [
+      {
+        "name": "mcp-list",
+        "args": [
+          "mcp",
+          "list",
+          "--json"
+        ],
+        "proves": "REGISTERED",
+        "validator": "openclaw-registered"
+      }
+    ],
+    "isolation_env": [
+      "OPENCLAW_CONFIG_PATH",
+      "OPENCLAW_STATE_DIR"
+    ],
+    "limitation": "2026.3.28 list/show/set/unset parse configuration but do not connect to a server"
+  }
+}

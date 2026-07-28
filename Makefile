@@ -3,6 +3,7 @@
 .PHONY: help up down logs reset proto server cli mcp worker web bootstrap \
         test test-server test-worker test-web test-race test-env-up \
         test-env-down test-integration test-integration-race test-acceptance \
+        test-agent-certification \
         test-all fmt lint build build-memd build-mem build-mem-mcp \
         proto-go proto-python
 
@@ -32,6 +33,7 @@ help:
 	@echo "  make test-integration      - PostgreSQL migration + 集成回归"
 	@echo "  make test-integration-race - PostgreSQL 集成 race 回归"
 	@echo "  make test-acceptance - 隔离进程级 HTTP/CLI/MCP Agent-memory 验收"
+	@echo "  make test-agent-certification - 用显式 MEM_MCP_CERT_BINARY 验证 Agent host contract"
 	@echo "  make test-env-down         - 删除隔离测试环境"
 	@echo "  make test-all     - 执行全部回归与进程验收（要求测试 DB 已启动）"
 	@echo "  make build        - 编译三个二进制到 $(BIN_DIR)/ (memd, mem, mem-mcp)"
@@ -124,6 +126,15 @@ test-integration-race:
 
 test-acceptance:
 	./scripts/acceptance_agent_memory.sh
+
+test-agent-certification:
+	@test -n "$(MEM_MCP_CERT_BINARY)" || { \
+		echo "MEM_MCP_CERT_BINARY must name an explicit mem-mcp binary"; \
+		exit 2; \
+	}
+	MEM_MCP_CERT_BINARY='$(MEM_MCP_CERT_BINARY)' \
+		python3 -m unittest discover \
+			-s scripts/agent_certification -p 'test_*.py' -v
 
 test-all:
 	MEM_TEST_DB='$(MEM_TEST_DB)' ./scripts/verify.sh all

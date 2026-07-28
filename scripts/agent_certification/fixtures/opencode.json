@@ -1,0 +1,18 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "mem": {
+      "type": "local",
+      "command": [
+        "{env:MEM_MCP_COMMAND}"
+      ],
+      "environment": {
+        "MEM_SERVER": "{env:MEM_SERVER}",
+        "MEM_TOKEN": "{env:MEM_TOKEN}",
+        "MEM_WORKSPACE": "{env:MEM_WORKSPACE}"
+      },
+      "enabled": true,
+      "timeout": 5000
+    }
+  }
+}

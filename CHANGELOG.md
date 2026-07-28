@@ -9,6 +9,10 @@ The project is not yet publishing stable semantic-versioned releases.
 
 ### Added
 
+- Repeatable stdio MCP certification for OpenClaw, Hermes Agent, Claude Code,
+  OpenCode, and Codex, with versioned config manifests, a model-free fake-memd
+  lifecycle/failure contract, isolated real-host evidence, and explicit
+  `REGISTERED`/`DISCOVERED`/`INVOKED`/`NOT RUN` grading.
 - Versioned `mem.handoff` v1 checkpoints, optimistic head comparison,
   deterministic `resume`, and task/checkpoint list/get inspection across API,
   CLI and MCP.

@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "host_id": "hermes",
+  "display_name": "Hermes Agent",
+  "transport": "stdio",
+  "fixture": "fixtures/hermes.yaml",
+  "scope": "HERMES_HOME under one temporary root when a future runtime probe is available",
+  "command_shape": "mcp_servers.mem.command string plus args array",
+  "environment_shape": "mcp_servers.mem.env mapping with runtime ${VAR} interpolation",
+  "version": null,
+  "status": "NOT RUN",
+  "evidence": {
+    "official_docs": "https://github.com/NousResearch/hermes-agent/blob/f228e145ba35cbbf785eded2021ae6682285b91b/website/docs/user-guide/features/mcp.md",
+    "source_revision": "f228e145ba35cbbf785eded2021ae6682285b91b",
+    "report": "docs/integrations/agent-host-certification.json#/hosts/hermes"
+  },
+  "real_probe": {
+    "binary": "hermes",
+    "version_args": [
+      "--version"
+    ],
+    "commands": [],
+    "isolation_env": [
+      "HERMES_HOME"
+    ],
+    "limitation": "No installed executable and no pinned non-interactive custom-server probe; fixture validation is not runtime evidence"
+  }
+}
