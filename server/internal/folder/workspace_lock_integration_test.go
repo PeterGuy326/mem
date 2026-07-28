@@ -15,6 +15,7 @@ import (
 	memdb "github.com/PeterGuy326/mem/server/internal/db"
 	"github.com/PeterGuy326/mem/server/internal/handoff"
 	"github.com/PeterGuy326/mem/server/internal/memory"
+	"github.com/PeterGuy326/mem/server/internal/testutil/pglockwait"
 	"github.com/PeterGuy326/mem/server/internal/workspacelock"
 )
 
@@ -56,6 +57,8 @@ func TestWorkspacePathLockingIntegration(t *testing.T) {
 		if _, err := service.Create(ctx, userID, "/Shared/Child"); err != nil {
 			t.Fatalf("create source: %v", err)
 		}
+		renameBackend := pglockwait.NewBackend(t, ctx, dsn, "folder-rewrite")
+		renameService := New(renameBackend.Pool)
 
 		writerTx, err := database.Pool.BeginTx(ctx, pgx.TxOptions{})
 		if err != nil {
@@ -65,12 +68,21 @@ func TestWorkspacePathLockingIntegration(t *testing.T) {
 		if _, err := workspacelock.ForContentWriteByOwner(ctx, writerTx, userID); err != nil {
 			t.Fatalf("take content lock: %v", err)
 		}
+		writerPID := pglockwait.BackendPID(t, ctx, writerTx)
 
 		renameDone := make(chan error, 1)
 		go func() {
-			renameDone <- service.Rename(ctx, userID, "/Shared", "Renamed")
+			renameDone <- renameService.Rename(ctx, userID, "/Shared", "Renamed")
 		}()
-		assertWorkspaceOperationBlocked(t, renameDone)
+		pglockwait.WaitBlocked(
+			t,
+			ctx,
+			database.Pool,
+			renameBackend,
+			writerPID,
+			"FROM workspaces",
+			"FOR UPDATE",
+		)
 
 		if err := writerTx.Commit(ctx); err != nil {
 			t.Fatalf("commit writer transaction: %v", err)
@@ -90,9 +102,12 @@ func TestWorkspacePathLockingIntegration(t *testing.T) {
 			database.Pool,
 			"folder-blocks-writers",
 		)
-		folderService := New(database.Pool)
-		memoryService := memory.New(database.Pool)
-		handoffService := handoff.New(database.Pool)
+		createBackend := pglockwait.NewBackend(t, ctx, dsn, "folder-create")
+		memoryBackend := pglockwait.NewBackend(t, ctx, dsn, "memory-remember")
+		checkpointBackend := pglockwait.NewBackend(t, ctx, dsn, "handoff-checkpoint")
+		folderService := New(createBackend.Pool)
+		memoryService := memory.New(memoryBackend.Pool)
+		handoffService := handoff.New(checkpointBackend.Pool)
 
 		mutationTx, err := database.Pool.BeginTx(ctx, pgx.TxOptions{})
 		if err != nil {
@@ -102,6 +117,7 @@ func TestWorkspacePathLockingIntegration(t *testing.T) {
 		if _, err := workspacelock.ForPathMutation(ctx, mutationTx, userID); err != nil {
 			t.Fatalf("take folder lock: %v", err)
 		}
+		mutationPID := pglockwait.BackendPID(t, ctx, mutationTx)
 
 		createDone := make(chan error, 1)
 		go func() {
@@ -129,9 +145,21 @@ func TestWorkspacePathLockingIntegration(t *testing.T) {
 			checkpointDone <- err
 		}()
 
-		assertWorkspaceOperationBlocked(t, createDone)
-		assertWorkspaceOperationBlocked(t, memoryDone)
-		assertWorkspaceOperationBlocked(t, checkpointDone)
+		for _, waiter := range []pglockwait.Backend{
+			createBackend,
+			memoryBackend,
+			checkpointBackend,
+		} {
+			pglockwait.WaitBlocked(
+				t,
+				ctx,
+				database.Pool,
+				waiter,
+				mutationPID,
+				"FROM workspaces",
+				"FOR KEY SHARE",
+			)
+		}
 
 		if err := mutationTx.Commit(ctx); err != nil {
 			t.Fatalf("commit folder transaction: %v", err)
@@ -171,6 +199,17 @@ func TestWorkspacePathLockingIntegration(t *testing.T) {
 		); err != nil {
 			t.Fatalf("insert descendant file: %v", err)
 		}
+		renameBBackend := pglockwait.NewBackend(t, ctx, dsn, "folder-rename-b")
+		renameCBackend := pglockwait.NewBackend(t, ctx, dsn, "folder-rename-c")
+		type renameAttempt struct {
+			name    string
+			backend pglockwait.Backend
+			service *Service
+		}
+		attempts := []renameAttempt{
+			{name: "RaceB", backend: renameBBackend, service: New(renameBBackend.Pool)},
+			{name: "RaceC", backend: renameCBackend, service: New(renameCBackend.Pool)},
+		}
 
 		gateTx, err := database.Pool.BeginTx(ctx, pgx.TxOptions{})
 		if err != nil {
@@ -180,19 +219,26 @@ func TestWorkspacePathLockingIntegration(t *testing.T) {
 		if _, err := workspacelock.ForContentWriteByOwner(ctx, gateTx, userID); err != nil {
 			t.Fatalf("take rename gate: %v", err)
 		}
+		gatePID := pglockwait.BackendPID(t, ctx, gateTx)
 
-		started := make(chan struct{}, 2)
 		results := make(chan error, 2)
-		for _, newName := range []string{"RaceB", "RaceC"} {
-			newName := newName
+		for _, attempt := range attempts {
+			attempt := attempt
 			go func() {
-				started <- struct{}{}
-				results <- service.Rename(ctx, userID, "/Race", newName)
+				results <- attempt.service.Rename(ctx, userID, "/Race", attempt.name)
 			}()
 		}
-		<-started
-		<-started
-		assertWorkspaceOperationBlocked(t, results)
+		for _, attempt := range attempts {
+			pglockwait.WaitBlocked(
+				t,
+				ctx,
+				database.Pool,
+				attempt.backend,
+				gatePID,
+				"FROM workspaces",
+				"FOR UPDATE",
+			)
+		}
 		if err := gateTx.Commit(ctx); err != nil {
 			t.Fatalf("release rename gate: %v", err)
 		}
@@ -315,15 +361,6 @@ func workspaceLockCheckpointCommand(
 			},
 			Producer: handoff.ProducerV1{AgentID: "workspace-lock-test"},
 		},
-	}
-}
-
-func assertWorkspaceOperationBlocked(t *testing.T, done <-chan error) {
-	t.Helper()
-	select {
-	case err := <-done:
-		t.Fatalf("operation completed before conflicting workspace lock released: %v", err)
-	case <-time.After(150 * time.Millisecond):
 	}
 }
 

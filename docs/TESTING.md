@@ -24,13 +24,13 @@ The default regression suite does not need Redis, MinIO, Ollama, a cloud
 provider or any API key. The Web acceptance tests use MSW fixtures. Worker
 tests use fakes except for the explicitly opt-in visual-model evaluation.
 
-The two checked-in workflows have distinct responsibilities. `ci.yml` verifies
-generated protobufs, coverage and release-build artifacts;
-`memory-validation.yml` verifies repository metadata, the complete
-Agent-memory regression, owned-database migrations and process-level
-HTTP/CLI/MCP acceptance. Their shared toolchain and service versions must stay
-aligned. Component tests intentionally overlap where artifact production and
-the Agent-memory contract need independent evidence.
+The two checked-in workflows have distinct responsibilities. `ci.yml` owns
+component build, lint, unit/race, generated-protobuf, coverage, and release
+artifact checks. `memory-validation.yml` owns repository metadata, browser
+acceptance, owned-database migrations, and process-level HTTP/CLI/MCP
+acceptance. Their shared toolchain and service versions must stay aligned.
+Database tests intentionally overlap where artifact production and the
+Agent-memory contract need independent evidence.
 
 ## 2. Bootstrap a clean checkout
 
@@ -74,8 +74,9 @@ make test-race
 - Web typecheck, ESLint, production build;
 - the Memory and Workspace Transfer browser acceptance suites.
 
-`make test-race` executes the high-risk Go memory, handoff, transfer, API,
-client, tool, CLI and MCP packages with the race detector.
+`make test-race` executes the high-risk Go file/folder path-locking, memory,
+handoff, transfer, API, client, tool, CLI, and MCP packages with the race
+detector.
 
 Expected result: both commands exit `0`; Go packages report `ok`; Worker tests
 pass with only the real-model evaluation skipped; Web acceptance prints its
@@ -240,8 +241,8 @@ Use this table in pull requests and add implementation-specific scenarios:
 | V2 | Worker processing regressions remain hermetic | `make test-worker` | Exit `0`; real-model gate explicitly skipped |
 | V3 | Memory and transfer control surfaces work in a browser | `make test-web` | Typecheck/lint/build and both acceptance suites pass |
 | V4 | High-risk Go paths are race-free | `make test-race` | Exit `0`; no data-race warning |
-| V5 | Fresh schema, rollback and PostgreSQL semantics hold | `make test-integration` | Migration head and six named tests pass, none skipped |
-| V6 | DB concurrency paths are race-free | `make test-integration-race` | Same named tests pass under `-race` |
+| V5 | Fresh schema, rollback and PostgreSQL semantics hold | `make test-integration` | Migration head and eight named tests pass, none skipped |
+| V6 | DB concurrency paths are race-free | `make test-integration-race` | The same eight tests pass under `-race` |
 | V7 | Real service boundaries agree | `make test-acceptance` | HTTP, CLI and MCP share one isolated service; memory citation/provenance, bounded checkpoint listing, full checkpoint get, lifecycle and forget redaction pass |
 | V8 | Multilingual visual quality meets the chosen checkpoint | Opt-in command in section 6 | All fixed ranking assertions pass |
 

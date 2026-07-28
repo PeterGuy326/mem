@@ -3,7 +3,6 @@ package file
 import (
 	"bytes"
 	"context"
-	"errors"
 	"io"
 	"os"
 	"strings"
@@ -13,11 +12,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	memdb "github.com/PeterGuy326/mem/server/internal/db"
 	"github.com/PeterGuy326/mem/server/internal/folder"
+	"github.com/PeterGuy326/mem/server/internal/testutil/pglockwait"
 )
 
 // TestFilePathLockingIntegration proves file path/folder references remain
@@ -49,13 +48,16 @@ func TestFilePathLockingIntegration(t *testing.T) {
 	}
 
 	t.Run("Put then Rename has one path", func(t *testing.T) {
-		userID, workspaceID := createFileLockTenant(t, ctx, database.Pool, "put-rename")
+		userID, _ := createFileLockTenant(t, ctx, database.Pool, "put-rename")
 		folders := folder.New(database.Pool)
 		if _, err := folders.Create(ctx, userID, "/A"); err != nil {
 			t.Fatalf("create destination: %v", err)
 		}
+		putBackend := pglockwait.NewBackend(t, ctx, dsn, "file-put")
+		renameBackend := pglockwait.NewBackend(t, ctx, dsn, "file-put-rename")
 		store := newBlockingObjectStore()
-		service := New(database.Pool, store, folders)
+		service := New(putBackend.Pool, store, folder.New(putBackend.Pool))
+		renameFolders := folder.New(renameBackend.Pool)
 
 		type putOutcome struct {
 			result *PutResult
@@ -81,15 +83,30 @@ func TestFilePathLockingIntegration(t *testing.T) {
 			t.Fatal("Put did not reach object storage")
 		}
 
-		fileGate := lockFilesTable(t, ctx, database.Pool)
+		fileGate, fileGatePID := lockFilesTable(t, ctx, database.Pool)
 		close(store.releasePut)
-		waitForWorkspaceContentLock(t, ctx, database.Pool, workspaceID)
+		pglockwait.WaitBlocked(
+			t,
+			ctx,
+			database.Pool,
+			putBackend,
+			fileGatePID,
+			"INSERT INTO files",
+		)
 
 		renameDone := make(chan error, 1)
 		go func() {
-			renameDone <- folders.Rename(ctx, userID, "/A", "B")
+			renameDone <- renameFolders.Rename(ctx, userID, "/A", "B")
 		}()
-		assertFileOperationBlocked(t, renameDone)
+		pglockwait.WaitBlocked(
+			t,
+			ctx,
+			database.Pool,
+			renameBackend,
+			putBackend.PID,
+			"FROM workspaces",
+			"FOR UPDATE",
+		)
 		if err := fileGate.Commit(ctx); err != nil {
 			t.Fatalf("release files table: %v", err)
 		}
@@ -110,7 +127,7 @@ func TestFilePathLockingIntegration(t *testing.T) {
 	})
 
 	t.Run("Move then Rename has one path", func(t *testing.T) {
-		userID, workspaceID := createFileLockTenant(t, ctx, database.Pool, "move-rename")
+		userID, _ := createFileLockTenant(t, ctx, database.Pool, "move-rename")
 		folders := folder.New(database.Pool)
 		source, err := folders.Create(ctx, userID, "/Source")
 		if err != nil {
@@ -137,21 +154,42 @@ func TestFilePathLockingIntegration(t *testing.T) {
 			t.Fatalf("insert source file: %v", err)
 		}
 
-		service := New(database.Pool, &recordingObjectStore{}, folders)
-		fileGate := lockFilesTable(t, ctx, database.Pool)
+		moveBackend := pglockwait.NewBackend(t, ctx, dsn, "file-move")
+		renameBackend := pglockwait.NewBackend(t, ctx, dsn, "file-move-rename")
+		service := New(
+			moveBackend.Pool,
+			&recordingObjectStore{},
+			folder.New(moveBackend.Pool),
+		)
+		renameFolders := folder.New(renameBackend.Pool)
+		fileGate, fileGatePID := lockFilesTable(t, ctx, database.Pool)
 		moveDone := make(chan error, 1)
 		go func() {
 			_, err := service.Move(ctx, userID, fileID, "/A")
 			moveDone <- err
 		}()
-		waitForWorkspaceContentLock(t, ctx, database.Pool, workspaceID)
+		pglockwait.WaitBlocked(
+			t,
+			ctx,
+			database.Pool,
+			moveBackend,
+			fileGatePID,
+			"UPDATE files SET path",
+		)
 
 		renameDone := make(chan error, 1)
 		go func() {
-			renameDone <- folders.Rename(ctx, userID, "/A", "B")
+			renameDone <- renameFolders.Rename(ctx, userID, "/A", "B")
 		}()
-		assertFileOperationBlocked(t, moveDone)
-		assertFileOperationBlocked(t, renameDone)
+		pglockwait.WaitBlocked(
+			t,
+			ctx,
+			database.Pool,
+			renameBackend,
+			moveBackend.PID,
+			"FROM workspaces",
+			"FOR UPDATE",
+		)
 		if err := fileGate.Commit(ctx); err != nil {
 			t.Fatalf("release files table: %v", err)
 		}
@@ -233,7 +271,11 @@ func createFileLockTenant(
 	return userID, workspaceID
 }
 
-func lockFilesTable(t *testing.T, ctx context.Context, pool *pgxpool.Pool) pgx.Tx {
+func lockFilesTable(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+) (pgx.Tx, int32) {
 	t.Helper()
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -243,36 +285,7 @@ func lockFilesTable(t *testing.T, ctx context.Context, pool *pgxpool.Pool) pgx.T
 	if _, err := tx.Exec(ctx, `LOCK TABLE files IN ACCESS EXCLUSIVE MODE`); err != nil {
 		t.Fatalf("lock files table: %v", err)
 	}
-	return tx
-}
-
-func waitForWorkspaceContentLock(
-	t *testing.T,
-	ctx context.Context,
-	pool *pgxpool.Pool,
-	workspaceID uuid.UUID,
-) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
-		if err != nil {
-			t.Fatalf("begin workspace probe: %v", err)
-		}
-		_, err = tx.Exec(ctx, `
-			SELECT id FROM workspaces WHERE id = $1 FOR UPDATE NOWAIT
-		`, workspaceID)
-		_ = tx.Rollback(ctx)
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "55P03" {
-			return
-		}
-		if err != nil {
-			t.Fatalf("probe workspace lock: %v", err)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("writer never acquired workspace content lock")
+	return tx, pglockwait.BackendPID(t, ctx, tx)
 }
 
 func assertStoredFilePathMatchesFolder(
@@ -294,15 +307,6 @@ func assertStoredFilePathMatchesFolder(
 	}
 	if filePath != want || folderPath != want {
 		t.Fatalf("file.path=%q folder.path=%q, want %q", filePath, folderPath, want)
-	}
-}
-
-func assertFileOperationBlocked(t *testing.T, done <-chan error) {
-	t.Helper()
-	select {
-	case err := <-done:
-		t.Fatalf("operation completed before conflicting lock released: %v", err)
-	case <-time.After(150 * time.Millisecond):
 	}
 }
 
