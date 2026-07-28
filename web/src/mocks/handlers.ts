@@ -439,6 +439,7 @@ export const handlers = [
         { status: 400 },
       );
     }
+    const key = `${request.headers.get('X-Workspace-ID') ?? MOCK_WORKSPACE.id}\n${body}`;
     if (body.includes('MOCK_IMPORT_NETWORK_ERROR')) {
       return HttpResponse.error();
     }
@@ -496,6 +497,21 @@ export const handlers = [
         { status: 500 },
       );
     }
+    if (
+      body.includes('MOCK_IMPORT_COMMIT_INDETERMINATE') &&
+      !IMPORTED_WORKSPACE_BUNDLES.has(key)
+    ) {
+      // Simulate a commit that succeeded while its acknowledgement was lost.
+      // Only an exact replay can prove the durable ledger entry.
+      IMPORTED_WORKSPACE_BUNDLES.add(key);
+      return HttpResponse.json(
+        {
+          error: 'workspace_import_commit_indeterminate',
+          hint: 'uploaded objects were preserved; retry the exact same bundle',
+        },
+        { status: 503 },
+      );
+    }
     if (body.includes('MOCK_IMPORT_CONFLICT')) {
       return HttpResponse.json(
         {
@@ -520,7 +536,6 @@ export const handlers = [
       );
     }
 
-    const key = `${request.headers.get('X-Workspace-ID') ?? MOCK_WORKSPACE.id}\n${body}`;
     const replayed = IMPORTED_WORKSPACE_BUNDLES.has(key);
     IMPORTED_WORKSPACE_BUNDLES.add(key);
     return HttpResponse.json({

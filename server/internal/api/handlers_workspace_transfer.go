@@ -294,6 +294,17 @@ func (s *Server) writeWorkspaceTransferServiceError(
 			"workspace_not_found",
 			"workspace no longer exists",
 		)
+	case errors.Is(err, workspacetransfer.ErrCommitIndeterminate):
+		s.logWorkspaceTransferError(
+			operation+" workspace import commit indeterminate",
+			err,
+		)
+		writeError(
+			w,
+			http.StatusServiceUnavailable,
+			"workspace_import_commit_indeterminate",
+			"uploaded objects were preserved; retry the exact same bundle",
+		)
 	case errors.Is(err, workspacebundle.ErrLimitExceeded):
 		writeWorkspaceBundleTooLarge(w)
 	case errors.Is(err, workspacetransfer.ErrConflict):

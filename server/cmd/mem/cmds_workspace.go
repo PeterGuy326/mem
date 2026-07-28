@@ -327,8 +327,25 @@ func writeWorkspaceImportError(
 	err error,
 ) error {
 	var apiError *apiclient.APIError
-	if !errors.As(err, &apiError) ||
-		apiError.Code != "workspace_import_conflict" ||
+	if !errors.As(err, &apiError) {
+		return fromAPIError(err)
+	}
+	if apiError.Code == "workspace_import_commit_indeterminate" {
+		cmd.Root().SilenceUsage = true
+		if format == "json" {
+			if encodeErr := writeCommandJSON(cmd, struct {
+				Error string `json:"error"`
+				Hint  string `json:"hint"`
+			}{
+				Error: apiError.Code,
+				Hint:  apiError.Hint,
+			}); encodeErr != nil {
+				return encodeErr
+			}
+		}
+		return fromAPIError(err)
+	}
+	if apiError.Code != "workspace_import_conflict" ||
 		len(apiError.Conflicts) == 0 {
 		return fromAPIError(err)
 	}

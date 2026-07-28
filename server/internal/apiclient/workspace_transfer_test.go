@@ -169,6 +169,39 @@ func TestImportWorkspacePreservesConflictDetails(t *testing.T) {
 	}
 }
 
+func TestImportWorkspacePreservesIndeterminateCommitRecovery(t *testing.T) {
+	const recoveryHint = "uploaded objects were preserved; retry the exact same bundle"
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		_ *http.Request,
+	) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(w, `{
+			"error":"workspace_import_commit_indeterminate",
+			"hint":"uploaded objects were preserved; retry the exact same bundle"
+		}`)
+	}))
+	defer server.Close()
+
+	_, err := New(server.URL, "token").ImportWorkspace(
+		context.Background(),
+		WorkspaceRestoreModeFresh,
+		6,
+		strings.NewReader("bundle"),
+	)
+	var apiError *APIError
+	if !errors.As(err, &apiError) {
+		t.Fatalf("error = %T %v", err, err)
+	}
+	if apiError.StatusCode != http.StatusServiceUnavailable ||
+		apiError.Code != "workspace_import_commit_indeterminate" ||
+		apiError.Hint != recoveryHint ||
+		apiError.Kind() != KindProvider {
+		t.Fatalf("API error = %+v, kind = %v", apiError, apiError.Kind())
+	}
+}
+
 func TestImportWorkspaceRejectsUnimplementedModeBeforeRequest(t *testing.T) {
 	called := false
 	server := httptest.NewServer(http.HandlerFunc(func(

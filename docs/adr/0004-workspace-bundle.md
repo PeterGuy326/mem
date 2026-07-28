@@ -168,6 +168,23 @@ several records share one archive blob, the importer reopens that verified
 blob and uploads it once per file record. Deleting one restored file therefore
 cannot remove another file's bytes.
 
+The import transaction records the bundle ID and archive digest in a durable
+ledger. If the database cannot confirm the commit outcome, the importer keeps
+every uploaded object and the HTTP boundary returns:
+
+```json
+{
+  "error": "workspace_import_commit_indeterminate",
+  "hint": "uploaded objects were preserved; retry the exact same bundle"
+}
+```
+
+The status is `503 Service Unavailable`. Clients must retry the byte-identical
+bundle against the same target workspace. A committed transaction returns the
+ledger replay; a transaction proven absent may safely retry the import. Using a
+different bundle cannot resolve the indeterminate operation and can leave the
+preserved objects unclaimed.
+
 ### Exclusions
 
 The manifest contains the exact ordered exclusion declaration. v1 never

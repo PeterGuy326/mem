@@ -432,16 +432,27 @@ func TestWorkspaceTransferServiceErrorMapping(t *testing.T) {
 		err        error
 		wantStatus int
 		wantCode   string
+		wantHint   string
 	}{
-		{"invalid", workspacebundle.ErrInvalidBundle, http.StatusBadRequest, "invalid_workspace_bundle"},
-		{"integrity", workspacebundle.ErrIntegrity, http.StatusBadRequest, "invalid_workspace_bundle"},
-		{"dependency", workspacebundle.ErrDependency, http.StatusBadRequest, "invalid_workspace_bundle"},
-		{"limit", workspacebundle.ErrLimitExceeded, http.StatusRequestEntityTooLarge, "workspace_bundle_too_large"},
-		{"conflict", conflict, http.StatusConflict, "workspace_import_conflict"},
-		{"unsupported mode", workspacetransfer.ErrUnsupportedMode, http.StatusUnprocessableEntity, "unsupported_workspace_bundle"},
-		{"unsupported version", workspacebundle.ErrUnsupportedVersion, http.StatusUnprocessableEntity, "unsupported_workspace_bundle"},
-		{"storage exhausted", syscall.ENOSPC, http.StatusInsufficientStorage, "workspace_transfer_storage_exhausted"},
-		{"internal", errors.New("database password must-not-leak"), http.StatusInternalServerError, "workspace_transfer_failed"},
+		{"invalid", workspacebundle.ErrInvalidBundle, http.StatusBadRequest, "invalid_workspace_bundle", ""},
+		{"integrity", workspacebundle.ErrIntegrity, http.StatusBadRequest, "invalid_workspace_bundle", ""},
+		{"dependency", workspacebundle.ErrDependency, http.StatusBadRequest, "invalid_workspace_bundle", ""},
+		{"limit", workspacebundle.ErrLimitExceeded, http.StatusRequestEntityTooLarge, "workspace_bundle_too_large", ""},
+		{"conflict", conflict, http.StatusConflict, "workspace_import_conflict", ""},
+		{"unsupported mode", workspacetransfer.ErrUnsupportedMode, http.StatusUnprocessableEntity, "unsupported_workspace_bundle", ""},
+		{"unsupported version", workspacebundle.ErrUnsupportedVersion, http.StatusUnprocessableEntity, "unsupported_workspace_bundle", ""},
+		{
+			"commit indeterminate",
+			fmt.Errorf(
+				"database password must-not-leak: %w",
+				workspacetransfer.ErrCommitIndeterminate,
+			),
+			http.StatusServiceUnavailable,
+			"workspace_import_commit_indeterminate",
+			"uploaded objects were preserved; retry the exact same bundle",
+		},
+		{"storage exhausted", syscall.ENOSPC, http.StatusInsufficientStorage, "workspace_transfer_storage_exhausted", ""},
+		{"internal", errors.New("database password must-not-leak"), http.StatusInternalServerError, "workspace_transfer_failed", ""},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -480,6 +491,14 @@ func TestWorkspaceTransferServiceErrorMapping(t *testing.T) {
 			}
 			if !strings.Contains(recorder.Body.String(), test.wantCode) {
 				t.Fatalf("body = %s", recorder.Body.String())
+			}
+			if test.wantHint != "" &&
+				!strings.Contains(recorder.Body.String(), test.wantHint) {
+				t.Fatalf(
+					"body missing recovery hint %q: %s",
+					test.wantHint,
+					recorder.Body.String(),
+				)
 			}
 			if strings.Contains(recorder.Body.String(), "must-not-leak") {
 				t.Fatalf("internal detail leaked: %s", recorder.Body.String())

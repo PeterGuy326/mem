@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -389,6 +390,68 @@ func TestWorkspaceImportConflictTextIncludesResources(t *testing.T) {
 		if !strings.Contains(stderr.String(), want) {
 			t.Fatalf("stderr missing %q:\n%s", want, stderr.String())
 		}
+	}
+}
+
+func TestWorkspaceImportIndeterminateCommitRequiresExactBundleRetry(t *testing.T) {
+	const recoveryHint = "uploaded objects were preserved; retry the exact same bundle"
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		_ *http.Request,
+	) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(w, `{
+			"error":"workspace_import_commit_indeterminate",
+			"hint":"uploaded objects were preserved; retry the exact same bundle"
+		}`)
+	}))
+	defer server.Close()
+	setWorkspaceTestConfig(t, server.URL, "token", "workspace")
+
+	input := writeWorkspaceTestBundle(t, "bundle")
+	for _, format := range []string{"text", "json"} {
+		t.Run(format, func(t *testing.T) {
+			root := newRootCmd()
+			var stdout bytes.Buffer
+			root.SetOut(&stdout)
+			root.SetArgs([]string{
+				"workspace", "import",
+				"--input", input,
+				"--yes",
+				"--format", format,
+			})
+			err := root.Execute()
+			var cliErr *cliError
+			if !errors.As(err, &cliErr) {
+				t.Fatalf("error = %T %v, want *cliError", err, err)
+			}
+			if cliErr.code != 5 ||
+				!strings.Contains(cliErr.msg, "workspace_import_commit_indeterminate") ||
+				cliErr.hint != recoveryHint {
+				t.Fatalf("CLI error = %+v", cliErr)
+			}
+			if !root.SilenceUsage {
+				t.Fatal("indeterminate recovery printed command usage")
+			}
+			if format == "text" {
+				if stdout.Len() != 0 {
+					t.Fatalf("text stdout = %q", stdout.String())
+				}
+				return
+			}
+			var output struct {
+				Error string `json:"error"`
+				Hint  string `json:"hint"`
+			}
+			if decodeErr := json.Unmarshal(stdout.Bytes(), &output); decodeErr != nil {
+				t.Fatalf("stdout is not JSON: %v\n%s", decodeErr, stdout.String())
+			}
+			if output.Error != "workspace_import_commit_indeterminate" ||
+				output.Hint != recoveryHint {
+				t.Fatalf("JSON error = %+v", output)
+			}
+		})
 	}
 }
 

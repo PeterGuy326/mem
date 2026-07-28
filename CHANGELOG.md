@@ -102,6 +102,8 @@ The project is not yet publishing stable semantic-versioned releases.
 
 ### Fixed
 
+- Preserve uploaded workspace objects after an indeterminate database commit
+  and expose a stable `503` recovery contract requiring the exact same bundle.
 - Serialized folder prefix mutations with folder, file, memory and checkpoint
   writers so concurrent renames cannot split a subtree or leave a file path
   pointing at a differently named folder.

@@ -335,6 +335,35 @@ try {
   }
   console.log('✓ distinct 413, 400, 422, and 500 errors with retry');
 
+  await chooseBundle(
+    page,
+    'commit-indeterminate.membundle',
+    'PK\u0003\u0004MOCK_IMPORT_COMMIT_INDETERMINATE',
+  );
+  await confirmAndImport(page);
+  const indeterminateNotice = page.getByTestId('transfer-error-server');
+  await indeterminateNotice
+    .getByText('503 · workspace_import_commit_indeterminate', { exact: true })
+    .waitFor();
+  await indeterminateNotice
+    .getByText('uploaded objects were preserved; retry the exact same bundle', {
+      exact: true,
+    })
+    .waitFor();
+  const exactReplayResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes('/v1/workspaces/current/import?mode=fresh') &&
+      response.request().method() === 'POST' &&
+      response.status() === 200,
+  );
+  await indeterminateNotice.getByRole('button', { name: 'Retry' }).click();
+  assert.equal((await exactReplayResponse).status(), 200);
+  await page
+    .getByTestId('workspace-import-success')
+    .getByText('This archive was already imported successfully', { exact: true })
+    .waitFor();
+  console.log('✓ indeterminate commit preserves and exactly replays the selected bundle');
+
   const hostileContext = await browser.newContext({
     viewport: { width: 1100, height: 820 },
     acceptDownloads: true,
@@ -414,7 +443,7 @@ try {
 
   assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join('\n')}`);
   const expectedHTTPFailures = consoleErrors.filter((message) =>
-    /status of (400|409|413|422|500)/.test(message),
+    /status of (400|409|413|422|500|503)/.test(message),
   );
   assert.deepEqual(
     consoleErrors.filter((message) => !expectedHTTPFailures.includes(message)),

@@ -211,7 +211,7 @@ workspace 角色；
 | F9.1 | 定义版本化 handoff schema，至少包含目标、进度、决定、下一步、阻塞、产物引用和 producer |
 | F9.2 | checkpoint 写入必须幂等；resume 必须返回 handoff、相关证据和缺失项 |
 | F9.3 | workspace 导出包必须包含版本化 manifest、内容哈希、对象引用和 scope，不默认包含密钥 |
-| F9.4 | import/restore 必须可重试，并明确报告 schema 不兼容、内容缺失和冲突 |
+| F9.4 | import/restore 必须可重试，并明确报告 schema 不兼容、内容缺失、冲突和 commit 结果不确定 |
 | F9.5 | Claude Code、Codex 等宿主适配器只做格式转换，不成为内部数据真相 |
 | F9.6 | Web UI 必须能查看 handoff、checkpoint、导入导出状态及其来源 |
 
@@ -221,6 +221,12 @@ workspace 角色；
 第二个及后续版本必须用 `base_checkpoint_id` 对当前 head 做 compare-and-swap。
 实现和取舍见
 [`ADR 0002`](docs/adr/0002-versioned-task-handoff.md)。
+
+workspace import 的数据库 commit 若无法确认结果，服务端不得删除已上传对象，也
+不得返回普通内部错误。API 固定返回
+`503 workspace_import_commit_indeterminate`，并要求调用方用完全相同的 bundle
+重试；幂等 ledger 会把已成功提交的原请求识别为 replay。bundle 契约见
+[`ADR 0004`](docs/adr/0004-workspace-bundle.md)。
 
 ---
 
