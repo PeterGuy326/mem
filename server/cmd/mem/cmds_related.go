@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -22,6 +23,40 @@ type relatedResp struct {
 	FileID  string       `json:"file_id"`
 	Related []relatedHit `json:"related"`
 	Note    string       `json:"note,omitempty"`
+}
+
+func formatMarkdown(resp relatedResp) string {
+	if len(resp.Related) == 0 {
+		if resp.Note != "" {
+			return fmt.Sprintf("(no related: %s)\n", resp.Note)
+		}
+		return "(no related files)\n"
+	}
+	var out strings.Builder
+	out.WriteString("| # | Score | Type | Name | Path |\n")
+	out.WriteString("|---|-------|------|------|------|\n")
+	for i, r := range resp.Related {
+		fmt.Fprintf(
+			&out,
+			"| %d | %.3f | %s | %s | %s |\n",
+			i+1,
+			r.Score,
+			escapeMarkdownCell(r.Type),
+			escapeMarkdownCell(r.Name),
+			escapeMarkdownCell(r.Path),
+		)
+	}
+	return out.String()
+}
+
+func escapeMarkdownCell(value string) string {
+	return strings.NewReplacer(
+		`\`, `\\`,
+		`|`, `\|`,
+		"\r\n", "<br>",
+		"\r", "<br>",
+		"\n", "<br>",
+	).Replace(value)
 }
 
 func newRelatedCmd() *cobra.Command {
@@ -72,6 +107,10 @@ Relation types currently supported:
 				enc.SetIndent("", "  ")
 				return enc.Encode(resp)
 			}
+			if format == "markdown" {
+				fmt.Print(formatMarkdown(resp))
+				return nil
+			}
 			if len(resp.Related) == 0 {
 				if resp.Note != "" {
 					fmt.Printf("(no related: %s)\n", resp.Note)
@@ -89,7 +128,7 @@ Relation types currently supported:
 	}
 	cmd.Flags().StringVar(&typ, "type", "", "filter: same_topic|same_event|same_person|sequel")
 	cmd.Flags().IntVar(&limit, "limit", 0, "max results (default 10)")
-	cmd.Flags().StringVar(&format, "format", "text", "text|json")
+	cmd.Flags().StringVar(&format, "format", "text", "text|json|markdown")
 
 	cmd.AddCommand(newRelatedRebuildCmd())
 	return cmd
