@@ -4,9 +4,70 @@
  * hand-write them and keep them in sync with the spec.
  */
 
-export type IndexStatus = 'pending' | 'processing' | 'done' | 'failed';
+export type IndexStatus = 'pending' | 'processing' | 'done' | 'partial' | 'failed';
 
 export type FileKind = 'image' | 'doc' | 'audio' | 'video' | 'pdf' | 'text' | 'other';
+
+export interface Geo {
+  lat: number;
+  lon: number;
+}
+
+export type FileSourceKind =
+  | 'api'
+  | 'web'
+  | 'cli'
+  | 'mcp'
+  | 'mobile'
+  | 'ai_device'
+  | 'import'
+  | 'other';
+
+export interface FileSourceLocation extends Geo {
+  accuracy_m?: number;
+  label?: string;
+}
+
+/** Bounded caller/device provenance supplied at upload time. */
+export interface FileSourceMetadata {
+  captured_at?: string;
+  location?: FileSourceLocation;
+  source_kind?: FileSourceKind;
+  source_name?: string;
+}
+
+/**
+ * Whitelisted deterministic processor observations. Values remain untrusted
+ * display data, so consumers must render them as text rather than HTML.
+ */
+export type FileProcessorMetadata = Record<string, unknown>;
+
+export type FileAnnotationKind = 'description' | 'tag';
+export type FileAnnotationStatus = 'pending' | 'accepted' | 'rejected' | 'superseded';
+export type FileAnnotationDecision = Extract<FileAnnotationStatus, 'accepted' | 'rejected'>;
+
+/** Flat provenance fields returned by the canonical file detail contract. */
+export interface FileAnnotationProvenance {
+  source: string;
+  provider: string;
+  processor: string;
+  analysis_version: string;
+}
+
+export interface FileAnnotation extends FileAnnotationProvenance {
+  id: string;
+  file_id: string;
+  stable_key: string;
+  kind: FileAnnotationKind;
+  value_text: string;
+  confidence: number;
+  status: FileAnnotationStatus;
+  state_version: number;
+  decided_by_user_id?: string;
+  decided_at?: string;
+  created_at: string;
+  updated_at: string;
+}
 
 /** Coarse type filter exposed in /v1/search (see SPEC §8.1 mem_search). */
 // The backend currently treats this value as a MIME prefix. "doc" is not a
@@ -55,8 +116,13 @@ export interface MemFile {
   summary: string | null;
   caption: string | null;
   tags: string[];
+  user_tags: string[];
   timeline_at: string | null;
-  geo: { lat: number; lon: number } | null;
+  geo: Geo | null;
+  source_metadata: FileSourceMetadata;
+  processor_metadata: FileProcessorMetadata;
+  annotations: FileAnnotation[];
+  annotations_truncated?: boolean;
 
   // Status
   index_status: IndexStatus;

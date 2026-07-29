@@ -1,7 +1,9 @@
 package workspacebundle
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"time"
 
@@ -9,12 +11,14 @@ import (
 )
 
 const (
-	ContractName    = "mem.workspace_bundle"
-	SchemaVersionV1 = 1
+	ContractName         = "mem.workspace_bundle"
+	SchemaVersionV1      = 1
+	SchemaVersionV2      = 2
+	CurrentSchemaVersion = SchemaVersionV2
 
 	ArchiveFormatZIP64 = "zip64"
 	ArchiveLayoutV1    = "fixed-v1"
-	// BundleMediaType is intentionally parameter-free. SchemaVersionV1 is
+	// BundleMediaType is intentionally parameter-free. The schema version is
 	// carried and validated in manifest.json rather than an HTTP parameter.
 	BundleMediaType = "application/vnd.mem.workspace-bundle+zip"
 
@@ -62,6 +66,19 @@ var requiredExclusionsV1 = []string{
 	"runtime.index_state",
 }
 
+// v2 makes file enrichment provenance portable while deliberately leaving
+// reproducible processor output and unsafe model internals target-local.
+var requiredExclusionsV2 = func() []string {
+	exclusions := append([]string(nil), requiredExclusionsV1...)
+	return append(
+		exclusions,
+		"derived.file_processor_metadata",
+		"derived.raw_processor_errors",
+		"derived.raw_provider_errors",
+		"derived.generated_reasoning",
+	)
+}()
+
 var requiredIndexPathsV1 = []string{
 	FoldersIndexPath,
 	FilesIndexPath,
@@ -75,6 +92,11 @@ var requiredIndexPathsV1 = []string{
 // ExclusionsV1 returns a copy of the mandatory v1 exclusion declaration.
 func ExclusionsV1() []string {
 	return append([]string(nil), requiredExclusionsV1...)
+}
+
+// ExclusionsV2 returns a copy of the mandatory v2 exclusion declaration.
+func ExclusionsV2() []string {
+	return append([]string(nil), requiredExclusionsV2...)
 }
 
 // IndexPathsV1 returns the fixed NDJSON indexes present even for an empty
@@ -169,7 +191,8 @@ type ObjectCounts struct {
 	BlobBytes          int64
 }
 
-// NewManifest constructs the invariant portions of a full-root v1 manifest.
+// NewManifest constructs the invariant portions of a full-root manifest using
+// the current writer schema. Readers continue to accept legacy v1 archives.
 func NewManifest(
 	bundleID uuid.UUID,
 	createdAt time.Time,
@@ -178,7 +201,7 @@ func NewManifest(
 ) Manifest {
 	return Manifest{
 		Contract:      ContractName,
-		SchemaVersion: SchemaVersionV1,
+		SchemaVersion: CurrentSchemaVersion,
 		BundleID:      bundleID,
 		CreatedAt:     createdAt.UTC(),
 		Archive: ArchiveDescriptor{
@@ -218,7 +241,7 @@ func NewManifest(
 			Path:      ChecksumsPath,
 			Algorithm: "sha256",
 		},
-		Exclusions: ExclusionsV1(),
+		Exclusions: ExclusionsV2(),
 	}
 }
 
@@ -232,20 +255,124 @@ type FolderRecord struct {
 }
 
 type FileRecord struct {
-	ID         uuid.UUID  `json:"id"`
-	FolderID   *uuid.UUID `json:"folder_id,omitempty"`
-	Name       string     `json:"name"`
-	Path       string     `json:"path"`
-	Size       int64      `json:"size"`
-	SHA256     string     `json:"sha256"`
-	MIME       string     `json:"mime"`
-	BlobPath   string     `json:"blob_path"`
-	Summary    *string    `json:"summary,omitempty"`
-	Caption    *string    `json:"caption,omitempty"`
-	Tags       []string   `json:"tags"`
-	TimelineAt *time.Time `json:"timeline_at,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
+	ID             uuid.UUID              `json:"id"`
+	FolderID       *uuid.UUID             `json:"folder_id,omitempty"`
+	Name           string                 `json:"name"`
+	Path           string                 `json:"path"`
+	Size           int64                  `json:"size"`
+	SHA256         string                 `json:"sha256"`
+	MIME           string                 `json:"mime"`
+	BlobPath       string                 `json:"blob_path"`
+	Summary        *string                `json:"summary,omitempty"`
+	Caption        *string                `json:"caption,omitempty"`
+	Tags           []string               `json:"tags"`
+	UserTags       []string               `json:"user_tags"`
+	TimelineAt     *time.Time             `json:"timeline_at,omitempty"`
+	Geo            *FileGeoRecord         `json:"geo,omitempty"`
+	SourceMetadata json.RawMessage        `json:"source_metadata"`
+	Annotations    []FileAnnotationRecord `json:"annotations"`
+	CreatedAt      time.Time              `json:"created_at"`
+	UpdatedAt      time.Time              `json:"updated_at"`
+}
+
+// FileGeoRecord is the portable API-facing latitude/longitude projection.
+// PostgreSQL's point(lon, lat) storage order is intentionally not exported.
+type FileGeoRecord struct {
+	Lat float64 `json:"lat"`
+	Lon float64 `json:"lon"`
+}
+
+func (record *FileGeoRecord) UnmarshalJSON(data []byte) error {
+	type wire FileGeoRecord
+	var decoded wire
+	if err := decodeRequiredObject(
+		data,
+		&decoded,
+		"file geo",
+		"lat",
+		"lon",
+	); err != nil {
+		return err
+	}
+	*record = FileGeoRecord(decoded)
+	return nil
+}
+
+// FileAnnotationRecord transports bounded suggestion provenance and human
+// review state. Target-local actor user IDs are deliberately excluded.
+type FileAnnotationRecord struct {
+	ID              uuid.UUID  `json:"id"`
+	StableKey       string     `json:"stable_key"`
+	Kind            string     `json:"kind"`
+	ValueText       string     `json:"value_text"`
+	Confidence      float32    `json:"confidence"`
+	Source          string     `json:"source"`
+	Provider        string     `json:"provider"`
+	Processor       string     `json:"processor"`
+	AnalysisVersion string     `json:"analysis_version"`
+	Status          string     `json:"status"`
+	StateVersion    int64      `json:"state_version"`
+	DecidedAt       *time.Time `json:"decided_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+}
+
+func (record *FileAnnotationRecord) UnmarshalJSON(data []byte) error {
+	type wire FileAnnotationRecord
+	var decoded wire
+	if err := decodeRequiredObject(
+		data,
+		&decoded,
+		"file annotation",
+		"id",
+		"stable_key",
+		"kind",
+		"value_text",
+		"confidence",
+		"source",
+		"provider",
+		"processor",
+		"analysis_version",
+		"status",
+		"state_version",
+		"created_at",
+		"updated_at",
+	); err != nil {
+		return err
+	}
+	*record = FileAnnotationRecord(decoded)
+	return nil
+}
+
+func decodeRequiredObject(
+	data []byte,
+	target any,
+	label string,
+	required ...string,
+) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil || fields == nil {
+		return fmt.Errorf("%s must be an object", label)
+	}
+	for _, field := range required {
+		value, exists := fields[field]
+		if !exists || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return fmt.Errorf("%s.%s is required and must not be null", label, field)
+		}
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("%s must contain exactly one JSON object", label)
+		}
+		return err
+	}
+	return nil
 }
 
 type MemoryRecord struct {

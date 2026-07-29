@@ -13,7 +13,17 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var userLocks sync.Map // map[uuid.UUID]*sync.RWMutex
+var (
+	userLocks  sync.Map // map[uuid.UUID]*sync.RWMutex
+	fileLocksM sync.Mutex
+	fileLocks  = map[uuid.UUID]*fileIndexLock{}
+)
+
+type fileIndexLock struct {
+	mutex      sync.Mutex
+	latest     uint64
+	references int
+}
 
 const LegacyUnknownProvider = "legacy:unknown"
 
@@ -25,6 +35,40 @@ var (
 func userLock(userID uuid.UUID) *sync.RWMutex {
 	lock, _ := userLocks.LoadOrStore(userID, &sync.RWMutex{})
 	return lock.(*sync.RWMutex)
+}
+
+// LockFileIndexing serializes in-process index runs for one immutable file and
+// reports whether this invocation is still the latest one waiting to run.
+// Superseded waiters can exit without replacing newer suggestions or indexes.
+func LockFileIndexing(fileID uuid.UUID) (bool, func()) {
+	fileLocksM.Lock()
+	lock := fileLocks[fileID]
+	if lock == nil {
+		lock = &fileIndexLock{}
+		fileLocks[fileID] = lock
+	}
+	lock.latest++
+	generation := lock.latest
+	lock.references++
+	fileLocksM.Unlock()
+
+	lock.mutex.Lock()
+	fileLocksM.Lock()
+	isLatest := generation == lock.latest
+	fileLocksM.Unlock()
+
+	var once sync.Once
+	return isLatest, func() {
+		once.Do(func() {
+			lock.mutex.Unlock()
+			fileLocksM.Lock()
+			lock.references--
+			if lock.references == 0 && fileLocks[fileID] == lock {
+				delete(fileLocks, fileID)
+			}
+			fileLocksM.Unlock()
+		})
+	}
 }
 
 // LockIndexing allows concurrent index jobs for one user while excluding a

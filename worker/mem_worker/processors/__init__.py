@@ -13,10 +13,18 @@ Phase 1 inventory:
 
 from __future__ import annotations
 
-from .base import Entity, FileRef, ProcessResult, Processor, ProcessorError
+from .base import (
+    AnnotationSuggestion,
+    Entity,
+    FileRef,
+    Processor,
+    ProcessorError,
+    ProcessResult,
+)
 from .registry import ProcessorRegistry, default_registry
 
 __all__ = [
+    "AnnotationSuggestion",
     "Entity",
     "FileRef",
     "ProcessResult",

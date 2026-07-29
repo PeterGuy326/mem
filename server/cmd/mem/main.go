@@ -68,6 +68,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newGetCmd())
 	root.AddCommand(newCatCmd())
 	root.AddCommand(newInfoCmd())
+	root.AddCommand(newAnnotationCmd())
 	root.AddCommand(newLsCmd())
 	root.AddCommand(newMkdirCmd())
 	root.AddCommand(newMvCmd())

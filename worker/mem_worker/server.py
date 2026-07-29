@@ -30,10 +30,11 @@ from . import __version__
 from .config import get_settings
 from .logging import configure_logging, get_logger
 from .processors import (
+    AnnotationSuggestion,
     Entity,
     FileRef,
-    ProcessResult,
     ProcessorError,
+    ProcessResult,
     default_registry,
 )
 from .storage import StorageError, fetch_bytes
@@ -61,6 +62,7 @@ def _load_pb():
 # ---------------------------------------------------------------------------
 # gRPC servicer
 # ---------------------------------------------------------------------------
+
 
 class ProcessorServicer:
     """Implements ProcessorService defined in proto/processor.proto."""
@@ -100,6 +102,7 @@ class ProcessorServicer:
         Override keys (all optional, ``"<vendor>:<model>"`` form):
             embedding_provider        — TEXT embedder (for TextProcessor only)
             visual_embedding_provider — VISUAL embedder (for ImageProcessor only)
+            llm_provider              — text/PDF/audio annotation model
             vlm_provider              — image captioner
 
         Note: the text and visual embedder kinds are intentionally separate.
@@ -112,25 +115,26 @@ class ProcessorServicer:
             return None
         emb_spec = options.get("embedding_provider") or ""
         v_emb_spec = options.get("visual_embedding_provider") or ""
+        llm_spec = options.get("llm_provider") or ""
         vlm_spec = options.get("vlm_provider") or ""
-        if not (emb_spec or v_emb_spec or vlm_spec):
+        if not (emb_spec or v_emb_spec or llm_spec or vlm_spec):
             return base
         # Lazy import to avoid cycle when default_registry() pulls in this file.
-        from .providers import get_embedding_provider, get_vlm_provider
         from .processors.audio import AudioProcessor
         from .processors.image import ImageProcessor
         from .processors.pdf import PDFProcessor
         from .processors.text import TextProcessor
+        from .providers import get_embedding_provider, get_vlm_provider
 
         vlm = get_vlm_provider(vlm_spec) if vlm_spec else None
         emb = get_embedding_provider(emb_spec) if emb_spec else None
 
         if isinstance(base, TextProcessor):
-            return TextProcessor(embedder=emb)
+            return TextProcessor(embedder=emb, llm_spec=llm_spec or None)
         if isinstance(base, PDFProcessor):
-            return PDFProcessor(embedder=emb)
+            return PDFProcessor(embedder=emb, llm_spec=llm_spec or None)
         if isinstance(base, AudioProcessor):
-            return AudioProcessor(embedder=emb)
+            return AudioProcessor(embedder=emb, llm_spec=llm_spec or None)
         if isinstance(base, ImageProcessor):
             v_emb = get_embedding_provider(v_emb_spec) if v_emb_spec else None
             return ImageProcessor(embedder=v_emb, vlm=vlm)
@@ -221,15 +225,19 @@ class ProcessorServicer:
 # ProcessResult -> protobuf
 # ---------------------------------------------------------------------------
 
+
 def _result_to_proto(result: ProcessResult, pb: Any):
     """Convert a Python :class:`ProcessResult` into the protobuf message."""
-    # Determine high-level status: if any embedding had an error metadata we
-    # downgrade to PARTIAL.
-    has_error = any(
-        k in result.metadata
-        for k in ("embed_error", "vlm_error", "summary_error", "decode_error")
-    )
+    # Processors degrade individual stages by recording a bounded ``*_error``
+    # marker and returning the useful remainder. Keep the top-level status in
+    # sync for every current and future stage instead of maintaining a list
+    # that can silently miss PDF/ASR/face failures.
+    has_error = any(k == "error" or k.endswith("_error") for k in result.metadata)
     status = pb.STATUS_PARTIAL if has_error else pb.STATUS_OK
+
+    metadata = dict(result.metadata)
+    metadata["annotations"] = _annotations_to_metadata(result)
+    metadata["annotations_complete"] = result.annotations_complete
 
     pb_resp = pb.ProcessResponse(
         summary=result.summary or "",
@@ -237,7 +245,7 @@ def _result_to_proto(result: ProcessResult, pb: Any):
         tags=list(result.tags),
         processor=result.processor,
         status=status,
-        metadata_json=json.dumps(result.metadata, default=str).encode("utf-8"),
+        metadata_json=json.dumps(metadata, default=str).encode("utf-8"),
     )
 
     for ent in result.entities:
@@ -259,6 +267,41 @@ def _result_to_proto(result: ProcessResult, pb: Any):
     return pb_resp
 
 
+def _annotations_to_metadata(result: ProcessResult) -> list[dict[str, Any]]:
+    """Serialize a final bounded annotation projection for the indexer."""
+
+    output: list[dict[str, Any]] = []
+    description_seen = False
+    tags_seen: set[str] = set()
+
+    for suggestion in result.annotations:
+        if not isinstance(suggestion, AnnotationSuggestion):
+            continue
+        if suggestion.kind == "description":
+            if description_seen:
+                continue
+            description_seen = True
+        else:
+            key = suggestion.value.casefold()
+            if key in tags_seen or len(tags_seen) >= 20:
+                continue
+            tags_seen.add(key)
+
+        output.append(
+            {
+                "kind": suggestion.kind,
+                "value": suggestion.value,
+                "confidence": suggestion.confidence,
+                "source": suggestion.source,
+                "provider": suggestion.provider,
+                "processor": suggestion.processor or result.processor,
+                "analysis_version": suggestion.analysis_version,
+            }
+        )
+
+    return output
+
+
 def _entity_to_proto(ent: Entity, pb: Any):
     return pb.Entity(
         type=ent.type,
@@ -271,6 +314,7 @@ def _entity_to_proto(ent: Entity, pb: Any):
 # ---------------------------------------------------------------------------
 # Server lifecycle
 # ---------------------------------------------------------------------------
+
 
 def serve(host: Optional[str] = None, port: Optional[int] = None) -> None:
     """Bind a grpc.Server and block forever."""

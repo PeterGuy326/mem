@@ -36,9 +36,7 @@ class ProcessorRegistry:
 
     def register(self, processor: Processor) -> None:
         if not getattr(processor, "accepts", None):
-            raise ValueError(
-                f"processor {processor!r} has empty `accepts`; refusing to register"
-            )
+            raise ValueError(f"processor {processor!r} has empty `accepts`; refusing to register")
         self._items.append(processor)
         log.info(
             "processor.registered",
@@ -82,25 +80,26 @@ _default: Optional[ProcessorRegistry] = None
 def default_registry() -> ProcessorRegistry:
     """Build (once) and return the process-wide default registry.
 
-    Processors are constructed *without* their downstream Providers — those
-    are injected lazily inside ``process()`` from the registry getter — so
-    importing this module is safe even when Ollama / boto3 are unavailable.
+    Processors are constructed *without* their downstream Providers. Text
+    enrichment, embeddings, VLM, and ASR are all resolved lazily inside
+    ``process()``, so importing this module is safe even when Ollama / boto3
+    are unavailable.
     """
     global _default
     if _default is not None:
         return _default
 
-    from .image import ImageProcessor
-    from .text import TextProcessor
-    from .pdf import PDFProcessor
     from .audio import AudioProcessor
+    from .image import ImageProcessor
+    from .pdf import PDFProcessor
+    from .text import TextProcessor
 
     reg = ProcessorRegistry()
     # Order matters: register more specific mime patterns before generic ones.
     reg.register(ImageProcessor())
     reg.register(PDFProcessor())
     reg.register(AudioProcessor())
-    reg.register(TextProcessor())     # "text/*" + json + common code mimes
+    reg.register(TextProcessor())  # "text/*" + json + common code mimes
     _default = reg
     return reg
 

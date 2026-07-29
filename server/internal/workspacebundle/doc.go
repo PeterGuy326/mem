@@ -1,4 +1,4 @@
-// Package workspacebundle defines and validates the portable .membundle v1
+// Package workspacebundle defines and validates the portable .membundle v1/v2
 // archive format.
 //
 // The package deliberately stops at the archive boundary. It does not perform

@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mem.local/schemas/workspace-bundle.v2.schema.json",
+  "title": "mem workspace bundle manifest v2",
+  "$comment": "Manifest structure is unchanged from v1; v2 extends the exact exclusions declaration and adds strict enrichment fields to objects/files.ndjson. Runtime validation remains authoritative for NDJSON records and cross-record projections.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract",
+    "schema_version",
+    "bundle_id",
+    "created_at",
+    "archive",
+    "source",
+    "scope",
+    "restore",
+    "indexes",
+    "checkpoint_payloads",
+    "blobs",
+    "checksums",
+    "exclusions"
+  ],
+  "properties": {
+    "contract": {
+      "$ref": "workspace-bundle.v1.schema.json#/properties/contract"
+    },
+    "schema_version": {
+      "const": 2
+    },
+    "bundle_id": {
+      "$ref": "workspace-bundle.v1.schema.json#/properties/bundle_id"
+    },
+    "created_at": {
+      "$ref": "workspace-bundle.v1.schema.json#/properties/created_at"
+    },
+    "archive": {
+      "$ref": "workspace-bundle.v1.schema.json#/properties/archive"
+    },
+    "source": {
+      "$ref": "workspace-bundle.v1.schema.json#/properties/source"
+    },
+    "scope": {
+      "$ref": "workspace-bundle.v1.schema.json#/properties/scope"
+    },
+    "restore": {
+      "$ref": "workspace-bundle.v1.schema.json#/properties/restore"
+    },
+    "indexes": {
+      "$ref": "workspace-bundle.v1.schema.json#/properties/indexes"
+    },
+    "checkpoint_payloads": {
+      "$ref": "workspace-bundle.v1.schema.json#/properties/checkpoint_payloads"
+    },
+    "blobs": {
+      "$ref": "workspace-bundle.v1.schema.json#/properties/blobs"
+    },
+    "checksums": {
+      "$ref": "workspace-bundle.v1.schema.json#/properties/checksums"
+    },
+    "exclusions": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "const": "auth.users"
+        },
+        {
+          "const": "auth.password_hashes"
+        },
+        {
+          "const": "auth.tokens"
+        },
+        {
+          "const": "auth.token_hashes"
+        },
+        {
+          "const": "auth.sessions"
+        },
+        {
+          "const": "auth.workspace_memberships"
+        },
+        {
+          "const": "provenance.user_ids"
+        },
+        {
+          "const": "provenance.token_ids"
+        },
+        {
+          "const": "memory.raw_idempotency_keys"
+        },
+        {
+          "const": "storage.storage_keys"
+        },
+        {
+          "const": "storage.presigned_urls"
+        },
+        {
+          "const": "providers.settings"
+        },
+        {
+          "const": "providers.credentials"
+        },
+        {
+          "const": "runtime.environment"
+        },
+        {
+          "const": "derived.embeddings_text"
+        },
+        {
+          "const": "derived.embeddings_visual"
+        },
+        {
+          "const": "derived.embeddings_face"
+        },
+        {
+          "const": "derived.entities"
+        },
+        {
+          "const": "derived.file_entities"
+        },
+        {
+          "const": "derived.file_relations"
+        },
+        {
+          "const": "runtime.worker_jobs"
+        },
+        {
+          "const": "runtime.index_state"
+        },
+        {
+          "const": "derived.file_processor_metadata"
+        },
+        {
+          "const": "derived.raw_processor_errors"
+        },
+        {
+          "const": "derived.raw_provider_errors"
+        },
+        {
+          "const": "derived.generated_reasoning"
+        }
+      ],
+      "items": false,
+      "minItems": 26,
+      "maxItems": 26
+    }
+  }
+}

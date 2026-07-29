@@ -96,7 +96,7 @@ def test_registry_returns_ollama_classes():
     e = get_embedding_provider("ollama:nomic-embed-text")
     assert isinstance(e, OllamaEmbeddingProvider)
     assert e.model == "nomic-embed-text"
-    assert e.dim == 768  # fixed mem corpus contract
+    assert e.dim == 768  # known model hint matches the fixed mem corpus contract
     assert e.name == "ollama:nomic-embed-text"
 
     llm = get_llm_provider("ollama:qwen2.5:7b")
@@ -250,8 +250,18 @@ def test_vlm_caption_sends_base64_image(capture):
     assert body["model"] == "minicpm-v"
     msg = body["messages"][0]
     assert msg["role"] == "user"
-    assert msg["content"].lower().startswith("describe")
+    assert msg["content"] == OllamaVLMProvider.DEFAULT_CAPTION_PROMPT
     assert msg["images"] == [base64.b64encode(image).decode("ascii")]
+
+
+def test_vlm_caption_passes_custom_prompt(capture):
+    capture.script(_FakeResp({"message": {"content": "structured labels"}}))
+    p = OllamaVLMProvider(model="minicpm-v")
+
+    out = p.caption(b"\x00", prompt="Return concise semantic tags.")
+
+    assert out == "structured labels"
+    assert capture.calls[0]["json"]["messages"][0]["content"] == ("Return concise semantic tags.")
 
 
 def test_vlm_vqa_uses_question_as_prompt(capture):

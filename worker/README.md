@@ -4,9 +4,9 @@ Python AI Worker for the [mem](../README.md) project. Speaks gRPC to the Go
 backend, runs per-mime **Processors** (Image / Text / PDF / Audio), and calls
 pluggable **Providers** (Ollama / OpenAI / Anthropic / …) for retrieval
 embeddings and content understanding. It does not generate the Agent's answer.
-The default indexing path does not inject a general-purpose LLM; an explicitly
-injected LLM remains available only as a compatibility hook for extraction or
-summarization processors.
+The configured indexing LLM emits bounded description/tag suggestions for
+text, PDF, and audio content. Suggestions remain subject to server-side human
+review and are separate from Agent answer generation.
 
 > **Status:** Image, Text, PDF and Audio processors are live. Ollama, OpenAI,
 > Anthropic and local CLIP adapters support the indexing capabilities listed
@@ -104,6 +104,7 @@ docker run --rm -p 127.0.0.1:50051:50051 \
 | `ANTHROPIC_API_KEY` | — | Anthropic VLM provider |
 | `MEM_DEFAULT_EMBEDDING` | `ollama:nomic-embed-text` | text embedding spec |
 | `MEM_DEFAULT_VISUAL_EMBEDDING` | `clip:ViT-B-32` | fixed visual search space |
+| `MEM_DEFAULT_LLM` | `ollama:qwen2.5:7b` | text/PDF/audio annotation suggestions; empty disables |
 | `MEM_DEFAULT_VLM` | `ollama:minicpm-v` | image captioning |
 | `MEM_TEXT_CHUNK_SIZE` | `1000` | char window |
 | `MEM_TEXT_CHUNK_OVERLAP` | `100` | char overlap |
@@ -176,7 +177,7 @@ Re-generate Python stubs with `make proto`.
 | Processor | accepts | Status | Outputs |
 | --- | --- | --- | --- |
 | `ImageProcessor` | `image/*` | Live | EXIF/GPS, VLM caption, CLIP visual vector, optional face vectors |
-| `TextProcessor` | `text/*` + JSON / YAML / common code MIMEs | Live | Chunked text embeddings; optional explicitly injected extraction summary |
+| `TextProcessor` | `text/*` + JSON / YAML / common code MIMEs | Live | Chunked text embeddings plus lazily resolved, reviewable description/tag suggestions |
 | `PDFProcessor` | `application/pdf` | Live | Text-layer extraction followed by the text pipeline; OCR is future work |
 | `AudioProcessor` | `audio/*` | Live | ASR transcript followed by the text pipeline |
 

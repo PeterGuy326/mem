@@ -4,16 +4,17 @@ W1 scope:
     1. Decode bytes as UTF-8 (with utf-8-sig + latin-1 fallbacks).
     2. Chunk into ~1000-char windows with 100-char overlap (configurable).
     3. Embed each chunk via the default text embedding provider.
-    4. Optionally summarize only when a caller explicitly injects an LLM.
+    4. Ask the configured indexing LLM for bounded description/tag candidates.
 
-The default indexing path is retrieval-only and does not invoke a general chat
-model. This keeps answer generation and reflective memory writes in the
-external Agent.
+Provider construction stays lazy and failures are non-fatal: unavailable models
+produce a partial result while embeddings and extracted content remain usable.
+This is an indexing enrichment path, not Agent answer generation.
 """
 
 from __future__ import annotations
 
-from typing import Iterable, Optional
+import json
+from collections.abc import Iterable
 
 from ..config import get_settings
 from ..logging import get_logger
@@ -23,8 +24,22 @@ from ..providers import (
     Message,
     ProviderError,
     get_embedding_provider,
+    get_llm_provider,
 )
-from .base import EmbeddingRow, EmbeddingSet, FileRef, ProcessResult
+from .annotations import (
+    TEXT_ANNOTATION_SYSTEM_PROMPT,
+    description_value,
+    plain_description,
+    structured_annotations,
+    tag_values,
+)
+from .base import (
+    PROVIDER_ERROR_MARKER,
+    EmbeddingRow,
+    EmbeddingSet,
+    FileRef,
+    ProcessResult,
+)
 
 log = get_logger(__name__)
 
@@ -53,11 +68,14 @@ class TextProcessor:
 
     def __init__(
         self,
-        embedder: Optional[EmbeddingProvider] = None,
-        llm: Optional[LLMProvider] = None,
+        embedder: EmbeddingProvider | None = None,
+        llm: LLMProvider | None = None,
+        *,
+        llm_spec: str | None = None,
     ):
         self._embedder = embedder
         self._llm = llm
+        self._llm_spec = llm_spec
 
     # ---- helpers ----
 
@@ -65,6 +83,18 @@ class TextProcessor:
         if self._embedder is None:
             self._embedder = get_embedding_provider(get_settings().default_embedding)
         return self._embedder
+
+    def _resolve_llm(self) -> LLMProvider | None:
+        if self._llm is not None:
+            return self._llm
+        spec = self._llm_spec
+        if spec is None:
+            spec = get_settings().default_llm
+        spec = spec.strip()
+        if not spec:
+            return None
+        self._llm = get_llm_provider(spec)
+        return self._llm
 
     # ---- main entrypoint ----
 
@@ -104,32 +134,81 @@ class TextProcessor:
                         for i, v in enumerate(vectors)
                     ],
                 )
-        except (ProviderError, NotImplementedError) as exc:
-            log.warning("text.embed_failed", file_id=file.file_id, error=str(exc))
-            result.metadata["embed_error"] = str(exc)
+        except (ProviderError, NotImplementedError):
+            log.warning(
+                "text.embed_failed",
+                file_id=file.file_id,
+                error=PROVIDER_ERROR_MARKER,
+            )
+            result.metadata["embed_error"] = PROVIDER_ERROR_MARKER
+        except Exception:  # noqa: BLE001 — provider bugs must stay partial and redacted
+            log.error(
+                "text.embed_unexpected",
+                file_id=file.file_id,
+                error=PROVIDER_ERROR_MARKER,
+            )
+            result.metadata["embed_error"] = PROVIDER_ERROR_MARKER
 
-        # 2. Optional summary. The default registry does not inject an LLM:
-        # external Agents own reasoning and write-back. Kept as an explicit
-        # hook for offline consolidation jobs.
-        if len(text) >= 200 and self._llm is not None:
+        # 2. Optional model annotation. Provider resolution happens here so
+        # importing the registry and serving HealthCheck never require a model.
+        if len(text) >= 200:
             try:
-                summary = self._llm.complete(
+                llm = self._resolve_llm()
+                if llm is None:
+                    return result
+                model_output = llm.complete(
                     [
                         Message(
                             role="system",
+                            content=TEXT_ANNOTATION_SYSTEM_PROMPT,
+                        ),
+                        Message(
+                            role="user",
                             content=(
-                                "You are a careful summarizer. Return a single "
-                                "paragraph (<=3 sentences) summarizing the user "
-                                "message. Do not add commentary."
+                                "UNTRUSTED_DOCUMENT_JSON_STRING:\n"
+                                + json.dumps(text[:8000], ensure_ascii=False)
                             ),
                         ),
-                        Message(role="user", content=text[:8000]),
                     ]
                 )
-                result.summary = summary.strip() or None
-            except (ProviderError, NotImplementedError) as exc:
-                log.warning("text.summary_failed", file_id=file.file_id, error=str(exc))
-                result.metadata["summary_error"] = str(exc)
+                suggestions = structured_annotations(
+                    model_output,
+                    provider=getattr(llm, "name", ""),
+                )
+                if suggestions is not None:
+                    result.annotations = suggestions
+                    result.annotations_complete = True
+                    result.summary = description_value(suggestions)
+                    result.tags = tag_values(suggestions)
+                else:
+                    fallback = plain_description(
+                        model_output,
+                        provider=getattr(llm, "name", ""),
+                    )
+                    if fallback is not None:
+                        # Compatibility for explicit hooks and their existing
+                        # plain-text fake providers.
+                        result.annotations = [fallback]
+                        result.annotations_complete = True
+                        result.summary = fallback.value
+                    else:
+                        result.metadata["annotation_parse_error"] = (
+                            "invalid structured model output"
+                        )
+            except (ProviderError, NotImplementedError):
+                log.warning(
+                    "text.summary_failed",
+                    file_id=file.file_id,
+                    error=PROVIDER_ERROR_MARKER,
+                )
+                result.metadata["summary_error"] = PROVIDER_ERROR_MARKER
+            except Exception:  # noqa: BLE001 — model failure must stay partial and redacted
+                log.error(
+                    "text.summary_unexpected",
+                    file_id=file.file_id,
+                    error=PROVIDER_ERROR_MARKER,
+                )
+                result.metadata["summary_error"] = PROVIDER_ERROR_MARKER
 
         return result
 
@@ -137,6 +216,7 @@ class TextProcessor:
 # ---------------------------------------------------------------------------
 # Decoding + chunking helpers (pure functions, easy to test)
 # ---------------------------------------------------------------------------
+
 
 def _decode_text(data: bytes) -> str:
     """Best-effort decode of arbitrary bytes to ``str``.

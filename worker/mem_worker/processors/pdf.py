@@ -35,10 +35,12 @@ class PDFProcessor:
         self,
         embedder: Optional[EmbeddingProvider] = None,
         llm: Optional[LLMProvider] = None,
+        *,
+        llm_spec: Optional[str] = None,
     ):
         # Delegate the heavy lifting (chunk/embed/summarize) to TextProcessor,
         # forwarding any injected providers so tests can stub them.
-        self._text = TextProcessor(embedder=embedder, llm=llm)
+        self._text = TextProcessor(embedder=embedder, llm=llm, llm_spec=llm_spec)
 
     def process(self, file: FileRef) -> ProcessResult:
         try:

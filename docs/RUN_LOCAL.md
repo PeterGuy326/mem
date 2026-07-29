@@ -66,6 +66,13 @@ Web 浏览器验收及其通过标准统一见 [TESTING.md](TESTING.md)。
    `install` 只在用户显式选择后通过 Ollama HTTP API 下载，随后校验固定 manifest
    digest 和 768 维 `/api/embed` probe；默认不会激活。完整目录和 integrity 更新
    规则见 [LOCAL_EMBEDDING_MODELS.md](LOCAL_EMBEDDING_MODELS.md)。
+   目录中的文本 embedding profile（包括适用时的 `nomic-embed-text`）必须通过
+   768 维 probe，对上 schema `embeddings_text vector(768)`，不要绕过目录流程
+   直接把未验证模型设为默认值。
+   - 文件富化模型另行显式安装：`ollama pull qwen2.5:7b`。它用于文本/PDF/音频
+     的待审核描述与标签，不属于 embedding profile，也不会由目录流程静默下载。
+     设置 `MEM_DEFAULT_LLM=""` 可关闭；模型缺失或不可用时索引降级为 `partial`，
+     但不阻塞文件上传。
    - 视觉模型（minicpm-v）**可选缺失**：影响的是 caption 文本，不影响图搜图本身。
      图片的视觉向量由 **CLIP**（`clip:ViT-B-32`，见下）产出，与 Ollama 无关。
    - **图搜图 = CLIP**：装了 `--extra clip` 后，图片入库时由 CLIP image-tower

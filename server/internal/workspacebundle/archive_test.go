@@ -154,7 +154,7 @@ func TestOpenRejectsFutureSchemaEvenWithValidChecksums(t *testing.T) {
 		if err := json.Unmarshal(entries[index].Data, &manifest); err != nil {
 			t.Fatal(err)
 		}
-		manifest["schema_version"] = float64(2)
+		manifest["schema_version"] = float64(CurrentSchemaVersion + 1)
 		entries[index].Data, _ = json.Marshal(manifest)
 	}
 	recomputeTestChecksums(entries)
@@ -162,6 +162,121 @@ func TestOpenRejectsFutureSchemaEvenWithValidChecksums(t *testing.T) {
 	_, err := Open(bytes.NewReader(future), int64(len(future)), ReaderOptions{})
 	if !errors.Is(err, ErrUnsupportedVersion) {
 		t.Fatalf("Open error = %v, want ErrUnsupportedVersion", err)
+	}
+}
+
+func TestOpenAcceptsHistoricalV1WithoutEnrichmentFields(t *testing.T) {
+	raw := writeFixture(t, validFixture(t))
+	entries := readTestZIP(t, raw)
+	for index := range entries {
+		switch entries[index].Header.Name {
+		case ManifestPath:
+			var manifest map[string]any
+			if err := json.Unmarshal(entries[index].Data, &manifest); err != nil {
+				t.Fatal(err)
+			}
+			manifest["schema_version"] = float64(SchemaVersionV1)
+			manifest["exclusions"] = ExclusionsV1()
+			entries[index].Data, _ = json.Marshal(manifest)
+		case FilesIndexPath:
+			lines := bytes.Split(bytes.TrimSuffix(entries[index].Data, []byte("\n")), []byte("\n"))
+			for lineIndex := range lines {
+				var record map[string]any
+				if err := json.Unmarshal(lines[lineIndex], &record); err != nil {
+					t.Fatal(err)
+				}
+				delete(record, "user_tags")
+				delete(record, "geo")
+				delete(record, "source_metadata")
+				delete(record, "annotations")
+				lines[lineIndex], _ = json.Marshal(record)
+			}
+			entries[index].Data = append(bytes.Join(lines, []byte("\n")), '\n')
+		}
+	}
+	recomputeTestChecksums(entries)
+	legacy := writeTestZIP(t, entries)
+
+	archive, err := Open(bytes.NewReader(legacy), int64(len(legacy)), ReaderOptions{})
+	if err != nil {
+		t.Fatalf("Open historical v1: %v", err)
+	}
+	if archive.Manifest.SchemaVersion != SchemaVersionV1 ||
+		archive.Files[0].UserTags != nil ||
+		archive.Files[0].Annotations != nil {
+		t.Fatalf("legacy archive = %+v", archive.BundleData)
+	}
+}
+
+func TestOpenRejectsMissingRequiredV2NestedFields(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(t *testing.T, record map[string]any)
+	}{
+		{
+			name: "annotation confidence",
+			mutate: func(t *testing.T, record map[string]any) {
+				t.Helper()
+				annotations, ok := record["annotations"].([]any)
+				if !ok || len(annotations) == 0 {
+					t.Fatalf("annotations = %#v", record["annotations"])
+				}
+				annotation, ok := annotations[0].(map[string]any)
+				if !ok {
+					t.Fatalf("annotation = %#v", annotations[0])
+				}
+				delete(annotation, "confidence")
+			},
+		},
+		{
+			name: "geo latitude",
+			mutate: func(t *testing.T, record map[string]any) {
+				t.Helper()
+				geo, ok := record["geo"].(map[string]any)
+				if !ok {
+					t.Fatalf("geo = %#v", record["geo"])
+				}
+				delete(geo, "lat")
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			entries := readTestZIP(t, writeFixture(t, validFixture(t)))
+			for index := range entries {
+				if entries[index].Header.Name != FilesIndexPath {
+					continue
+				}
+				lines := bytes.Split(
+					bytes.TrimSuffix(entries[index].Data, []byte("\n")),
+					[]byte("\n"),
+				)
+				var record map[string]any
+				if err := json.Unmarshal(lines[0], &record); err != nil {
+					t.Fatal(err)
+				}
+				test.mutate(t, record)
+				lines[0], _ = json.Marshal(record)
+				entries[index].Data = append(bytes.Join(lines, []byte("\n")), '\n')
+			}
+			recomputeTestChecksums(entries)
+			raw := writeTestZIP(t, entries)
+			_, err := Open(bytes.NewReader(raw), int64(len(raw)), ReaderOptions{})
+			if !errors.Is(err, ErrInvalidBundle) {
+				t.Fatalf("Open error = %v, want ErrInvalidBundle", err)
+			}
+		})
+	}
+}
+
+func TestWriteRejectsLegacySchema(t *testing.T) {
+	fixture := validFixture(t)
+	fixture.Manifest.SchemaVersion = SchemaVersionV1
+	var output bytes.Buffer
+
+	err := Write(&output, fixture, WriterOptions{})
+
+	if !errors.Is(err, ErrUnsupportedVersion) {
+		t.Fatalf("Write error = %v, want ErrUnsupportedVersion", err)
 	}
 }
 

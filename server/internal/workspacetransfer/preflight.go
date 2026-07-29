@@ -111,6 +111,14 @@ func preflightFresh(
 	); err != nil {
 		return fail(err)
 	}
+	fileAnnotations := flattenFileAnnotations(data.Files)
+	if err := uuidRecordConflicts(
+		ctx, tx, collector, "global_id", "file_annotation",
+		"file_annotations", "id", fileAnnotations,
+		func(record workspacebundle.FileAnnotationRecord) uuid.UUID { return record.ID },
+	); err != nil {
+		return fail(err)
+	}
 	if err := uuidRecordConflicts(
 		ctx, tx, collector, "global_id", "folder",
 		"folders", "id", data.Folders,
@@ -235,6 +243,20 @@ func preflightFresh(
 		return fail(err)
 	}
 	return collector.summary(), nil
+}
+
+func flattenFileAnnotations(
+	files []workspacebundle.FileRecord,
+) []workspacebundle.FileAnnotationRecord {
+	count := 0
+	for _, file := range files {
+		count += len(file.Annotations)
+	}
+	annotations := make([]workspacebundle.FileAnnotationRecord, 0, count)
+	for _, file := range files {
+		annotations = append(annotations, file.Annotations...)
+	}
+	return annotations
 }
 
 func uuidRecordConflicts[T any](

@@ -27,6 +27,7 @@ import (
 
 	"github.com/PeterGuy326/mem/server/internal/entitlement"
 	"github.com/PeterGuy326/mem/server/internal/indexmeta"
+	"github.com/PeterGuy326/mem/server/internal/modeltext"
 	"github.com/PeterGuy326/mem/server/internal/workerclient"
 )
 
@@ -532,11 +533,34 @@ func (s *Service) scanHits(ctx context.Context, sql string, args []any, route st
 		); err != nil {
 			return nil, fmt.Errorf("scan hit: %w", err)
 		}
+		sanitizeDerivedDisplayText(&h, route)
 		h.Snippet = truncateRunes(h.Snippet, snippetChars)
 		h.Source = route
 		out = append(out, h)
 	}
 	return out, rows.Err()
+}
+
+func sanitizeDerivedDisplayText(hit *Hit, route string) {
+	if hit == nil {
+		return
+	}
+	if hit.Summary != nil {
+		if summary, ok := modeltext.NormalizePlain(*hit.Summary, 2000); ok {
+			hit.Summary = &summary
+		} else {
+			hit.Summary = nil
+		}
+	}
+	// Text snippets are source-document evidence and may legitimately contain
+	// structured syntax. Visual snippets are model-produced captions.
+	if route == RouteVisual {
+		if caption, ok := modeltext.NormalizePlain(hit.Snippet, 2000); ok {
+			hit.Snippet = caption
+		} else {
+			hit.Snippet = ""
+		}
+	}
 }
 
 func appendPathFilters(args []any, where []string, requested string, allowed []string) ([]any, []string) {

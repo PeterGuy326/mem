@@ -101,9 +101,10 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
 
-      - name: Run memory and workspace-transfer browser acceptance
+      - name: Run enrichment, memory and workspace-transfer browser acceptance
         working-directory: web
         run: |
+          npm run test:enrichment
           npm run test:memory
           npm run test:transfer
 

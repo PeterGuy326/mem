@@ -174,6 +174,11 @@ cd mem
 ./scripts/dev_up.sh
 mem auth login
 mem put ~/Photos --recursive
+# 可选：同步端附带可信的拍摄时间、位置和来源；AI 建议稍后在 Web 中确认
+mem put ~/Photos/IMG_0001.jpg \
+  --captured-at 2026-07-29T08:00:00+08:00 \
+  --lat 31.2304 --lon 121.4737 --place Shanghai \
+  --source-kind mobile --source-name "camera sync"
 mem search "a golden retriever standing on green grass"
 mem remember "照片导入已完成" --kind task_state --path /Photos \
   --idempotency-key photos-imported-v1
@@ -197,7 +202,8 @@ mem workspace export --output agent-workspace.membundle
 
 1. **跨 Agent 接续**：`handoff / checkpoint / resume` 的版本化契约、CAS/幂等
    持久化和 API / CLI / MCP 已落地；继续扩充真实宿主验收与适配体验。
-2. **跨设备恢复**：bundle v1 与 API / CLI / Web `fresh` export/import 已落地；
+2. **跨设备恢复**：bundle v2（兼容导入 v1）与 API / CLI / Web `fresh`
+   export/import 已落地；
    下一步是 `merge_conservative`、增量包、断点上传与本地同步。
 3. **自然语言搜图**：持续增强视觉向量、caption、人物、时间、地点和事件的混合召回。
 4. **Agent 记忆协议**：`remember / context / feedback / forget` 控制闭环已

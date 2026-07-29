@@ -12,9 +12,11 @@ import (
 	"time"
 
 	"github.com/PeterGuy326/mem/server/internal/handoff"
+	"github.com/PeterGuy326/mem/server/internal/modeltext"
 	"github.com/PeterGuy326/mem/server/internal/workspacebundle"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type sourceWorkspace struct {
@@ -226,7 +228,8 @@ func loadFiles(
 ) ([]workspacebundle.FileRecord, []storedBlob, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT id, folder_id, name, path, size, sha256, mime, storage_key,
-		       summary, caption, tags, timeline_at, created_at, updated_at
+		       summary, caption, tags, user_tags, timeline_at, geo,
+		       source_metadata::text, created_at, updated_at
 		  FROM files
 		 WHERE user_id = $1
 		 ORDER BY id
@@ -235,14 +238,15 @@ func loadFiles(
 	if err != nil {
 		return nil, nil, fmt.Errorf("list export files: %w", err)
 	}
-	defer rows.Close()
 	records := make([]workspacebundle.FileRecord, 0)
 	blobs := make([]storedBlob, 0)
 	blobIndexes := make(map[string]int)
 	for rows.Next() {
 		var (
-			record     workspacebundle.FileRecord
-			storageKey string
+			record             workspacebundle.FileRecord
+			storageKey         string
+			geo                pgtype.Point
+			sourceMetadataText string
 		)
 		if err := rows.Scan(
 			&record.ID,
@@ -256,14 +260,54 @@ func loadFiles(
 			&record.Summary,
 			&record.Caption,
 			&record.Tags,
+			&record.UserTags,
 			&record.TimelineAt,
+			&geo,
+			&sourceMetadataText,
 			&record.CreatedAt,
 			&record.UpdatedAt,
 		); err != nil {
+			rows.Close()
 			return nil, nil, fmt.Errorf("scan export file: %w", err)
 		}
+		var sourceMetadata map[string]any
+		if err := json.Unmarshal([]byte(sourceMetadataText), &sourceMetadata); err != nil ||
+			sourceMetadata == nil {
+			rows.Close()
+			return nil, nil, fmt.Errorf(
+				"%w: file %s source_metadata is not an object",
+				ErrIntegrity,
+				record.ID,
+			)
+		}
+		record.SourceMetadata, err = json.Marshal(sourceMetadata)
+		if err != nil {
+			rows.Close()
+			return nil, nil, fmt.Errorf("canonicalize file %s source_metadata: %w", record.ID, err)
+		}
+		if geo.Valid {
+			record.Geo = &workspacebundle.FileGeoRecord{
+				Lat: geo.P.Y,
+				Lon: geo.P.X,
+			}
+		}
+		if record.Tags == nil {
+			record.Tags = []string{}
+		}
+		if record.UserTags == nil {
+			record.UserTags = []string{}
+		}
+		if record.Caption != nil {
+			if caption, ok := modeltext.NormalizePlain(*record.Caption, 2000); ok {
+				record.Caption = &caption
+			} else {
+				record.Caption = nil
+			}
+		}
+		record.Annotations = []workspacebundle.FileAnnotationRecord{}
 		blobPath, err := workspacebundle.BlobEntryPath(record.SHA256)
 		if err != nil {
+			rows.Close()
 			return nil, nil, fmt.Errorf("file %s blob path: %w", record.ID, err)
 		}
 		record.BlobPath = blobPath
@@ -285,6 +329,7 @@ func loadFiles(
 		if index, exists := blobIndexes[record.SHA256]; exists {
 			existing := blobs[index]
 			if existing.Size != blob.Size || existing.Path != blob.Path {
+				rows.Close()
 				return nil, nil, fmt.Errorf(
 					"%w: files sharing digest %s disagree on blob size/path",
 					ErrIntegrity,
@@ -297,9 +342,87 @@ func loadFiles(
 		blobs = append(blobs, blob)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return nil, nil, fmt.Errorf("iterate export files: %w", err)
 	}
+	rows.Close()
+	annotations, err := loadFileAnnotations(ctx, tx, ownerID)
+	if err != nil {
+		return nil, nil, err
+	}
+	for index := range records {
+		if values, exists := annotations[records[index].ID]; exists {
+			records[index].Annotations = values
+		}
+		projection := workspacebundle.DeriveFileEnrichmentProjection(records[index])
+		records[index].UserTags = projection.UserTags
+		records[index].Tags = projection.Tags
+		records[index].Summary = projection.Summary
+		records[index].Caption = projection.Caption
+	}
 	return records, blobs, nil
+}
+
+func loadFileAnnotations(
+	ctx context.Context,
+	tx pgx.Tx,
+	ownerID uuid.UUID,
+) (map[uuid.UUID][]workspacebundle.FileAnnotationRecord, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT annotation.file_id, annotation.id, annotation.stable_key,
+		       annotation.kind, annotation.value_text, annotation.confidence,
+		       annotation.source, annotation.provider, annotation.processor,
+		       annotation.analysis_version, annotation.status,
+		       annotation.state_version, annotation.decided_at,
+		       annotation.created_at, annotation.updated_at
+		  FROM file_annotations annotation
+		  JOIN files file ON file.id = annotation.file_id
+		 WHERE file.user_id = $1
+		 ORDER BY annotation.file_id, annotation.created_at, annotation.id
+		 FOR SHARE OF annotation
+	`, ownerID)
+	if err != nil {
+		return nil, fmt.Errorf("list export file annotations: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[uuid.UUID][]workspacebundle.FileAnnotationRecord)
+	for rows.Next() {
+		var (
+			fileID uuid.UUID
+			record workspacebundle.FileAnnotationRecord
+		)
+		if err := rows.Scan(
+			&fileID,
+			&record.ID,
+			&record.StableKey,
+			&record.Kind,
+			&record.ValueText,
+			&record.Confidence,
+			&record.Source,
+			&record.Provider,
+			&record.Processor,
+			&record.AnalysisVersion,
+			&record.Status,
+			&record.StateVersion,
+			&record.DecidedAt,
+			&record.CreatedAt,
+			&record.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan export file annotation: %w", err)
+		}
+		record.CreatedAt = record.CreatedAt.UTC()
+		record.UpdatedAt = record.UpdatedAt.UTC()
+		if record.DecidedAt != nil {
+			value := record.DecidedAt.UTC()
+			record.DecidedAt = &value
+		}
+		result[fileID] = append(result[fileID], record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate export file annotations: %w", err)
+	}
+	return result, nil
 }
 
 func loadMemories(

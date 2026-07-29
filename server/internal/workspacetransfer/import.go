@@ -13,9 +13,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/PeterGuy326/mem/server/internal/modeltext"
 	"github.com/PeterGuy326/mem/server/internal/workspacebundle"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type importTarget struct {
@@ -584,15 +586,39 @@ func insertPortableState(
 		if !ok {
 			return fmt.Errorf("%w: file %s has no uploaded object", ErrIntegrity, record.ID)
 		}
+		projection := workspacebundle.DeriveFileEnrichmentProjection(record)
+		sourceMetadata := record.SourceMetadata
+		if len(strings.TrimSpace(string(sourceMetadata))) == 0 ||
+			string(sourceMetadata) == "null" {
+			sourceMetadata = []byte(`{}`)
+		}
+		var geo pgtype.Point
+		if record.Geo != nil {
+			geo = pgtype.Point{
+				P: pgtype.Vec2{
+					X: record.Geo.Lon,
+					Y: record.Geo.Lat,
+				},
+				Valid: true,
+			}
+		}
+		var caption *string
+		if projection.Caption != nil {
+			if safeCaption, ok := modeltext.NormalizePlain(*projection.Caption, 2000); ok {
+				caption = &safeCaption
+			}
+		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO files (
 				id, user_id, name, path, folder_id, size, sha256, mime,
-				storage_key, summary, caption, tags, timeline_at, index_status,
+				storage_key, summary, caption, tags, user_tags, timeline_at, geo,
+				source_metadata, processor_metadata, index_status,
 				created_at, updated_at
 			)
 			VALUES (
 				$1, $2, $3, $4, $5, $6, $7, $8,
-				$9, $10, $11, $12, $13, 'pending', $14, $15
+				$9, $10, $11, $12, $13, $14, $15,
+				$16::jsonb, '{}'::jsonb, 'pending', $17, $18
 			)
 		`,
 			record.ID,
@@ -604,14 +630,54 @@ func insertPortableState(
 			record.SHA256,
 			record.MIME,
 			storageKey,
-			record.Summary,
-			record.Caption,
-			record.Tags,
+			projection.Summary,
+			caption,
+			projection.Tags,
+			projection.UserTags,
 			record.TimelineAt,
+			geo,
+			[]byte(sourceMetadata),
 			record.CreatedAt,
 			record.UpdatedAt,
 		); err != nil {
 			return fmt.Errorf("insert file %s: %w", record.ID, err)
+		}
+		for _, annotation := range record.Annotations {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO file_annotations (
+					id, file_id, stable_key, kind, value_text, confidence,
+					source, provider, processor, analysis_version, status,
+					state_version, decided_by_user_id, decided_at,
+					created_at, updated_at
+				)
+				VALUES (
+					$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
+					NULL,$13,$14,$15
+				)
+			`,
+				annotation.ID,
+				record.ID,
+				annotation.StableKey,
+				annotation.Kind,
+				annotation.ValueText,
+				annotation.Confidence,
+				annotation.Source,
+				annotation.Provider,
+				annotation.Processor,
+				annotation.AnalysisVersion,
+				annotation.Status,
+				annotation.StateVersion,
+				annotation.DecidedAt,
+				annotation.CreatedAt,
+				annotation.UpdatedAt,
+			); err != nil {
+				return fmt.Errorf(
+					"insert file %s annotation %s: %w",
+					record.ID,
+					annotation.ID,
+					err,
+				)
+			}
 		}
 	}
 	for _, record := range data.Memories {

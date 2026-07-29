@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/PeterGuy326/mem/server/internal/enrichmentkey"
 	"github.com/PeterGuy326/mem/server/internal/handoff"
 	"github.com/google/uuid"
 )
@@ -19,6 +20,8 @@ var (
 	fixtureFileID      = uuid.MustParse("30000000-0000-0000-0000-000000000001")
 	fixtureMemoryID    = uuid.MustParse("40000000-0000-0000-0000-000000000001")
 	fixtureMemoryEvent = uuid.MustParse("45000000-0000-0000-0000-000000000001")
+	fixtureAnnotation1 = uuid.MustParse("48000000-0000-0000-0000-000000000001")
+	fixtureAnnotation2 = uuid.MustParse("48000000-0000-0000-0000-000000000002")
 	fixtureTaskID      = uuid.MustParse("50000000-0000-0000-0000-000000000001")
 	fixtureCheckpoint1 = uuid.MustParse("60000000-0000-0000-0000-000000000001")
 	fixtureCheckpoint2 = uuid.MustParse("60000000-0000-0000-0000-000000000002")
@@ -164,15 +167,61 @@ func validFixture(t *testing.T) WriteInput {
 			UpdatedAt: fixtureTime,
 		}},
 		Files: []FileRecord{{
-			ID:        fixtureFileID,
-			FolderID:  uuidPointer(fixtureFolderID),
-			Name:      "portable.txt",
-			Path:      "/Projects",
-			Size:      int64(len(blob)),
-			SHA256:    fileSHA,
-			MIME:      "text/plain",
-			BlobPath:  blobPath(fileSHA),
-			Tags:      []string{"portable"},
+			ID:       fixtureFileID,
+			FolderID: uuidPointer(fixtureFolderID),
+			Name:     "portable.txt",
+			Path:     "/Projects",
+			Size:     int64(len(blob)),
+			SHA256:   fileSHA,
+			MIME:     "text/plain",
+			BlobPath: blobPath(fileSHA),
+			Tags:     []string{"portable", "reviewed"},
+			UserTags: []string{"portable"},
+			TimelineAt: timePointer(
+				time.Date(2026, time.July, 28, 20, 0, 0, 0, time.FixedZone("CST", 8*60*60)),
+			),
+			Geo: &FileGeoRecord{Lat: 31.2304, Lon: 121.4737},
+			SourceMetadata: json.RawMessage(
+				`{"captured_at":"2026-07-28T20:00:00+08:00","location":{"accuracy_m":5,"label":"Shanghai","lat":31.2304,"lon":121.4737},"source_kind":"mobile","source_name":"camera sync"}`,
+			),
+			Annotations: []FileAnnotationRecord{
+				{
+					ID: fixtureAnnotation1,
+					StableKey: enrichmentkey.Stable(
+						"tag", "model", "file-enrichment-v1", "reviewed",
+					),
+					Kind:            "tag",
+					ValueText:       "reviewed",
+					Confidence:      0.91,
+					Source:          "model",
+					Provider:        "fixture:vlm",
+					Processor:       "text",
+					AnalysisVersion: "file-enrichment-v1",
+					Status:          "accepted",
+					StateVersion:    2,
+					DecidedAt:       timePointer(fixtureTime),
+					CreatedAt:       fixtureTime,
+					UpdatedAt:       fixtureTime,
+				},
+				{
+					ID: fixtureAnnotation2,
+					StableKey: enrichmentkey.Stable(
+						"tag", "model", "file-enrichment-v1", "discarded",
+					),
+					Kind:            "tag",
+					ValueText:       "discarded",
+					Confidence:      0.42,
+					Source:          "model",
+					Provider:        "fixture:vlm",
+					Processor:       "text",
+					AnalysisVersion: "file-enrichment-v1",
+					Status:          "rejected",
+					StateVersion:    2,
+					DecidedAt:       timePointer(fixtureTime),
+					CreatedAt:       fixtureTime,
+					UpdatedAt:       fixtureTime,
+				},
+			},
 			CreatedAt: fixtureTime,
 			UpdatedAt: fixtureTime,
 		}},

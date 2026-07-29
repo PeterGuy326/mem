@@ -776,8 +776,9 @@ func TestWorkspaceCapabilitiesExposeTransferAvailabilityAndPermission(t *testing
 					response.WorkspaceRestoreModes[0] != workspacetransfer.RestoreModeFresh {
 					t.Errorf("restore modes = %v", response.WorkspaceRestoreModes)
 				}
-				if len(response.WorkspaceBundleSchemaVersions) != 1 ||
-					response.WorkspaceBundleSchemaVersions[0] != workspacebundle.SchemaVersionV1 {
+				if len(response.WorkspaceBundleSchemaVersions) != 2 ||
+					response.WorkspaceBundleSchemaVersions[0] != workspacebundle.SchemaVersionV1 ||
+					response.WorkspaceBundleSchemaVersions[1] != workspacebundle.CurrentSchemaVersion {
 					t.Errorf(
 						"bundle schema versions = %v",
 						response.WorkspaceBundleSchemaVersions,

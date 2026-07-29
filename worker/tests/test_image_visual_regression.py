@@ -10,11 +10,11 @@ import io
 
 import pytest
 from PIL import Image
+from structlog.testing import capture_logs
 
 from mem_worker.processors.base import FileRef
 from mem_worker.processors.image import ImageProcessor
 from mem_worker.providers.base import ProviderError
-
 
 VISUAL_DIM = 512
 
@@ -35,9 +35,13 @@ class FakeVLM:
 
 
 class FailingVLM(FakeVLM):
+    def __init__(self, error: Exception):
+        super().__init__()
+        self.error = error
+
     def caption(self, image: bytes, **_kwargs) -> str:
         self.calls.append(image)
-        raise RuntimeError("caption backend unavailable")
+        raise self.error
 
 
 class FakeVisualProvider:
@@ -81,6 +85,14 @@ class CaptionOnlyProvider:
     def embed_text(self, texts: list[str]) -> list[list[float]]:
         self.text_calls.append(list(texts))
         return [list(self.vector) for _ in texts]
+
+
+class FailingFaceAnalyzer:
+    def __init__(self, error: Exception):
+        self.error = error
+
+    def detect(self, _image: bytes):
+        raise self.error
 
 
 @pytest.fixture(autouse=True)
@@ -132,14 +144,23 @@ def test_image_processor_sends_original_bytes_to_image_tower():
     assert visual.rows[0].metadata == {"source": "image"}
 
 
-def test_image_tower_remains_available_when_captioning_fails():
+@pytest.mark.parametrize(
+    "failure",
+    [
+        pytest.param(ProviderError("provider secret must not persist"), id="provider-error"),
+        pytest.param(NotImplementedError("vlm is not implemented"), id="not-implemented"),
+        pytest.param(RuntimeError("caption backend unavailable"), id="unexpected-error"),
+    ],
+)
+def test_image_tower_remains_available_when_captioning_fails(failure: Exception):
     raw = _png_bytes()
     provider = FakeVisualProvider()
 
-    result = ImageProcessor(vlm=FailingVLM(), embedder=provider).process(_file(raw))
+    result = ImageProcessor(vlm=FailingVLM(failure), embedder=provider).process(_file(raw))
 
     assert result.caption is None
-    assert "caption backend unavailable" in result.metadata["vlm_error"]
+    assert result.metadata["vlm_error"] == "provider_unavailable"
+    assert str(failure) not in repr(result.metadata)
     assert provider.image_calls == [[raw]]
     assert result.embeddings["visual"].rows[0].metadata == {"source": "image"}
 
@@ -174,11 +195,19 @@ def test_wrong_dimension_visual_vector_is_rejected_before_persistence():
 @pytest.mark.parametrize(
     "failure",
     [
-        ProviderError("CLIP model unavailable"),
-        RuntimeError("unexpected image-tower failure"),
+        pytest.param(
+            ProviderError("private CLIP upstream response"),
+            id="provider-error",
+        ),
+        pytest.param(
+            RuntimeError("private unexpected image-tower response"),
+            id="unexpected-error",
+        ),
     ],
 )
-def test_visual_provider_failure_degrades_without_aborting_image_processing(failure):
+def test_visual_provider_failure_degrades_without_aborting_image_processing(
+    failure: Exception,
+):
     raw = _png_bytes()
     provider = FakeVisualProvider(error=failure)
 
@@ -189,4 +218,44 @@ def test_visual_provider_failure_degrades_without_aborting_image_processing(fail
     assert provider.image_calls == [[raw]]
     assert provider.text_calls == []
     assert "visual" not in result.embeddings
-    assert str(failure) in result.metadata["embed_error"]
+    assert result.metadata["embed_error"] == "provider_unavailable"
+    assert str(failure) not in repr(result.metadata)
+
+
+@pytest.mark.parametrize(
+    ("failure", "want_metadata"),
+    [
+        pytest.param(
+            RuntimeError("private face model path"),
+            False,
+            id="optional-provider-unavailable",
+        ),
+        pytest.param(
+            ValueError("private face provider response"),
+            True,
+            id="unexpected-provider-error",
+        ),
+    ],
+)
+def test_face_provider_failure_never_leaks_raw_error(
+    monkeypatch,
+    failure: Exception,
+    want_metadata: bool,
+):
+    monkeypatch.setattr(
+        "mem_worker.providers.face.default_analyzer",
+        lambda: FailingFaceAnalyzer(failure),
+    )
+
+    with capture_logs() as logs:
+        result = ImageProcessor(
+            vlm=FakeVLM(),
+            embedder=FakeVisualProvider(),
+        ).process(_file(_png_bytes()))
+
+    assert str(failure) not in repr(logs)
+    assert str(failure) not in repr(result.metadata)
+    if want_metadata:
+        assert result.metadata["face_error"] == "provider_unavailable"
+    else:
+        assert "face_error" not in result.metadata

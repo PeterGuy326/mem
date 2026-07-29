@@ -87,13 +87,21 @@ func (c *httpClient) doJSONWithHeaders(
 }
 
 func (c *httpClient) doMultipartUpload(_, _ /*fieldName,fileName—now derived*/, name string, mimeType, targetFolder string, file io.Reader, tags []string, out any) error {
+	return c.doMultipartUploadWithSourceMetadata(name, mimeType, targetFolder, file, tags, nil, out)
+}
+
+func (c *httpClient) doMultipartUploadWithSourceMetadata(name, mimeType, targetFolder string, file io.Reader, tags []string, sourceMetadata *apiclient.FileSourceMetadata, out any) error {
 	// Legacy 4-positional callers passed ("/v1/files","file",<name>,<mime>,...).
 	// apiclient handles the path + field name internally; we only need name/mime.
-	return fromAPIError(c.api.UploadMultipart(context.Background(), name, mimeType, targetFolder, file, tags, out))
+	return fromAPIError(c.api.UploadMultipartWithSourceMetadata(context.Background(), name, mimeType, targetFolder, file, tags, sourceMetadata, out))
 }
 
 func (c *httpClient) doStreamUpload(name, mimeType, targetFolder string, size int64, tags []string, body io.Reader, out any) error {
-	return fromAPIError(c.api.UploadStream(context.Background(), name, mimeType, targetFolder, size, tags, body, out))
+	return c.doStreamUploadWithSourceMetadata(name, mimeType, targetFolder, size, tags, body, nil, out)
+}
+
+func (c *httpClient) doStreamUploadWithSourceMetadata(name, mimeType, targetFolder string, size int64, tags []string, body io.Reader, sourceMetadata *apiclient.FileSourceMetadata, out any) error {
+	return fromAPIError(c.api.UploadStreamWithSourceMetadata(context.Background(), name, mimeType, targetFolder, size, tags, body, sourceMetadata, out))
 }
 
 func (c *httpClient) downloadStream(fileID string) (io.ReadCloser, string, error) {

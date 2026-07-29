@@ -16,13 +16,11 @@ raising. Speaker diarization is left as future work.
 
 from __future__ import annotations
 
-from typing import Optional
-
 from ..config import get_settings
 from ..logging import get_logger
 from ..providers import ASRProvider, LLMProvider, ProviderError, get_asr_provider
 from ..providers.base import EmbeddingProvider
-from .base import FileRef, ProcessResult
+from .base import PROVIDER_ERROR_MARKER, FileRef, ProcessResult
 from .text import TextProcessor
 
 log = get_logger(__name__)
@@ -34,14 +32,16 @@ class AudioProcessor:
 
     def __init__(
         self,
-        asr: Optional[ASRProvider] = None,
-        embedder: Optional[EmbeddingProvider] = None,
-        llm: Optional[LLMProvider] = None,
+        asr: ASRProvider | None = None,
+        embedder: EmbeddingProvider | None = None,
+        llm: LLMProvider | None = None,
+        *,
+        llm_spec: str | None = None,
     ):
         self._asr = asr
         # Delegate chunk/embed/summarize to TextProcessor, forwarding any
         # injected providers so tests can stub them.
-        self._text = TextProcessor(embedder=embedder, llm=llm)
+        self._text = TextProcessor(embedder=embedder, llm=llm, llm_spec=llm_spec)
 
     def _resolve_asr(self) -> ASRProvider:
         if self._asr is None:
@@ -52,11 +52,31 @@ class AudioProcessor:
         try:
             asr = self._resolve_asr()
             transcription = asr.transcribe(file.data)
-        except (ProviderError, NotImplementedError) as exc:
-            log.warning("audio.asr_failed", file_id=file.file_id, error=str(exc))
+        except (ProviderError, NotImplementedError):
+            log.warning(
+                "audio.asr_failed",
+                file_id=file.file_id,
+                error=PROVIDER_ERROR_MARKER,
+            )
             return ProcessResult(
                 processor=self.name,
-                metadata={"asr_error": str(exc), "byte_length": len(file.data)},
+                metadata={
+                    "asr_error": PROVIDER_ERROR_MARKER,
+                    "byte_length": len(file.data),
+                },
+            )
+        except Exception:  # noqa: BLE001 — ASR bugs must stay non-fatal and redacted
+            log.error(
+                "audio.asr_unexpected",
+                file_id=file.file_id,
+                error=PROVIDER_ERROR_MARKER,
+            )
+            return ProcessResult(
+                processor=self.name,
+                metadata={
+                    "asr_error": PROVIDER_ERROR_MARKER,
+                    "byte_length": len(file.data),
+                },
             )
 
         text = (transcription.text or "").strip()

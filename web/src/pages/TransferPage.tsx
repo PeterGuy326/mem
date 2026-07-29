@@ -46,6 +46,23 @@ const COUNT_KEYS = [
   'blobs',
 ] as const satisfies readonly (keyof WorkspaceObjectCounts)[];
 
+const CURRENT_WORKSPACE_BUNDLE_SCHEMA_VERSION = 2;
+const IMPORTABLE_WORKSPACE_BUNDLE_SCHEMA_VERSIONS = [1, 2] as const;
+
+function advertisedWorkspaceBundleSchema(capabilities: Capabilities): number | null {
+  return capabilities.workspace_bundle_schema_versions.includes(
+    CURRENT_WORKSPACE_BUNDLE_SCHEMA_VERSION,
+  )
+    ? CURRENT_WORKSPACE_BUNDLE_SCHEMA_VERSION
+    : null;
+}
+
+function supportsWorkspaceBundleImport(capabilities: Capabilities): boolean {
+  return IMPORTABLE_WORKSPACE_BUNDLE_SCHEMA_VERSIONS.some((version) =>
+    capabilities.workspace_bundle_schema_versions.includes(version),
+  );
+}
+
 function genericErrorText(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
@@ -217,11 +234,12 @@ function TransferErrorNotice({
 
 function ContractStrip({ capabilities }: { capabilities: Capabilities }) {
   const { t } = useT();
+  const schemaVersion = advertisedWorkspaceBundleSchema(capabilities);
   const items = [
     {
       label: t('transfer.contract.schema'),
-      value: capabilities.workspace_bundle_schema_versions.includes(1)
-        ? 'mem.workspace_bundle · v1'
+      value: schemaVersion
+        ? `mem.workspace_bundle · v${schemaVersion}`
         : t('transfer.contract.unavailable'),
     },
     {
@@ -608,10 +626,11 @@ function ImportCard({
 
 function WorkspaceTransferSurface({ capabilities }: { capabilities: Capabilities }) {
   const { t } = useT();
-  const supportsV1 = capabilities.workspace_bundle_schema_versions.includes(1);
+  const supportsCurrentExport = advertisedWorkspaceBundleSchema(capabilities) !== null;
+  const supportsImport = supportsWorkspaceBundleImport(capabilities);
   const supportsFresh = capabilities.workspace_restore_modes.includes('fresh');
-  const exportSupported = capabilities.features.workspace_export && supportsV1;
-  const importSupported = capabilities.features.workspace_import && supportsV1 && supportsFresh;
+  const exportSupported = capabilities.features.workspace_export && supportsCurrentExport;
+  const importSupported = capabilities.features.workspace_import && supportsImport && supportsFresh;
 
   return (
     <main className="mx-auto w-full max-w-6xl space-y-5 px-4 py-7 sm:px-6 sm:py-10">

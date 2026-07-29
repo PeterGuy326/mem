@@ -109,6 +109,7 @@ type EntitlementService interface {
 type Server struct {
 	Auth                     *auth.Service
 	File                     *file.Service
+	FileAnnotations          FileAnnotationService
 	Folder                   *folder.Service
 	Indexer                  *indexer.Service // legacy inline path (only used if Queue is nil)
 	Queue                    *queue.Client    // preferred: async indexing via Asynq
@@ -192,6 +193,13 @@ func (s *Server) Router() http.Handler {
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/files/{id}", s.handleGetFile)
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/files/{id}/content", s.handleGetContent)
 		r.With(s.requireScope(auth.ScopeWrite)).Patch("/v1/files/{id}", s.handlePatchFile)
+		r.With(
+			s.requireScope(auth.ScopeRead),
+			s.requireScope(auth.ScopeWrite),
+		).Put(
+			"/v1/files/{fileID}/annotations/{annotationID}",
+			s.handleDecideFileAnnotation,
+		)
 		r.With(s.requireScope(auth.ScopeDelete), s.requireWorkspaceDelete).Delete("/v1/files/{id}", s.handleDeleteFile)
 		r.With(s.requireScope(auth.ScopeRead)).Get("/v1/files/{id}/related", s.handleFileRelated)
 		r.With(s.requireScope(auth.ScopeWrite), s.requireUnrestrictedPaths).Post("/v1/relations/rebuild", s.handleRebuildRelations)
@@ -835,12 +843,13 @@ func (s *Server) handlePutFile(w http.ResponseWriter, r *http.Request) {
 	u := r.Context().Value(ctxUser).(*auth.User)
 
 	var (
-		name       string
-		mime       string
-		targetPath string
-		size       int64 = -1
-		tags       []string
-		body       = r.Body
+		name              string
+		mime              string
+		targetPath        string
+		size              int64 = -1
+		tags              []string
+		sourceMetadataRaw string
+		body              = r.Body
 	)
 	stream := r.URL.Query().Get("stream") == "1"
 	if stream {
@@ -857,6 +866,9 @@ func (s *Server) handlePutFile(w http.ResponseWriter, r *http.Request) {
 		}
 		tags = splitTags(r.URL.Query().Get("tags"))
 		targetPath = r.URL.Query().Get("path")
+		// Keep precise capture location out of URLs, which are routinely
+		// retained by reverse proxies and access logs.
+		sourceMetadataRaw = r.Header.Get(sourceMetadataHeader)
 	} else {
 		// multipart/form-data — single "file" field
 		if err := r.ParseMultipartForm(32 << 20); err != nil {
@@ -880,6 +892,7 @@ func (s *Server) handlePutFile(w http.ResponseWriter, r *http.Request) {
 			tags = splitTags(v)
 		}
 		targetPath = r.FormValue("path")
+		sourceMetadataRaw = r.FormValue("source_metadata")
 	}
 	normalizedTarget, err := pathx.Normalize(targetPath)
 	if err != nil {
@@ -889,8 +902,23 @@ func (s *Server) handlePutFile(w http.ResponseWriter, r *http.Request) {
 	if !requireTokenPath(w, r, normalizedTarget) {
 		return
 	}
+	sourceMetadata, err := ParseSourceMetadataJSON(sourceMetadataRaw)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_source_metadata", err.Error())
+		return
+	}
 
-	res, err := s.File.Put(r.Context(), u.ID, name, mime, targetPath, size, tags, body)
+	res, err := s.File.Put(
+		r.Context(),
+		u.ID,
+		name,
+		mime,
+		targetPath,
+		size,
+		tags,
+		sourceMetadata,
+		body,
+	)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "put_failed", err.Error())
 		return

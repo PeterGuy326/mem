@@ -10,18 +10,27 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/PeterGuy326/mem/server/internal/apiclient"
 	"github.com/spf13/cobra"
 )
 
 func newPutCmd() *cobra.Command {
 	var (
-		recursive bool
-		tag       []string
-		name      string
-		mimeFlag  string
-		format    string
-		toFolder  string
+		recursive  bool
+		tag        []string
+		name       string
+		mimeFlag   string
+		format     string
+		toFolder   string
+		capturedAt string
+		latitude   float64
+		longitude  float64
+		accuracyM  float64
+		place      string
+		sourceKind string
+		sourceName string
 	)
 	cmd := &cobra.Command{
 		Use:   "put <path|-|--url=URL>",
@@ -36,6 +45,19 @@ func newPutCmd() *cobra.Command {
 				return newCliError(3, "not logged in", "run `mem auth login` first")
 			}
 			c := newHTTPClient(cfg)
+			sourceMetadata, err := cliSourceMetadata(
+				cmd,
+				capturedAt,
+				latitude,
+				longitude,
+				accuracyM,
+				place,
+				sourceKind,
+				sourceName,
+			)
+			if err != nil {
+				return err
+			}
 
 			urlFlag, _ := cmd.Flags().GetString("url")
 			if urlFlag != "" {
@@ -50,7 +72,7 @@ func newPutCmd() *cobra.Command {
 				if name == "" {
 					return errors.New("--name required when reading from stdin")
 				}
-				return uploadStream(c, name, mimeFlag, toFolder, -1, tag, os.Stdin, format)
+				return uploadStream(c, name, mimeFlag, toFolder, -1, tag, os.Stdin, sourceMetadata, format)
 			}
 
 			st, err := os.Stat(target)
@@ -61,9 +83,9 @@ func newPutCmd() *cobra.Command {
 				if !recursive {
 					return errors.New("path is a directory; pass --recursive to upload its contents")
 				}
-				return uploadDir(c, target, toFolder, tag, format)
+				return uploadDir(c, target, toFolder, tag, sourceMetadata, format)
 			}
-			return uploadFile(c, target, name, mimeFlag, toFolder, tag, format)
+			return uploadFile(c, target, name, mimeFlag, toFolder, tag, sourceMetadata, format)
 		},
 	}
 	cmd.Flags().BoolVarP(&recursive, "recursive", "r", false, "recurse into directories")
@@ -73,10 +95,17 @@ func newPutCmd() *cobra.Command {
 	cmd.Flags().StringVar(&toFolder, "to", "/", "destination folder (mkdir -p; e.g. /Photos/2012)")
 	cmd.Flags().String("url", "", "remote URL to fetch (W2)")
 	cmd.Flags().StringVar(&format, "format", "text", "text|json")
+	cmd.Flags().StringVar(&capturedAt, "captured-at", "", "capture time in RFC3339 form with timezone")
+	cmd.Flags().Float64Var(&latitude, "lat", 0, "capture latitude (-90..90; requires --lon)")
+	cmd.Flags().Float64Var(&longitude, "lon", 0, "capture longitude (-180..180; requires --lat)")
+	cmd.Flags().Float64Var(&accuracyM, "location-accuracy", 0, "location accuracy in metres (requires --lat/--lon)")
+	cmd.Flags().StringVar(&place, "place", "", "human-readable capture location (requires --lat/--lon)")
+	cmd.Flags().StringVar(&sourceKind, "source-kind", "cli", "api|web|cli|mcp|mobile|ai_device|import|other")
+	cmd.Flags().StringVar(&sourceName, "source-name", "", "non-sensitive source/device description")
 	return cmd
 }
 
-func uploadFile(c *httpClient, path, nameOverride, mimeOverride, targetFolder string, tags []string, format string) error {
+func uploadFile(c *httpClient, path, nameOverride, mimeOverride, targetFolder string, tags []string, sourceMetadata *apiclient.FileSourceMetadata, format string) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -91,15 +120,15 @@ func uploadFile(c *httpClient, path, nameOverride, mimeOverride, targetFolder st
 		mimeType = mime.TypeByExtension(filepath.Ext(name))
 	}
 	var resp map[string]any
-	if err := c.doMultipartUpload("/v1/files", "file", name, mimeType, targetFolder, f, tags, &resp); err != nil {
+	if err := c.doMultipartUploadWithSourceMetadata(name, mimeType, targetFolder, f, tags, sourceMetadata, &resp); err != nil {
 		return err
 	}
 	return printPutResp(resp, format)
 }
 
-func uploadStream(c *httpClient, name, mimeType, targetFolder string, size int64, tags []string, r io.Reader, format string) error {
+func uploadStream(c *httpClient, name, mimeType, targetFolder string, size int64, tags []string, r io.Reader, sourceMetadata *apiclient.FileSourceMetadata, format string) error {
 	var resp map[string]any
-	if err := c.doStreamUpload(name, mimeType, targetFolder, size, tags, r, &resp); err != nil {
+	if err := c.doStreamUploadWithSourceMetadata(name, mimeType, targetFolder, size, tags, r, sourceMetadata, &resp); err != nil {
 		return err
 	}
 	return printPutResp(resp, format)
@@ -110,7 +139,7 @@ func uploadStream(c *httpClient, name, mimeType, targetFolder string, size int64
 //
 // Local: /home/me/Photos/2012/IMG.jpg, --to /Albums  →
 // Remote: /Albums/2012/IMG.jpg (when called with dir=/home/me/Photos).
-func uploadDir(c *httpClient, dir, targetFolder string, tags []string, format string) error {
+func uploadDir(c *httpClient, dir, targetFolder string, tags []string, sourceMetadata *apiclient.FileSourceMetadata, format string) error {
 	count := 0
 	root, err := filepath.Abs(dir)
 	if err != nil {
@@ -130,7 +159,7 @@ func uploadDir(c *httpClient, dir, targetFolder string, tags []string, format st
 			subFolder = joinFolder(targetFolder, filepath.ToSlash(d))
 		}
 		fmt.Fprintf(os.Stderr, "  put %s -> %s\n", p, subFolder)
-		if e := uploadFile(c, p, "", "", subFolder, tags, "text"); e != nil {
+		if e := uploadFile(c, p, "", "", subFolder, tags, sourceMetadata, "text"); e != nil {
 			fmt.Fprintf(os.Stderr, "  ! %s: %v\n", p, e)
 		} else {
 			count++
@@ -139,6 +168,66 @@ func uploadDir(c *httpClient, dir, targetFolder string, tags []string, format st
 	})
 	fmt.Printf("uploaded %d files from %s\n", count, dir)
 	return err
+}
+
+func cliSourceMetadata(
+	cmd *cobra.Command,
+	capturedAt string,
+	latitude, longitude, accuracyM float64,
+	place, sourceKind, sourceName string,
+) (*apiclient.FileSourceMetadata, error) {
+	allowedSourceKinds := map[string]bool{
+		"api": true, "web": true, "cli": true, "mcp": true,
+		"mobile": true, "ai_device": true, "import": true, "other": true,
+	}
+	sourceKind = strings.TrimSpace(sourceKind)
+	if !allowedSourceKinds[sourceKind] {
+		return nil, fmt.Errorf("unsupported --source-kind %q", sourceKind)
+	}
+
+	metadata := &apiclient.FileSourceMetadata{
+		SourceKind: sourceKind,
+		SourceName: strings.TrimSpace(sourceName),
+	}
+	if capturedAt = strings.TrimSpace(capturedAt); capturedAt != "" {
+		parsed, err := time.Parse(time.RFC3339, capturedAt)
+		if err != nil {
+			return nil, fmt.Errorf("--captured-at must be RFC3339 with a timezone: %w", err)
+		}
+		metadata.CapturedAt = parsed.Format(time.RFC3339Nano)
+	}
+
+	hasLat := cmd.Flags().Changed("lat")
+	hasLon := cmd.Flags().Changed("lon")
+	hasAccuracy := cmd.Flags().Changed("location-accuracy")
+	hasPlace := strings.TrimSpace(place) != ""
+	if hasLat != hasLon {
+		return nil, errors.New("--lat and --lon must be provided together")
+	}
+	if (hasAccuracy || hasPlace) && !hasLat {
+		return nil, errors.New("--location-accuracy and --place require --lat and --lon")
+	}
+	if hasLat {
+		if latitude < -90 || latitude > 90 {
+			return nil, errors.New("--lat must be between -90 and 90")
+		}
+		if longitude < -180 || longitude > 180 {
+			return nil, errors.New("--lon must be between -180 and 180")
+		}
+		location := &apiclient.FileSourceLocation{
+			Lat:   latitude,
+			Lon:   longitude,
+			Label: strings.TrimSpace(place),
+		}
+		if hasAccuracy {
+			if accuracyM < 0 {
+				return nil, errors.New("--location-accuracy must be non-negative")
+			}
+			location.AccuracyM = &accuracyM
+		}
+		metadata.Location = location
+	}
+	return metadata, nil
 }
 
 // joinFolder concatenates a base folder absolute path with a relative
@@ -263,7 +352,11 @@ func newInfoCmd() *cobra.Command {
 			if format == "json" {
 				return jsonOut(f)
 			}
-			for _, k := range []string{"id", "name", "size", "mime", "sha256", "index_status", "summary", "caption", "tags", "timeline_at", "created_at"} {
+			for _, k := range []string{
+				"id", "name", "size", "mime", "sha256", "index_status",
+				"summary", "caption", "tags", "user_tags", "timeline_at", "geo",
+				"source_metadata", "processor_metadata", "annotations", "created_at",
+			} {
 				if v, ok := f[k]; ok && v != nil {
 					fmt.Printf("%-13s %v\n", k+":", v)
 				}

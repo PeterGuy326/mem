@@ -73,6 +73,7 @@ func TestFilePathLockingIntegration(t *testing.T) {
 				"/A",
 				4,
 				nil,
+				SourceMetadata{},
 				bytes.NewBufferString("race"),
 			)
 			putDone <- putOutcome{result: result, err: err}

@@ -15,6 +15,11 @@ import {
   Tag as TagIcon,
   Sparkles,
   Users,
+  Check,
+  X,
+  AlertTriangle,
+  Bot,
+  Cpu,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Badge, StatusBadge } from '@/components/ui/Badge';
@@ -23,15 +28,21 @@ import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { useDeleteFile, useFile, useRelated } from '@/hooks/useFiles';
+import { useDecideFileAnnotation, useDeleteFile, useFile, useRelated } from '@/hooks/useFiles';
 import { useAuthedBlobUrl } from '@/hooks/useAuthedBlob';
 import { AuthedImage } from '@/components/ui/AuthedImage';
 import { Markdown } from '@/components/ui/Markdown';
 import { useT, tt } from '@/i18n';
-import { downloadFile } from '@/lib/api';
+import { ApiException, downloadFile } from '@/lib/api';
 import { formatBytes, formatDateTime } from '@/lib/format';
 import { toast } from 'sonner';
-import type { FileKind, MemFile } from '@/lib/types';
+import type {
+  FileAnnotation,
+  FileAnnotationDecision,
+  FileAnnotationStatus,
+  FileKind,
+  MemFile,
+} from '@/lib/types';
 
 export function FileDetailPage() {
   const { t } = useT();
@@ -45,6 +56,7 @@ export function FileDetailPage() {
   if (isLoading) return <DetailSkeleton />;
 
   if (error || !file) {
+    const notFound = !error || (error instanceof ApiException && error.status === 404);
     return (
       <div className="mx-auto max-w-5xl px-8 py-12">
         <Button variant="ghost" size="sm" onClick={() => navigate(-1)} className="mb-6">
@@ -53,8 +65,8 @@ export function FileDetailPage() {
         </Button>
         <EmptyState
           icon={<FileQuestion />}
-          title={t('detail.notFoundTitle')}
-          description={t('detail.notFoundDesc')}
+          title={t(notFound ? 'detail.notFoundTitle' : 'detail.loadFailedTitle')}
+          description={t(notFound ? 'detail.notFoundDesc' : 'detail.loadFailedDesc')}
           action={
             <Link to="/">
               <Button variant="secondary" size="sm">{t('action.home')}</Button>
@@ -129,6 +141,29 @@ export function FileDetailPage() {
               <StatusBadge status={file.index_status} />
             </CardHeader>
             <CardBody className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
+              {(file.index_status === 'partial' || file.index_status === 'failed') && (
+                <div
+                  role="status"
+                  className="col-span-2 rounded-md border border-warn/30 bg-warn/10 p-3"
+                >
+                  <div className="flex items-center gap-2 text-xs font-medium text-warn">
+                    <AlertTriangle className="h-3.5 w-3.5" />
+                    {file.index_status === 'failed'
+                      ? t('detail.failedTitle')
+                      : t('detail.partialTitle')}
+                  </div>
+                  <p className="mt-1 text-2xs leading-relaxed text-fg-muted">
+                    {file.index_status === 'failed'
+                      ? t('detail.failedHint')
+                      : t('detail.partialHint')}
+                  </p>
+                  {processorDegradedSteps(file).length > 0 && (
+                    <div className="mt-2 font-mono text-2xs text-fg-subtle">
+                      {processorDegradedSteps(file).join(' · ')}
+                    </div>
+                  )}
+                </div>
+              )}
               <MetaRow icon={<Hash className="h-3 w-3" />} label={t('detail.size')} value={formatBytes(file.size)} />
               <MetaRow icon={<TagIcon className="h-3 w-3" />} label="MIME" value={file.mime} mono />
               <MetaRow
@@ -144,8 +179,33 @@ export function FileDetailPage() {
               {file.geo && (
                 <MetaRow
                   icon={<MapPin className="h-3 w-3" />}
-                  label={t('detail.geo')}
-                  value={`${file.geo.lat.toFixed(2)}, ${file.geo.lon.toFixed(2)}`}
+                  label={t('detail.effectiveGeo')}
+                  value={formatGeo(file.geo.lat, file.geo.lon)}
+                  mono
+                  full
+                />
+              )}
+              {file.source_metadata.captured_at && (
+                <MetaRow
+                  icon={<Clock className="h-3 w-3" />}
+                  label={t('detail.captureTime')}
+                  value={formatDateTime(file.source_metadata.captured_at)}
+                />
+              )}
+              {(file.source_metadata.source_kind || file.source_metadata.source_name) && (
+                <MetaRow
+                  icon={<Cpu className="h-3 w-3" />}
+                  label={t('detail.source')}
+                  value={[file.source_metadata.source_kind, file.source_metadata.source_name]
+                    .filter(Boolean)
+                    .join(' · ')}
+                />
+              )}
+              {file.source_metadata.location && (
+                <MetaRow
+                  icon={<MapPin className="h-3 w-3" />}
+                  label={t('detail.sourceLocation')}
+                  value={formatSourceLocation(file.source_metadata.location)}
                   mono
                   full
                 />
@@ -161,56 +221,7 @@ export function FileDetailPage() {
             </CardBody>
           </Card>
 
-          <Card>
-            <CardHeader className="flex items-center gap-2">
-              <Sparkles className="h-3.5 w-3.5 text-accent" />
-              <CardTitle>{t('detail.aiInsights')}</CardTitle>
-            </CardHeader>
-            <CardBody className="space-y-4 text-sm">
-              {file.caption && (
-                <div>
-                  <div className="text-2xs uppercase tracking-wider text-fg-subtle mb-1">{t('detail.captionVlm')}</div>
-                  <div className="text-fg leading-relaxed">{file.caption}</div>
-                </div>
-              )}
-              {file.summary && (
-                <div>
-                  <div className="text-2xs uppercase tracking-wider text-fg-subtle mb-1">{t('detail.summary')}</div>
-                  <div className="text-fg-muted leading-relaxed">{file.summary}</div>
-                </div>
-              )}
-              {file.tags.length > 0 && (
-                <div>
-                  <div className="text-2xs uppercase tracking-wider text-fg-subtle mb-1.5">{t('detail.autoTags')}</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {file.tags.map((t) => (
-                      <Badge key={t} tone="neutral">{t}</Badge>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {file.entities && file.entities.length > 0 && (
-                <div>
-                  <div className="text-2xs uppercase tracking-wider text-fg-subtle mb-1.5 flex items-center gap-1.5">
-                    <Users className="h-3 w-3" />
-                    {t('detail.entities')}
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {file.entities.map((e) => (
-                      <Badge key={e.id} tone={e.type === 'person' ? 'accent' : 'neutral'}>
-                        {e.name}
-                      </Badge>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {!file.caption && !file.summary && file.tags.length === 0 && (
-                <div className="text-xs text-fg-subtle">
-                  {t('detail.aiProcessing')}
-                </div>
-              )}
-            </CardBody>
-          </Card>
+          <AIInsightsCard file={file} />
 
           <Card>
             <CardHeader>
@@ -238,6 +249,379 @@ export function FileDetailPage() {
       />
     </div>
   );
+}
+
+function AIInsightsCard({ file }: { file: MemFile }) {
+  const { t } = useT();
+  const pending = file.annotations
+    .filter((annotation) => annotation.status === 'pending')
+    .sort(comparePendingAnnotations);
+  const reviewed = file.annotations.filter((annotation) => annotation.status !== 'pending');
+  const userTags = new Set(file.user_tags);
+  const hasAcceptedSummary =
+    file.summary !== null &&
+    file.annotations.some(
+      (annotation) =>
+        annotation.kind === 'description' &&
+        annotation.status === 'accepted' &&
+        annotation.value_text === file.summary,
+    );
+
+  return (
+    <Card>
+      <CardHeader className="flex items-center gap-2">
+        <Sparkles className="h-3.5 w-3.5 text-accent" />
+        <CardTitle>{t('detail.aiInsights')}</CardTitle>
+      </CardHeader>
+      <CardBody className="space-y-5 text-sm">
+        <section
+          aria-labelledby="effective-values-heading"
+          className="rounded-md border border-success/25 bg-success/5 p-3"
+        >
+          <div
+            id="effective-values-heading"
+            className="mb-3 flex items-center gap-2 text-2xs font-semibold uppercase tracking-wider text-success"
+          >
+            <Check className="h-3.5 w-3.5" />
+            {t('detail.effectiveValues')}
+          </div>
+          <div className="space-y-3">
+            {file.summary && hasAcceptedSummary && (
+              <div>
+                <div className="mb-1 text-2xs uppercase tracking-wider text-fg-subtle">
+                  {t('detail.summary')}
+                </div>
+                <div className="break-words leading-relaxed text-fg">{file.summary}</div>
+              </div>
+            )}
+            {file.tags.length > 0 && (
+              <div>
+                <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-2xs uppercase tracking-wider text-fg-subtle">
+                    {t('detail.effectiveTags')}
+                  </div>
+                  <div className="flex items-center gap-2 text-2xs text-fg-subtle">
+                    <span className="inline-flex items-center gap-1">
+                      <span className="h-1.5 w-1.5 rounded-full bg-fg-muted" />
+                      {t('detail.userTag')}
+                    </span>
+                    <span className="inline-flex items-center gap-1">
+                      <span className="h-1.5 w-1.5 rounded-full bg-success" />
+                      {t('detail.acceptedTag')}
+                    </span>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {file.tags.map((tag) => {
+                    const isUserTag = userTags.has(tag);
+                    return (
+                      <Badge
+                        key={tag}
+                        tone={isUserTag ? 'neutral' : 'success'}
+                        aria-label={`${tag} — ${
+                          isUserTag ? t('detail.userTag') : t('detail.acceptedTag')
+                        }`}
+                      >
+                        {tag}
+                      </Badge>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {(!file.summary || !hasAcceptedSummary) && file.tags.length === 0 && (
+              <div className="text-xs text-fg-subtle">{t('search.none')}</div>
+            )}
+          </div>
+        </section>
+
+        {file.summary && !hasAcceptedSummary && (
+          <section
+            aria-label={t('detail.legacySummary')}
+            className="rounded-md border border-dashed border-warn/30 bg-warn/5 p-3"
+          >
+            <div className="mb-1.5 flex items-center gap-2 text-2xs font-semibold uppercase tracking-wider text-warn">
+              <Bot className="h-3.5 w-3.5" />
+              {t('detail.legacySummary')}
+            </div>
+            <div className="break-words leading-relaxed text-fg">{file.summary}</div>
+            <p className="mt-2 text-2xs leading-relaxed text-fg-subtle">
+              {t('detail.legacySummaryHint')}
+            </p>
+          </section>
+        )}
+
+        {file.caption && file.caption !== file.summary && (
+          <section
+            aria-label={t('detail.captionVlm')}
+            className="rounded-md border border-dashed border-warn/30 bg-warn/5 p-3"
+          >
+            <div className="mb-1.5 flex items-center gap-2 text-2xs font-semibold uppercase tracking-wider text-warn">
+              <Bot className="h-3.5 w-3.5" />
+              {t('detail.captionVlm')}
+            </div>
+            <div className="break-words leading-relaxed text-fg">{file.caption}</div>
+            <p className="mt-2 text-2xs leading-relaxed text-fg-subtle">
+              {t('detail.captionHint')}
+            </p>
+          </section>
+        )}
+
+        {file.entities && file.entities.length > 0 && (
+          <section>
+            <div className="mb-1.5 flex items-center gap-1.5 text-2xs uppercase tracking-wider text-fg-subtle">
+              <Users className="h-3 w-3" />
+              {t('detail.entities')}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {file.entities.map((entity) => (
+                <Badge key={entity.id} tone={entity.type === 'person' ? 'accent' : 'neutral'}>
+                  {entity.name}
+                </Badge>
+              ))}
+            </div>
+          </section>
+        )}
+
+        <section
+          aria-labelledby="pending-suggestions-heading"
+          className="border-t border-border pt-4"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div
+              id="pending-suggestions-heading"
+              className="flex items-center gap-2 text-2xs font-semibold uppercase tracking-wider text-accent"
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              {t('detail.reviewSuggestions')}
+            </div>
+            {pending.length > 0 && <Badge tone="accent">{pending.length}</Badge>}
+          </div>
+          <p className="mt-1 text-2xs leading-relaxed text-fg-subtle">{t('detail.reviewHint')}</p>
+
+          {pending.length > 0 ? (
+            <div className="mt-3 space-y-3">
+              {pending.map((annotation) => (
+                <AnnotationSuggestion
+                  key={annotation.id}
+                  fileID={file.id}
+                  annotation={annotation}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="mt-3 rounded-md border border-border bg-bg-inset/40 px-3 py-2 text-xs text-fg-subtle">
+              {file.index_status === 'pending' || file.index_status === 'processing'
+                ? t('detail.aiProcessing')
+                : t('detail.noPendingSuggestions')}
+            </div>
+          )}
+        </section>
+
+        {file.annotations_truncated && (
+          <div
+            role="note"
+            data-testid="annotations-truncated-notice"
+            className="flex items-start gap-2 rounded-md border border-border bg-bg-inset/40 px-3 py-2 text-2xs leading-relaxed text-fg-subtle"
+          >
+            <AlertTriangle className="mt-0.5 h-3 w-3 flex-none text-warn" />
+            <span>{t('detail.reviewHistoryTruncated')}</span>
+          </div>
+        )}
+
+        {reviewed.length > 0 && (
+          <details className="border-t border-border pt-4">
+            <summary className="cursor-pointer select-none text-2xs font-medium uppercase tracking-wider text-fg-subtle hover:text-fg-muted">
+              {t('detail.reviewedSuggestions')} · {reviewed.length}
+            </summary>
+            <div className="mt-3 space-y-2">
+              {reviewed.map((annotation) => (
+                <ReviewedAnnotation key={annotation.id} annotation={annotation} />
+              ))}
+            </div>
+          </details>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
+function comparePendingAnnotations(left: FileAnnotation, right: FileAnnotation): number {
+  if (left.confidence !== right.confidence) return right.confidence - left.confidence;
+
+  const createdOrder = left.created_at.localeCompare(right.created_at);
+  if (createdOrder !== 0) return createdOrder;
+
+  const updatedOrder = right.updated_at.localeCompare(left.updated_at);
+  if (updatedOrder !== 0) return updatedOrder;
+
+  return left.id.localeCompare(right.id);
+}
+
+function AnnotationSuggestion({
+  fileID,
+  annotation,
+}: {
+  fileID: string;
+  annotation: FileAnnotation;
+}) {
+  const { t } = useT();
+  const decision = useDecideFileAnnotation(fileID);
+  const [inlineError, setInlineError] = React.useState<string | null>(null);
+  const confidence = formatConfidence(annotation.confidence);
+  const provenance = annotationProvenance(annotation);
+
+  async function review(next: FileAnnotationDecision) {
+    setInlineError(null);
+    decision.reset();
+    try {
+      await decision.mutateAsync({
+        annotationID: annotation.id,
+        decision: next,
+        expectedVersion: annotation.state_version,
+      });
+      toast.success(
+        next === 'accepted' ? tt('toast.annotationAccepted') : tt('toast.annotationRejected'),
+      );
+    } catch (error) {
+      if (error instanceof ApiException && error.status === 409) {
+        setInlineError(tt('detail.reviewConflict'));
+        toast.error(tt('toast.annotationConflict'), {
+          description: tt('detail.reviewConflict'),
+        });
+        return;
+      }
+      const message =
+        error instanceof ApiException
+          ? (error.hint ?? error.message)
+          : error instanceof Error
+            ? error.message
+            : tt('detail.reviewError');
+      setInlineError(message);
+      toast.error(tt('toast.annotationFailed'), { description: message });
+    }
+  }
+
+  const accepting = decision.isPending && decision.variables?.decision === 'accepted';
+  const rejecting = decision.isPending && decision.variables?.decision === 'rejected';
+
+  return (
+    <article
+      data-testid={`annotation-${annotation.id}`}
+      className="rounded-md border border-accent/25 bg-accent/5 p-3"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Badge tone="accent">
+          {annotation.kind === 'description'
+            ? t('detail.pendingDescription')
+            : t('detail.pendingTag')}
+        </Badge>
+        <span className="font-mono text-2xs text-accent">
+          {t('detail.confidence', { value: confidence })}
+        </span>
+      </div>
+      <div className="mt-2 break-words text-sm leading-relaxed text-fg">
+        {annotation.value_text}
+      </div>
+      <div className="mt-2 flex items-start gap-1.5 text-2xs leading-relaxed text-fg-subtle">
+        <Cpu className="mt-0.5 h-3 w-3 flex-none" />
+        <span>
+          {t('detail.provenance')}: {provenance}
+        </span>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button
+          size="sm"
+          variant="primary"
+          loading={accepting}
+          disabled={decision.isPending}
+          aria-label={t('detail.acceptSuggestion', { value: annotation.value_text })}
+          onClick={() => void review('accepted')}
+        >
+          <Check className="h-3.5 w-3.5" />
+          {t('common.accept')}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          loading={rejecting}
+          disabled={decision.isPending}
+          aria-label={t('detail.rejectSuggestion', { value: annotation.value_text })}
+          onClick={() => void review('rejected')}
+        >
+          <X className="h-3.5 w-3.5" />
+          {t('common.reject')}
+        </Button>
+      </div>
+      {inlineError && (
+        <div
+          role="alert"
+          className="mt-3 rounded border border-danger/30 bg-danger/10 px-2.5 py-2 text-2xs leading-relaxed text-danger"
+        >
+          {inlineError}
+        </div>
+      )}
+    </article>
+  );
+}
+
+function ReviewedAnnotation({ annotation }: { annotation: FileAnnotation }) {
+  const { t } = useT();
+  return (
+    <div className="rounded-md border border-border bg-bg-inset/35 px-3 py-2">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 break-words text-xs text-fg-muted">{annotation.value_text}</div>
+        <Badge tone={annotationStatusTone(annotation.status)}>
+          {t(`detail.annotation.${annotation.status}`)}
+        </Badge>
+      </div>
+      <div className="mt-1 truncate font-mono text-2xs text-fg-subtle">
+        {formatConfidence(annotation.confidence)} · {annotationProvenance(annotation)}
+      </div>
+    </div>
+  );
+}
+
+function annotationStatusTone(status: FileAnnotationStatus): BadgeProps['tone'] {
+  if (status === 'accepted') return 'success';
+  if (status === 'rejected') return 'danger';
+  if (status === 'pending') return 'accent';
+  return 'muted';
+}
+
+function annotationProvenance(annotation: FileAnnotation): string {
+  return [
+    annotation.provider && `provider=${annotation.provider}`,
+    annotation.processor && `processor=${annotation.processor}`,
+    annotation.analysis_version && `version=${annotation.analysis_version}`,
+    annotation.source && `source=${annotation.source}`,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+function formatConfidence(value: number): string {
+  const bounded = Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
+  return `${Math.round(bounded * 100)}%`;
+}
+
+function processorDegradedSteps(file: MemFile): string[] {
+  const steps = file.processor_metadata.degraded_steps;
+  if (!Array.isArray(steps)) return [];
+  return steps.filter((step): step is string => typeof step === 'string');
+}
+
+function formatGeo(lat: number, lon: number): string {
+  return `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+}
+
+function formatSourceLocation(
+  location: NonNullable<MemFile['source_metadata']['location']>,
+): string {
+  const parts = [formatGeo(location.lat, location.lon)];
+  if (location.label) parts.push(location.label);
+  if (location.accuracy_m !== undefined) parts.push(`±${Math.round(location.accuracy_m)} m`);
+  return parts.join(' · ');
 }
 
 function PreviewArea({ file }: { file: MemFile }) {

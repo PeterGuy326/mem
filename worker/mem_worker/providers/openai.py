@@ -31,11 +31,11 @@ class _BaseOpenAI:
     def __init__(self, api_key: Optional[str], base_url: Optional[str]):
         settings = get_settings()
         self._api_key = api_key or settings.openai_api_key
-        self._base_url = (base_url or settings.openai_base_url or "https://api.openai.com").rstrip("/")
+        self._base_url = (base_url or settings.openai_base_url or "https://api.openai.com").rstrip(
+            "/"
+        )
         if not self._api_key:
-            raise ProviderError(
-                "OPENAI_API_KEY not set; export it before using openai:* providers"
-            )
+            raise ProviderError("OPENAI_API_KEY not set; export it before using openai:* providers")
 
     def _post(self, path: str, payload: dict, *, timeout: float = 120.0) -> dict:
         url = f"{self._base_url}{path}"
@@ -56,9 +56,7 @@ class _BaseOpenAI:
             body = resp.text
             if len(body) > 500:
                 body = body[:500] + "..."
-            raise ProviderError(
-                f"openai {path} HTTP {resp.status_code}: {body}"
-            )
+            raise ProviderError(f"openai {path} HTTP {resp.status_code}: {body}")
         return resp.json()
 
 
@@ -71,8 +69,12 @@ class OpenAIEmbeddingProvider(_BaseOpenAI):
         "text-embedding-ada-002": 1536,
     }
 
-    def __init__(self, model: str = "text-embedding-3-small",
-                 api_key: Optional[str] = None, base_url: Optional[str] = None):
+    def __init__(
+        self,
+        model: str = "text-embedding-3-small",
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ):
         super().__init__(api_key, base_url)
         self.model = model
         self.name = f"openai:{model}"
@@ -82,10 +84,13 @@ class OpenAIEmbeddingProvider(_BaseOpenAI):
     def embed_text(self, texts: list[str]) -> list[Vector]:
         if not texts:
             return []
-        data = self._post("/v1/embeddings", {
-            "model": self.model,
-            "input": texts,
-        })
+        data = self._post(
+            "/v1/embeddings",
+            {
+                "model": self.model,
+                "input": texts,
+            },
+        )
         rows = data.get("data") or []
         return [row["embedding"] for row in rows]
 
@@ -102,8 +107,12 @@ class OpenAILLMProvider(_BaseOpenAI):
     path and deliberately returns only the model's public content field.
     """
 
-    def __init__(self, model: str = "gpt-4o-mini",
-                 api_key: Optional[str] = None, base_url: Optional[str] = None):
+    def __init__(
+        self,
+        model: str = "gpt-4o-mini",
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ):
         super().__init__(api_key, base_url)
         self.model = model
         self.name = f"openai:{model}"
@@ -134,14 +143,21 @@ class OpenAILLMProvider(_BaseOpenAI):
 class OpenAIVLMProvider(_BaseOpenAI):
     """Vision-capable chat models (e.g. gpt-4o-mini)."""
 
-    def __init__(self, model: str = "gpt-4o-mini",
-                 api_key: Optional[str] = None, base_url: Optional[str] = None):
+    DEFAULT_CAPTION_PROMPT = "Describe this image in one short paragraph."
+
+    def __init__(
+        self,
+        model: str = "gpt-4o-mini",
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ):
         super().__init__(api_key, base_url)
         self.model = model
         self.name = f"openai:{model}"
 
     def caption(self, image: bytes, **kwargs: Any) -> str:
-        return self._vision(image, "Describe this image in one short paragraph.")
+        prompt = kwargs.get("prompt") or self.DEFAULT_CAPTION_PROMPT
+        return self._vision(image, prompt)
 
     def vqa(self, image: bytes, question: str, **kwargs: Any) -> str:
         return self._vision(image, question)
@@ -150,14 +166,18 @@ class OpenAIVLMProvider(_BaseOpenAI):
         b64 = base64.b64encode(image).decode("ascii")
         payload = {
             "model": self.model,
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url",
-                     "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-                ],
-            }],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                        },
+                    ],
+                }
+            ],
         }
         data = self._post("/v1/chat/completions", payload)
         choices = data.get("choices") or []

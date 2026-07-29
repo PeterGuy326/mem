@@ -45,6 +45,7 @@ const STATUS_TONE: Record<IndexStatus, Tone> = {
   pending: 'muted',
   processing: 'accent',
   done: 'success',
+  partial: 'warn',
   failed: 'danger',
 };
 

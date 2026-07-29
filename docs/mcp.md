@@ -54,11 +54,72 @@ No MCP-only storage or index is created.
 | `mem_put` | Upload content (text or base64 binary) and trigger AI indexing |
 | `mem_get` | Read file content; binary returned base64-encoded, capped at 4 MiB |
 | `mem_info` | File metadata + AI fields (caption / summary / tags / timeline_at / index_status) |
+| `mem_file_annotation_decide` | Accept or reject one pending AI description/tag suggestion |
 | `mem_list` | List files with filters (tag / mime-prefix / since / until / path-prefix) |
 | `mem_ls` | List immediate subfolders + files under a folder path |
 | `mem_mkdir` | Create folder (mkdir -p semantics) |
 | `mem_mv` | Move file to a different folder, or rename in place |
 | `mem_folder_tree` | Full folder tree as nested structure |
+
+### File provenance with `mem_put`
+
+`mem_put.source_metadata` forwards the canonical upload provenance object to
+memd. It is not an arbitrary metadata bag:
+
+```json
+{
+  "name": "photo.jpg",
+  "content": "<base64>",
+  "encoding": "base64",
+  "source_metadata": {
+    "captured_at": "2026-07-29T08:00:00+08:00",
+    "location": {
+      "lat": 31.2304,
+      "lon": 121.4737,
+      "accuracy_m": 8,
+      "label": "Shanghai"
+    },
+    "source_kind": "mobile",
+    "source_name": "camera sync"
+  }
+}
+```
+
+If omitted, the adapter records `source_kind=mcp`. Unknown fields, invalid
+coordinates, timezone-free timestamps and control characters are rejected by
+the HTTP API. The metadata is persisted server-side and is not included in an
+enrichment-model prompt.
+
+### Reviewing file annotations
+
+Use `mem_info` (or `mem info <file_id> --format json`) to read pending
+annotations and their `state_version`. Human-facing CLI review has two explicit
+commands:
+
+```bash
+mem annotation accept <file_id> <annotation_id> --expected-version 1
+mem annotation reject <file_id> <annotation_id> --expected-version 1
+```
+
+Agents use the single non-overlapping MCP mutation tool:
+
+```json
+{
+  "file_id": "9baadf78-6ad1-47a7-a719-57122f352a67",
+  "annotation_id": "441bcc02-9fe2-44bb-a68b-8dd9a190fb6e",
+  "decision": "accepted",
+  "expected_version": 1
+}
+```
+
+Both adapters call the canonical
+`PUT /v1/files/{fileID}/annotations/{annotationID}` endpoint. The server
+enforces token `read + write` permission, workspace/path scope, and optimistic
+concurrency. Repeating the same terminal decision succeeds with
+`replayed=true`; an opposite decision returns
+`409 annotation_decision_conflict`, while a stale pending version returns
+`409 annotation_version_conflict`. Reload `mem_info` before retrying a version
+conflict.
 
 ## Memory, recall and relation tools
 
@@ -291,7 +352,7 @@ for producing the user-facing answer.
 | **Consolidate** | Asynchronous server-side work; MCP may read index status but does not duplicate processing |
 | **Recall** | `mem_search`, `mem_context`, `mem_related`; memory-only recall does not require a model |
 | **Use** | `mem_info` and `mem_get` resolve file citations; memory citations currently resolve through `GET /v1/memories/{id}` |
-| **Feedback** | `mem_feedback`, `mem_archive`, `mem_restore` and confirmed `mem_forget`; future corrections must preserve provenance |
+| **Feedback** | `mem_file_annotation_decide`, `mem_feedback`, `mem_archive`, `mem_restore` and confirmed `mem_forget`; future corrections must preserve provenance |
 
 See [Agent Memory Direction](AGENT_MEMORY_DIRECTION.md) for the product loop,
 data model direction and acceptance criteria.
@@ -351,6 +412,7 @@ Permission rules are enforced by memd, not by MCP arguments:
 
 - `mem_remember` requires `write`; linking `source_file_id` also requires `read`.
 - `mem_memory_list` and `mem_memory_get` require `read`.
+- `mem_file_annotation_decide` requires `read + write`.
 - `mem_feedback`, `mem_archive` and `mem_restore` require `read + write`.
 - `mem_forget` requires `delete` plus a workspace role that permits deletion.
 - `mem_checkpoint` requires `write`; referenced `mem://` evidence also requires

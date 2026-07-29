@@ -56,9 +56,7 @@ class _BaseAnthropic:
             body = resp.text
             if len(body) > 500:
                 body = body[:500] + "..."
-            raise ProviderError(
-                f"anthropic {path} HTTP {resp.status_code}: {body}"
-            )
+            raise ProviderError(f"anthropic {path} HTTP {resp.status_code}: {body}")
         return resp.json()
 
 
@@ -109,14 +107,16 @@ class AnthropicLLMProvider(_BaseAnthropic):
 class AnthropicVLMProvider(_BaseAnthropic):
     """Claude vision (multimodal messages with image blocks)."""
 
-    def __init__(self, model: str = "claude-haiku-4-5-20251001",
-                 api_key: Optional[str] = None):
+    DEFAULT_CAPTION_PROMPT = "Describe this image in one short paragraph."
+
+    def __init__(self, model: str = "claude-haiku-4-5-20251001", api_key: Optional[str] = None):
         super().__init__(api_key)
         self.model = model
         self.name = f"anthropic:{model}"
 
     def caption(self, image: bytes, **kwargs: Any) -> str:
-        return self._vision(image, "Describe this image in one short paragraph.")
+        prompt = kwargs.get("prompt") or self.DEFAULT_CAPTION_PROMPT
+        return self._vision(image, prompt)
 
     def vqa(self, image: bytes, question: str, **kwargs: Any) -> str:
         return self._vision(image, question)
@@ -126,14 +126,18 @@ class AnthropicVLMProvider(_BaseAnthropic):
         payload = {
             "model": self.model,
             "max_tokens": 512,
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "image",
-                     "source": {"type": "base64", "media_type": media_type, "data": b64}},
-                    {"type": "text", "text": prompt},
-                ],
-            }],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": media_type, "data": b64},
+                        },
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ],
         }
         data = self._post("/v1/messages", payload)
         parts = []

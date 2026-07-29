@@ -352,15 +352,74 @@ files (
   -- AI 字段
   summary         text,                    -- 可选派生摘要（不得替代原文）
   caption         text,                    -- VLM caption（图片）
-  tags            text[],                  -- 自动标签
-  timeline_at     timestamptz,             -- EXIF / 内容推断时间
-  geo             point,                   -- 经纬度
+  tags            text[],                  -- 有效标签：user_tags + 已接受 AI 标签
+  user_tags       text[],                  -- 用户/上传适配器明确提供的标签
+  timeline_at     timestamptz,             -- 来源时间优先；带时区 EXIF 只填空值
+  geo             point,                   -- PostgreSQL point(lon, lat)
+  source_metadata jsonb,                   -- 严格有界的调用方/设备来源事实
+  processor_metadata jsonb,                -- 服务端白名单化的确定性观察
   -- 状态
-  index_status    text,                    -- pending / processing / done / failed
+  index_status    text,                    -- pending / processing / done / partial / failed
   -- 时间
   created_at      timestamptz,
   updated_at      timestamptz
 );
+
+-- 可人工复核的 AI 建议。模型置信度只用于排序，不会自动成为用户事实。
+file_annotations (
+  id                  uuid pk,
+  file_id             uuid references files(id),
+  stable_key          text,
+  kind                text,                -- description / tag
+  value_text          text,
+  confidence          real,                -- [0,1]
+  source              text,                -- model
+  provider            text,
+  processor           text,
+  analysis_version    text,
+  status              text,                -- pending / accepted / rejected / superseded
+  state_version       bigint,
+  decided_by_user_id  uuid null,           -- 服务端审计，bundle 不导出
+  decided_at          timestamptz null,
+  created_at          timestamptz,
+  updated_at          timestamptz,
+  unique (file_id, stable_key)
+);
+
+文件上传的 `source_metadata` 是可选、严格解码且最大 4 KiB 的 JSON：
+
+```json
+{
+  "captured_at": "2026-07-29T08:00:00+08:00",
+  "location": {
+    "lat": 31.2304,
+    "lon": 121.4737,
+    "accuracy_m": 8,
+    "label": "Shanghai"
+  },
+  "source_kind": "mobile",
+  "source_name": "camera sync"
+}
+```
+
+`source_kind` 仅允许 `api`、`web`、`cli`、`mcp`、`mobile`、`ai_device`、
+`import` 或 `other`。未知字段、越界坐标、控制字符、无时区时间和超限值返回
+`400 bad_source_metadata`；重复字段和显式 `null` 同样拒绝。multipart 上传使用
+同名表单字段，原始流上传使用私有 `X-Mem-Source-Metadata` 请求头，精确位置
+绝不进入 URL。显式来源时间/位置优先；处理器只填充空的有效字段。
+缺少时区的 EXIF 时间仅保留在 `processor_metadata` 并标记不确定。
+
+AI 描述/标签由现有异步 `index_file` 队列产生。所有新建议均从 `pending`
+开始，最多一个 2,000 Unicode 标量的描述和 20 个每个不超过 64 标量的标签。
+人工决策使用：
+
+```http
+PUT /v1/files/{fileID}/annotations/{annotationID}
+{"decision":"accepted","expected_version":1}
+```
+
+同一终态重放成功；相反终态返回 `409 annotation_decision_conflict`，过期版本返回
+`409 annotation_version_conflict`。HTTP 是规范语义，Web/CLI/MCP 不另建信任模型。
 
 -- Agent 结构化记忆：一次写入代表一次可审计的发生，不在写入时调用模型
 memories (
@@ -539,6 +598,9 @@ mem put <dir> --recursive                 # 目录
 mem put - --name <name> [--mime <type>]   # stdin
 mem put --url <url> [--name <name>]       # 远程
 mem put <path> --tag <tag>...
+mem put <path> --captured-at <rfc3339> --lat <lat> --lon <lon> \
+  [--location-accuracy <meters>] [--place <label>] \
+  [--source-kind mobile|ai_device|other] [--source-name <description>]
 mem put <path> --watch                    # 守护，新文件自动入
 
 # 取
@@ -549,6 +611,8 @@ mem cat <file_id>                         # 输出文本内容到 stdout
 mem ls [path]                             # 列虚拟路径
 mem ls --tag <tag>
 mem info <file_id>                        # 详情（含 AI 摘要）
+mem annotation accept <file_id> <annotation_id> --expected-version <n>
+mem annotation reject <file_id> <annotation_id> --expected-version <n>
 
 # 搜
 mem search <query> [--type ...] [--since ...] [--until ...] [--face <name>] [--limit N] \
@@ -623,7 +687,34 @@ CLI 的 `--idempotency-key` 由适配器转换为 HTTP `Idempotency-Key` Header�
       name:     { type: string }
       mime:     { type: string }
       tags:     { type: array, items: { type: string } }
+      source_metadata:
+        type: object
+        properties:
+          captured_at: { type: string, format: date-time }
+          location:
+            type: object
+            properties:
+              lat:        { type: number }
+              lon:        { type: number }
+              accuracy_m: { type: number }
+              label:      { type: string }
+            required: [lat, lon]
+          source_kind:
+            type: string
+            enum: [api, web, cli, mcp, mobile, ai_device, import, other]
+          source_name: { type: string }
     required: [content, name]
+
+- name: mem_file_annotation_decide
+  description: 接受或拒绝一条待确认的文件 AI 注释
+  input_schema:
+    type: object
+    properties:
+      file_id:         { type: string, format: uuid }
+      annotation_id:   { type: string, format: uuid }
+      decision:        { type: string, enum: [accepted, rejected] }
+      expected_version: { type: integer, minimum: 1 }
+    required: [file_id, annotation_id, decision, expected_version]
 
 - name: mem_remember
   description: 幂等写入一条带来源和 producer 的结构化记忆
@@ -893,7 +984,7 @@ class Processor(Protocol):
 | Processor | accepts | 输出 |
 |-----------|---------|------|
 | ImageProcessor | `image/*` | CLIP visual emb + VLM caption + face emb + EXIF |
-| TextProcessor | `text/*`, `application/json`, code mimes | 分块 text emb；摘要是可选索引增强，默认关闭 |
+| TextProcessor | `text/*`, `application/json`, code mimes | 分块 text emb；默认 LLM 懒加载生成待审核描述/标签，`MEM_DEFAULT_LLM=""` 可关闭 |
 | PDFProcessor | `application/pdf` | 抽文本（含 OCR fallback）+ Text 流程 |
 | AudioProcessor | `audio/*` | Whisper ASR → 转 Text 流程 |
 
@@ -1069,7 +1160,7 @@ mem/
 
 1. ✅ 已实现版本化 `handoff / checkpoint / resume` 契约、CAS/幂等持久化以及
    API / CLI / MCP；以双 Token 路由验收锁定 Claude Code → Codex 接续。
-2. ✅ 已实现 workspace bundle v1、API / CLI / Web export、空目标 `fresh`
+2. ✅ 已实现 workspace bundle v2（兼容导入 v1）、API / CLI / Web export、空目标 `fresh`
    import、完整性校验、幂等 ledger、结构化冲突和失败补偿；继续实现
    `merge_conservative`、增量包与断点上传。
 3. ✅ 已实现 `remember / context / feedback / archive / restore / forget`

@@ -14,6 +14,7 @@ import pytest
 
 def test_mem_worker_imports():
     import mem_worker  # noqa: F401
+
     assert mem_worker.__version__
 
 
@@ -58,7 +59,7 @@ def test_process_returns_skipped_for_unknown_mime():
     assert resp.status == pb.STATUS_SKIPPED
 
 
-def test_chat_rpc_is_retired_and_llm_override_is_ignored():
+def test_chat_rpc_is_retired_and_llm_override_stays_in_indexing_path():
     pb = importlib.import_module("mem_worker.proto.processor_pb2")
     pbg = importlib.import_module("mem_worker.proto.processor_pb2_grpc")
 
@@ -78,9 +79,10 @@ def test_chat_rpc_is_retired_and_llm_override_is_ignored():
         servicer.Chat(pb.ChatRequest(), Context())
 
     base = servicer._registry.find("text/plain")
-    assert servicer._pick_processor(
-        "text/plain", {"llm_provider": "openai:should-never-run"}
-    ) is base
+    proc = servicer._pick_processor("text/plain", {"llm_provider": "test:pinned-annotation"})
+    assert proc is not base
+    assert proc._llm is None
+    assert proc._llm_spec == "test:pinned-annotation"
 
 
 @pytest.mark.parametrize(
@@ -91,9 +93,7 @@ def test_chat_rpc_is_retired_and_llm_override_is_ignored():
         ("audio/mpeg", lambda proc: proc._text._embedder),
     ],
 )
-def test_embedding_override_reaches_text_derived_processors(
-    monkeypatch, mime, embedder_getter
-):
+def test_embedding_override_reaches_text_derived_processors(monkeypatch, mime, embedder_getter):
     pb = importlib.import_module("mem_worker.proto.processor_pb2")
     pbg = importlib.import_module("mem_worker.proto.processor_pb2_grpc")
     from mem_worker import providers
@@ -106,3 +106,21 @@ def test_embedding_override_reaches_text_derived_processors(
         mime, {"embedding_provider": "test:pinned-space"}
     )
     assert embedder_getter(proc) is marker
+
+
+@pytest.mark.parametrize(
+    ("mime", "llm_spec_getter"),
+    [
+        ("text/plain", lambda proc: proc._llm_spec),
+        ("application/pdf", lambda proc: proc._text._llm_spec),
+        ("audio/mpeg", lambda proc: proc._text._llm_spec),
+    ],
+)
+def test_llm_override_reaches_text_derived_processors(mime, llm_spec_getter):
+    pb = importlib.import_module("mem_worker.proto.processor_pb2")
+    pbg = importlib.import_module("mem_worker.proto.processor_pb2_grpc")
+    from mem_worker.server import ProcessorServicer
+
+    proc = ProcessorServicer(pb, pbg)._pick_processor(mime, {"llm_provider": "test:annotations-v2"})
+
+    assert llm_spec_getter(proc) == "test:annotations-v2"

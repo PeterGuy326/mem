@@ -2,14 +2,19 @@ package workspacebundle
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
+	"github.com/PeterGuy326/mem/server/internal/enrichmentkey"
 	"github.com/PeterGuy326/mem/server/internal/handoff"
+	"github.com/PeterGuy326/mem/server/internal/modeltext"
 	"github.com/PeterGuy326/mem/server/internal/pathx"
 	"github.com/google/uuid"
 )
@@ -27,9 +32,9 @@ type validatedGraph struct {
 	checkpoints map[uuid.UUID]CheckpointRecord
 }
 
-// Validate checks a fully decoded v1 object graph without touching external
-// state. It is safe to use both before archive creation and after archive
-// integrity verification.
+// Validate checks a fully decoded supported object graph without touching
+// external state. It is safe to use both before archive creation and after
+// archive integrity verification.
 func Validate(data BundleData, options ValidationOptions) error {
 	limits, err := normalizeLimits(options.Limits)
 	if err != nil {
@@ -71,7 +76,12 @@ func Validate(data BundleData, options ValidationOptions) error {
 	if err := validateFolders(data.Folders, graph.folders); err != nil {
 		return err
 	}
-	if err := validateFiles(data.Files, graph); err != nil {
+	if err := validateFiles(
+		data.Files,
+		graph,
+		data.Manifest.SchemaVersion,
+		limits.MaxRecordsPerIndex,
+	); err != nil {
 		return err
 	}
 	if err := validateMemories(data.Memories, graph, limits); err != nil {
@@ -123,7 +133,8 @@ func validateManifest(data BundleData) error {
 			ContractName,
 		)
 	}
-	if manifest.SchemaVersion != SchemaVersionV1 {
+	if manifest.SchemaVersion != SchemaVersionV1 &&
+		manifest.SchemaVersion != SchemaVersionV2 {
 		return fmt.Errorf(
 			"%w: schema_version %d",
 			ErrUnsupportedVersion,
@@ -172,10 +183,15 @@ func validateManifest(data BundleData) error {
 			ErrInvalidBundle,
 		)
 	}
-	if !equalStrings(manifest.Exclusions, requiredExclusionsV1) {
+	expectedExclusions := requiredExclusionsV2
+	if manifest.SchemaVersion == SchemaVersionV1 {
+		expectedExclusions = requiredExclusionsV1
+	}
+	if !equalStrings(manifest.Exclusions, expectedExclusions) {
 		return fmt.Errorf(
-			"%w: manifest exclusions must exactly match the v1 exclusion set",
+			"%w: manifest exclusions must exactly match the v%d exclusion set",
 			ErrInvalidBundle,
+			manifest.SchemaVersion,
 		)
 	}
 	expectedIndexes := []struct {
@@ -312,9 +328,27 @@ func validateFolders(records []FolderRecord, folders map[uuid.UUID]FolderRecord)
 	return nil
 }
 
-func validateFiles(records []FileRecord, graph validatedGraph) error {
+func validateFiles(
+	records []FileRecord,
+	graph validatedGraph,
+	schemaVersion int,
+	maxAnnotations int,
+) error {
+	annotationIDs := make(map[uuid.UUID]struct{})
+	annotationCount := 0
 	for i, record := range records {
 		label := fmt.Sprintf("files[%d]", i)
+		if err := validateFileRecordVersion(label, record, schemaVersion); err != nil {
+			return err
+		}
+		annotationCount += len(record.Annotations)
+		if annotationCount > maxAnnotations {
+			return fmt.Errorf(
+				"%w: file annotations exceed %d records",
+				ErrLimitExceeded,
+				maxAnnotations,
+			)
+		}
 		if record.ID == uuid.Nil {
 			return fmt.Errorf("%w: %s.id is required", ErrInvalidBundle, label)
 		}
@@ -378,15 +412,112 @@ func validateFiles(records []FileRecord, graph validatedGraph) error {
 				return err
 			}
 		}
+		if record.UserTags != nil {
+			for tagIndex, tag := range record.UserTags {
+				if err := validateText(
+					fmt.Sprintf("%s.user_tags[%d]", label, tagIndex),
+					tag,
+					1,
+					1024,
+				); err != nil {
+					return err
+				}
+			}
+		}
 		for field, value := range map[string]*string{
 			label + ".summary": record.Summary,
 			label + ".caption": record.Caption,
 		} {
 			if value != nil {
-				if err := validateText(field, *value, 0, 1_000_000); err != nil {
-					return err
+				if schemaVersion == SchemaVersionV2 {
+					if strings.HasSuffix(field, ".caption") {
+						normalized, ok := modeltext.NormalizePlain(*value, 2000)
+						if !ok || normalized != *value {
+							return fmt.Errorf(
+								"%w: %s is not safe bounded model display text",
+								ErrInvalidBundle,
+								field,
+							)
+						}
+					} else {
+						normalized, ok := modeltext.NormalizePlain(*value, 2000)
+						if !ok || normalized != *value {
+							return fmt.Errorf(
+								"%w: %s is not safe bounded model display text",
+								ErrInvalidBundle,
+								field,
+							)
+						}
+					}
+				} else {
+					if err := validateText(field, *value, 0, 1_000_000); err != nil {
+						return err
+					}
 				}
 			}
+		}
+		if record.TimelineAt != nil && record.TimelineAt.IsZero() {
+			return fmt.Errorf("%w: %s.timeline_at must not be zero", ErrInvalidBundle, label)
+		}
+		if record.TimelineAt != nil && record.TimelineAt.Nanosecond()%1_000 != 0 {
+			return fmt.Errorf(
+				"%w: %s.timeline_at exceeds PostgreSQL microsecond precision",
+				ErrInvalidBundle,
+				label,
+			)
+		}
+		if record.Geo != nil {
+			if math.IsNaN(record.Geo.Lat) || math.IsInf(record.Geo.Lat, 0) ||
+				record.Geo.Lat < -90 || record.Geo.Lat > 90 {
+				return fmt.Errorf("%w: %s.geo.lat is invalid", ErrInvalidBundle, label)
+			}
+			if math.IsNaN(record.Geo.Lon) || math.IsInf(record.Geo.Lon, 0) ||
+				record.Geo.Lon < -180 || record.Geo.Lon > 180 {
+				return fmt.Errorf("%w: %s.geo.lon is invalid", ErrInvalidBundle, label)
+			}
+		}
+		if err := validatePortableSourceMetadata(label, record.SourceMetadata); err != nil {
+			return err
+		}
+		if err := validateSourceMetadataProjection(
+			label,
+			record.SourceMetadata,
+			record.TimelineAt,
+			record.Geo,
+		); err != nil {
+			return err
+		}
+		if err := validateFileAnnotations(label, record, annotationIDs); err != nil {
+			return err
+		}
+		projection := DeriveFileEnrichmentProjection(record)
+		if !slices.Equal(record.Tags, projection.Tags) {
+			return fmt.Errorf(
+				"%w: %s.tags does not match user tags plus accepted suggestions",
+				ErrIntegrity,
+				label,
+			)
+		}
+		if record.UserTags != nil && !slices.Equal(record.UserTags, projection.UserTags) {
+			return fmt.Errorf(
+				"%w: %s.user_tags is not a canonical unique sequence",
+				ErrIntegrity,
+				label,
+			)
+		}
+		if !projection.Legacy && !equalOptionalText(record.Summary, projection.Summary) {
+			return fmt.Errorf(
+				"%w: %s.summary does not match the selected accepted description",
+				ErrIntegrity,
+				label,
+			)
+		}
+		if !projection.Legacy && !equalOptionalText(record.Caption, projection.Caption) {
+			return fmt.Errorf(
+				"%w: %s.caption does not match an accepted or pending description",
+				ErrIntegrity,
+				label,
+			)
 		}
 		if err := validateTimestamp(label+".created_at", record.CreatedAt); err != nil {
 			return err
@@ -397,6 +528,434 @@ func validateFiles(records []FileRecord, graph validatedGraph) error {
 		graph.files[record.ID] = record
 	}
 	return nil
+}
+
+func validateFileRecordVersion(label string, record FileRecord, schemaVersion int) error {
+	switch schemaVersion {
+	case SchemaVersionV1:
+		// These fields were added in v2. Requiring their absence keeps v1
+		// archives readable by strict historical v1 implementations.
+		if record.UserTags != nil ||
+			record.Geo != nil ||
+			len(bytes.TrimSpace(record.SourceMetadata)) != 0 ||
+			record.Annotations != nil {
+			return fmt.Errorf(
+				"%w: %s uses v2 enrichment fields with schema_version 1",
+				ErrUnsupportedVersion,
+				label,
+			)
+		}
+	case SchemaVersionV2:
+		if record.UserTags == nil ||
+			len(bytes.TrimSpace(record.SourceMetadata)) == 0 ||
+			record.Annotations == nil {
+			return fmt.Errorf(
+				"%w: %s is missing required v2 enrichment fields",
+				ErrInvalidBundle,
+				label,
+			)
+		}
+	default:
+		return fmt.Errorf(
+			"%w: schema_version %d",
+			ErrUnsupportedVersion,
+			schemaVersion,
+		)
+	}
+	return nil
+}
+
+func validatePortableSourceMetadata(label string, raw json.RawMessage) error {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		// Compatibility with pre-enrichment v1 bundles.
+		return nil
+	}
+	if len(raw) > 4<<10 {
+		return fmt.Errorf("%w: %s.source_metadata exceeds 4096 bytes", ErrLimitExceeded, label)
+	}
+	canonical, err := canonicalJSONObject(raw, 4, label+".source_metadata")
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(raw, canonical) {
+		return fmt.Errorf(
+			"%w: %s.source_metadata is not canonical JSON",
+			ErrIntegrity,
+			label,
+		)
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return fmt.Errorf("%w: decode %s.source_metadata: %v", ErrInvalidBundle, label, err)
+	}
+	allowed := map[string]struct{}{
+		"captured_at": {}, "location": {}, "source_kind": {}, "source_name": {},
+	}
+	for key := range object {
+		if _, exists := allowed[key]; !exists {
+			return fmt.Errorf(
+				"%w: %s.source_metadata contains unknown field %q",
+				ErrInvalidBundle,
+				label,
+				key,
+			)
+		}
+	}
+	for key, value := range object {
+		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return fmt.Errorf(
+				"%w: %s.source_metadata.%s must not be null",
+				ErrInvalidBundle,
+				label,
+				key,
+			)
+		}
+	}
+	if value, exists := object["captured_at"]; exists {
+		var capturedAt string
+		if err := json.Unmarshal(value, &capturedAt); err != nil {
+			return fmt.Errorf("%w: %s.source_metadata.captured_at is invalid", ErrInvalidBundle, label)
+		}
+		if _, err := time.Parse(time.RFC3339, capturedAt); err != nil {
+			return fmt.Errorf(
+				"%w: %s.source_metadata.captured_at must be offset-bearing RFC3339",
+				ErrInvalidBundle,
+				label,
+			)
+		}
+	}
+	if value, exists := object["source_kind"]; exists {
+		var sourceKind string
+		if err := json.Unmarshal(value, &sourceKind); err != nil {
+			return fmt.Errorf("%w: %s.source_metadata.source_kind is invalid", ErrInvalidBundle, label)
+		}
+		switch sourceKind {
+		case "api", "web", "cli", "mcp", "mobile", "ai_device", "import", "other":
+		default:
+			return fmt.Errorf("%w: %s.source_metadata.source_kind is invalid", ErrInvalidBundle, label)
+		}
+	}
+	if value, exists := object["source_name"]; exists {
+		var sourceName string
+		if err := json.Unmarshal(value, &sourceName); err != nil ||
+			!validMetadataText(sourceName, 512) {
+			return fmt.Errorf("%w: %s.source_metadata.source_name is invalid", ErrInvalidBundle, label)
+		}
+	}
+	if value, exists := object["location"]; exists {
+		if err := validatePortableLocation(label, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateSourceMetadataProjection(
+	label string,
+	raw json.RawMessage,
+	timelineAt *time.Time,
+	geo *FileGeoRecord,
+) error {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil
+	}
+	var metadata struct {
+		CapturedAt *string `json:"captured_at"`
+		Location   *struct {
+			Lat float64 `json:"lat"`
+			Lon float64 `json:"lon"`
+		} `json:"location"`
+	}
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return fmt.Errorf("%w: decode %s.source_metadata: %v", ErrInvalidBundle, label, err)
+	}
+	if metadata.CapturedAt != nil {
+		capturedAt, err := time.Parse(time.RFC3339, *metadata.CapturedAt)
+		if err != nil {
+			return fmt.Errorf("%w: %s.source_metadata.captured_at is invalid", ErrInvalidBundle, label)
+		}
+		if timelineAt == nil || !timelineAt.Equal(capturedAt.Truncate(time.Microsecond)) {
+			return fmt.Errorf(
+				"%w: %s.timeline_at contradicts source_metadata.captured_at",
+				ErrIntegrity,
+				label,
+			)
+		}
+	}
+	if metadata.Location != nil {
+		if geo == nil ||
+			geo.Lat != metadata.Location.Lat ||
+			geo.Lon != metadata.Location.Lon {
+			return fmt.Errorf(
+				"%w: %s.geo contradicts source_metadata.location",
+				ErrIntegrity,
+				label,
+			)
+		}
+	}
+	return nil
+}
+
+func validatePortableLocation(label string, raw json.RawMessage) error {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
+		return fmt.Errorf("%w: %s.source_metadata.location must be an object", ErrInvalidBundle, label)
+	}
+	allowed := map[string]struct{}{"lat": {}, "lon": {}, "accuracy_m": {}, "label": {}}
+	for key := range object {
+		if _, exists := allowed[key]; !exists {
+			return fmt.Errorf(
+				"%w: %s.source_metadata.location contains unknown field %q",
+				ErrInvalidBundle,
+				label,
+				key,
+			)
+		}
+	}
+	for key, value := range object {
+		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return fmt.Errorf(
+				"%w: %s.source_metadata.location.%s must not be null",
+				ErrInvalidBundle,
+				label,
+				key,
+			)
+		}
+	}
+	var lat, lon float64
+	if err := json.Unmarshal(object["lat"], &lat); err != nil ||
+		math.IsNaN(lat) || math.IsInf(lat, 0) || lat < -90 || lat > 90 {
+		return fmt.Errorf("%w: %s.source_metadata.location.lat is invalid", ErrInvalidBundle, label)
+	}
+	if err := json.Unmarshal(object["lon"], &lon); err != nil ||
+		math.IsNaN(lon) || math.IsInf(lon, 0) || lon < -180 || lon > 180 {
+		return fmt.Errorf("%w: %s.source_metadata.location.lon is invalid", ErrInvalidBundle, label)
+	}
+	if value, exists := object["accuracy_m"]; exists {
+		var accuracy float64
+		if err := json.Unmarshal(value, &accuracy); err != nil ||
+			math.IsNaN(accuracy) || math.IsInf(accuracy, 0) ||
+			accuracy < 0 || accuracy > 40_100_000 {
+			return fmt.Errorf(
+				"%w: %s.source_metadata.location.accuracy_m is invalid",
+				ErrInvalidBundle,
+				label,
+			)
+		}
+	}
+	if value, exists := object["label"]; exists {
+		var locationLabel string
+		if err := json.Unmarshal(value, &locationLabel); err != nil ||
+			!validMetadataText(locationLabel, 512) {
+			return fmt.Errorf(
+				"%w: %s.source_metadata.location.label is invalid",
+				ErrInvalidBundle,
+				label,
+			)
+		}
+	}
+	return nil
+}
+
+func validMetadataText(value string, maxRunes int) bool {
+	return len([]rune(value)) <= maxRunes &&
+		strings.IndexFunc(value, unicode.IsControl) < 0 &&
+		!modeltext.ContainsNonDisplay(value)
+}
+
+func validateFileAnnotations(
+	label string,
+	record FileRecord,
+	annotationIDs map[uuid.UUID]struct{},
+) error {
+	stableKeys := make(map[string]struct{}, len(record.Annotations))
+	for index, annotation := range record.Annotations {
+		annotationLabel := fmt.Sprintf("%s.annotations[%d]", label, index)
+		if annotation.ID == uuid.Nil {
+			return fmt.Errorf("%w: %s.id is required", ErrInvalidBundle, annotationLabel)
+		}
+		if _, duplicate := annotationIDs[annotation.ID]; duplicate {
+			return fmt.Errorf(
+				"%w: duplicate file annotation UUID %s",
+				ErrInvalidBundle,
+				annotation.ID,
+			)
+		}
+		annotationIDs[annotation.ID] = struct{}{}
+		if err := validateText(annotationLabel+".stable_key", annotation.StableKey, 1, 255); err != nil {
+			return err
+		}
+		expectedStableKey := enrichmentkey.Stable(
+			annotation.Kind,
+			annotation.Source,
+			annotation.AnalysisVersion,
+			annotation.ValueText,
+		)
+		if annotation.StableKey != expectedStableKey {
+			return fmt.Errorf(
+				"%w: %s.stable_key does not match its annotation identity",
+				ErrIntegrity,
+				annotationLabel,
+			)
+		}
+		if _, duplicate := stableKeys[annotation.StableKey]; duplicate {
+			return fmt.Errorf(
+				"%w: %s has duplicate stable_key %q",
+				ErrInvalidBundle,
+				label,
+				annotation.StableKey,
+			)
+		}
+		stableKeys[annotation.StableKey] = struct{}{}
+		switch annotation.Kind {
+		case "description":
+			if err := validateAnnotationText(
+				annotationLabel+".value_text",
+				annotation.ValueText,
+				1,
+				2000,
+			); err != nil {
+				return err
+			}
+			normalized, ok := modeltext.NormalizePlain(annotation.ValueText, 2000)
+			if !ok || normalized != annotation.ValueText {
+				return fmt.Errorf(
+					"%w: %s.value_text is not safe plain model text",
+					ErrInvalidBundle,
+					annotationLabel,
+				)
+			}
+		case "tag":
+			if err := validateAnnotationText(
+				annotationLabel+".value_text",
+				annotation.ValueText,
+				1,
+				64,
+			); err != nil {
+				return err
+			}
+			normalized, ok := modeltext.NormalizePlain(annotation.ValueText, 64)
+			if !ok || normalized != annotation.ValueText {
+				return fmt.Errorf(
+					"%w: %s.value_text is not safe plain model text",
+					ErrInvalidBundle,
+					annotationLabel,
+				)
+			}
+		default:
+			return fmt.Errorf("%w: %s.kind is invalid", ErrInvalidBundle, annotationLabel)
+		}
+		if modeltext.ContainsHiddenReasoning(annotation.ValueText) {
+			return fmt.Errorf(
+				"%w: %s.value_text contains hidden reasoning",
+				ErrInvalidBundle,
+				annotationLabel,
+			)
+		}
+		if math.IsNaN(float64(annotation.Confidence)) ||
+			math.IsInf(float64(annotation.Confidence), 0) ||
+			annotation.Confidence < 0 || annotation.Confidence > 1 {
+			return fmt.Errorf("%w: %s.confidence is invalid", ErrInvalidBundle, annotationLabel)
+		}
+		if annotation.Source != "model" {
+			return fmt.Errorf("%w: %s.source is invalid", ErrInvalidBundle, annotationLabel)
+		}
+		for field, value := range map[string]string{
+			"provider":         annotation.Provider,
+			"processor":        annotation.Processor,
+			"analysis_version": annotation.AnalysisVersion,
+		} {
+			minimum := 0
+			if field == "analysis_version" {
+				minimum = 1
+			}
+			maximum := 255
+			if field != "provider" {
+				maximum = 64
+			}
+			if err := validateAnnotationText(
+				annotationLabel+"."+field,
+				value,
+				minimum,
+				maximum,
+			); err != nil {
+				return err
+			}
+		}
+		switch annotation.Status {
+		case "pending", "superseded":
+			if annotation.DecidedAt != nil {
+				return fmt.Errorf(
+					"%w: %s.decided_at must be empty for status %s",
+					ErrInvalidBundle,
+					annotationLabel,
+					annotation.Status,
+				)
+			}
+		case "accepted", "rejected":
+			if annotation.DecidedAt == nil || annotation.DecidedAt.IsZero() {
+				return fmt.Errorf(
+					"%w: %s.decided_at is required for status %s",
+					ErrInvalidBundle,
+					annotationLabel,
+					annotation.Status,
+				)
+			}
+		default:
+			return fmt.Errorf("%w: %s.status is invalid", ErrInvalidBundle, annotationLabel)
+		}
+		if annotation.StateVersion <= 0 {
+			return fmt.Errorf("%w: %s.state_version must be positive", ErrInvalidBundle, annotationLabel)
+		}
+		if annotation.DecidedAt != nil && annotation.DecidedAt.Nanosecond()%1_000 != 0 {
+			return fmt.Errorf(
+				"%w: %s.decided_at exceeds PostgreSQL microsecond precision",
+				ErrInvalidBundle,
+				annotationLabel,
+			)
+		}
+		if err := validateTimestamp(annotationLabel+".created_at", annotation.CreatedAt); err != nil {
+			return err
+		}
+		if annotation.CreatedAt.Nanosecond()%1_000 != 0 {
+			return fmt.Errorf(
+				"%w: %s.created_at exceeds PostgreSQL microsecond precision",
+				ErrInvalidBundle,
+				annotationLabel,
+			)
+		}
+		if err := validateTimestamp(annotationLabel+".updated_at", annotation.UpdatedAt); err != nil {
+			return err
+		}
+		if annotation.UpdatedAt.Nanosecond()%1_000 != 0 {
+			return fmt.Errorf(
+				"%w: %s.updated_at exceeds PostgreSQL microsecond precision",
+				ErrInvalidBundle,
+				annotationLabel,
+			)
+		}
+	}
+	return nil
+}
+
+func validateAnnotationText(field, value string, minimum, maximum int) error {
+	if err := validateText(field, value, minimum, maximum); err != nil {
+		return err
+	}
+	if strings.IndexFunc(value, unicode.IsControl) >= 0 {
+		return fmt.Errorf("%w: %s contains a control character", ErrInvalidBundle, field)
+	}
+	if modeltext.ContainsNonDisplay(value) {
+		return fmt.Errorf("%w: %s contains a non-display character", ErrInvalidBundle, field)
+	}
+	return nil
+}
+
+func equalOptionalText(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func validateMemories(records []MemoryRecord, graph validatedGraph, limits Limits) error {

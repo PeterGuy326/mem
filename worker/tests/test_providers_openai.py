@@ -87,5 +87,24 @@ def test_vlm_contract_is_unchanged(monkeypatch):
     path, payload = post.calls[0]
     assert path == "/v1/chat/completions"
     assert payload["model"] == "gpt-4o-mini"
+    text_prompt = payload["messages"][0]["content"][0]["text"]
+    assert text_prompt == "Describe this image in one short paragraph."
     image_url = payload["messages"][0]["content"][1]["image_url"]["url"]
     assert image_url == ("data:image/jpeg;base64," + base64.b64encode(image).decode("ascii"))
+
+
+def test_vlm_caption_passes_custom_prompt(monkeypatch):
+    provider = OpenAIVLMProvider(
+        model="gpt-4o-mini",
+        api_key="test-key",
+        base_url="https://model.invalid",
+    )
+    post = _PostCapture({"choices": [{"message": {"content": "structured labels"}}]})
+    monkeypatch.setattr(provider, "_post", post)
+
+    result = provider.caption(b"test-image", prompt="Return concise semantic tags.")
+
+    assert result == "structured labels"
+    _, payload = post.calls[0]
+    text_prompt = payload["messages"][0]["content"][0]["text"]
+    assert text_prompt == "Return concise semantic tags."

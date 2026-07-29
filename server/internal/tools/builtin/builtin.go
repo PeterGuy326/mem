@@ -15,6 +15,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -44,6 +45,7 @@ func RegisterAll(reg *tools.Registry, client *apiclient.Client) error {
 		registerResume,
 		registerGet,
 		registerInfo,
+		registerFileAnnotationDecision,
 		registerList,
 		registerLs,
 		registerMkdir,
@@ -174,6 +176,32 @@ func registerPut(reg *tools.Registry, c *apiclient.Client) error {
 				"mime":     {Type: "string", Description: "MIME type; inferred from extension if omitted"},
 				"path":     {Type: "string", Description: "Destination folder, e.g. /Notes (mkdir -p applied)"},
 				"tags":     {Type: "array", Items: &tools.Property{Type: "string"}},
+				"source_metadata": {
+					Type:        "object",
+					Description: "Caller/device provenance and capture facts. AI-inferred metadata belongs in pending annotations instead.",
+					Properties: map[string]tools.Property{
+						"captured_at": {Type: "string", Format: "date-time", Description: "RFC3339 capture time with timezone"},
+						"location": {
+							Type:        "object",
+							Description: "Capture location in latitude/longitude order",
+							Required:    []string{"lat", "lon"},
+							Properties: map[string]tools.Property{
+								"lat":        {Type: "number", Description: "Latitude (-90..90)"},
+								"lon":        {Type: "number", Description: "Longitude (-180..180)"},
+								"accuracy_m": {Type: "number", Description: "Optional non-negative accuracy in metres"},
+								"label":      {Type: "string", Description: "Optional human-readable place"},
+							},
+							AdditionalProperties: boolPtr(false),
+						},
+						"source_kind": {
+							Type:    "string",
+							Enum:    []string{"api", "web", "cli", "mcp", "mobile", "ai_device", "import", "other"},
+							Default: "mcp",
+						},
+						"source_name": {Type: "string", Description: "Optional non-sensitive source/device description"},
+					},
+					AdditionalProperties: boolPtr(false),
+				},
 			},
 		},
 		Run: func(ctx context.Context, args map[string]any) (any, error) {
@@ -198,9 +226,13 @@ func registerPut(reg *tools.Registry, c *apiclient.Client) error {
 			mime, _ := args["mime"].(string)
 			folder, _ := args["path"].(string)
 			tags := stringSlice(args["tags"])
+			sourceMetadata, err := fileSourceMetadataArg(args)
+			if err != nil {
+				return nil, err
+			}
 
 			var out map[string]any
-			if err := c.UploadMultipart(ctx, name, mime, folder, body, tags, &out); err != nil {
+			if err := c.UploadMultipartWithSourceMetadata(ctx, name, mime, folder, body, tags, sourceMetadata, &out); err != nil {
 				return nil, err
 			}
 			return out, nil
@@ -736,4 +768,102 @@ func rememberObjectArg(args map[string]any, key string) (map[string]any, bool, e
 		return nil, false, fmt.Errorf("mem_remember: %s must be an object", key)
 	}
 	return object, true, nil
+}
+
+func fileSourceMetadataArg(args map[string]any) (*apiclient.FileSourceMetadata, error) {
+	metadata := &apiclient.FileSourceMetadata{SourceKind: "mcp"}
+	value, exists := args["source_metadata"]
+	if !exists || value == nil {
+		return metadata, nil
+	}
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("mem_put: source_metadata must be an object")
+	}
+	allowed := map[string]bool{
+		"captured_at": true, "location": true, "source_kind": true, "source_name": true,
+	}
+	for key := range object {
+		if !allowed[key] {
+			return nil, fmt.Errorf("mem_put: source_metadata contains unsupported field %q", key)
+		}
+	}
+	var typeOK bool
+	if capturedAt, exists := object["captured_at"]; exists {
+		metadata.CapturedAt, typeOK = capturedAt.(string)
+		if !typeOK {
+			return nil, fmt.Errorf("mem_put: source_metadata.captured_at must be a string")
+		}
+	}
+	if sourceKind, exists := object["source_kind"]; exists {
+		metadata.SourceKind, typeOK = sourceKind.(string)
+		if !typeOK {
+			return nil, fmt.Errorf("mem_put: source_metadata.source_kind must be a string")
+		}
+	}
+	switch metadata.SourceKind {
+	case "api", "web", "cli", "mcp", "mobile", "ai_device", "import", "other":
+	default:
+		return nil, fmt.Errorf("mem_put: unsupported source_metadata.source_kind %q", metadata.SourceKind)
+	}
+	if sourceName, exists := object["source_name"]; exists {
+		metadata.SourceName, typeOK = sourceName.(string)
+		if !typeOK {
+			return nil, fmt.Errorf("mem_put: source_metadata.source_name must be a string")
+		}
+	}
+	if rawLocation, exists := object["location"]; exists {
+		location, ok := rawLocation.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("mem_put: source_metadata.location must be an object")
+		}
+		for key := range location {
+			switch key {
+			case "lat", "lon", "accuracy_m", "label":
+			default:
+				return nil, fmt.Errorf("mem_put: source_metadata.location contains unsupported field %q", key)
+			}
+		}
+		lat, latOK := numberArg(location["lat"])
+		lon, lonOK := numberArg(location["lon"])
+		if !latOK || !lonOK || lat < -90 || lat > 90 || lon < -180 || lon > 180 {
+			return nil, fmt.Errorf("mem_put: source_metadata.location requires valid lat (-90..90) and lon (-180..180)")
+		}
+		result := &apiclient.FileSourceLocation{Lat: lat, Lon: lon}
+		if rawAccuracy, exists := location["accuracy_m"]; exists {
+			accuracy, ok := numberArg(rawAccuracy)
+			if !ok || math.IsNaN(accuracy) || math.IsInf(accuracy, 0) || accuracy < 0 {
+				return nil, fmt.Errorf("mem_put: source_metadata.location.accuracy_m must be non-negative")
+			}
+			result.AccuracyM = &accuracy
+		}
+		if rawLabel, exists := location["label"]; exists {
+			result.Label, typeOK = rawLabel.(string)
+			if !typeOK {
+				return nil, fmt.Errorf("mem_put: source_metadata.location.label must be a string")
+			}
+		}
+		metadata.Location = result
+	}
+	return metadata, nil
+}
+
+func numberArg(value any) (float64, bool) {
+	switch number := value.(type) {
+	case float64:
+		return number, !math.IsNaN(number) && !math.IsInf(number, 0)
+	case float32:
+		result := float64(number)
+		return result, !math.IsNaN(result) && !math.IsInf(result, 0)
+	case int:
+		return float64(number), true
+	case int64:
+		return float64(number), true
+	default:
+		return 0, false
+	}
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }

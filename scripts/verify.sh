@@ -4,7 +4,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-unit}"
-EXPECTED_MIGRATION_HEAD=14
+EXPECTED_MIGRATION_HEAD=15
 MIGRATION_ROLLBACK_TARGET=11
 CONTROL_TEST_DB=""
 OWNED_TEST_DATABASE=""
@@ -66,6 +66,7 @@ run_race() {
       ./internal/workspacelock \
       ./internal/workspacebundle \
       ./internal/workspacetransfer \
+      ./internal/indexer \
       ./internal/relator \
       ./internal/api \
       ./internal/apiclient \
@@ -99,6 +100,8 @@ run_web() {
     npm run lint
     npm run build
   )
+  log "Web file-enrichment acceptance"
+  (cd "${REPO_ROOT}/web" && npm run test:enrichment)
   log "Web memory acceptance"
   (cd "${REPO_ROOT}/web" && npm run test:memory)
   log "Web managed-embedding status mapping"
@@ -169,7 +172,7 @@ assert_migration_version() {
 
 run_migration_round_trip() {
   require_command go
-  log "Migration validation and 0012/0013/0014 rollback round trip"
+  log "Migration validation and 0012/0013/0014/0015 rollback round trip"
   (
     cd "${REPO_ROOT}/server"
     go run github.com/pressly/goose/v3/cmd/goose@v3.22.1 \
@@ -179,6 +182,7 @@ run_migration_round_trip() {
   )
   assert_migration_version "$EXPECTED_MIGRATION_HEAD"
   MEM_TEST_TARGET_DB="$MEM_TEST_DB" testdb assert-state up
+  MEM_TEST_TARGET_DB="$MEM_TEST_DB" testdb seed-file-enrichment
   (
     cd "${REPO_ROOT}/server"
     go run github.com/pressly/goose/v3/cmd/goose@v3.22.1 \
@@ -187,6 +191,8 @@ run_migration_round_trip() {
   )
   assert_migration_version "$MIGRATION_ROLLBACK_TARGET"
   MEM_TEST_TARGET_DB="$MEM_TEST_DB" testdb assert-state down
+  MEM_TEST_TARGET_DB="$MEM_TEST_DB" testdb assert-file-preserved down
+  MEM_TEST_TARGET_DB="$MEM_TEST_DB" testdb seed-unsafe-derived-text
   (
     cd "${REPO_ROOT}/server"
     go run github.com/pressly/goose/v3/cmd/goose@v3.22.1 \
@@ -194,6 +200,8 @@ run_migration_round_trip() {
   )
   assert_migration_version "$EXPECTED_MIGRATION_HEAD"
   MEM_TEST_TARGET_DB="$MEM_TEST_DB" testdb assert-state up
+  MEM_TEST_TARGET_DB="$MEM_TEST_DB" testdb assert-file-preserved up
+  MEM_TEST_TARGET_DB="$MEM_TEST_DB" testdb assert-unsafe-derived-text-scrubbed
 }
 
 run_migrations_up() {
@@ -218,6 +226,8 @@ run_postgres_tests() {
     TestMemoryPathLifecycleIntegration
     TestWorkspacePathLockingIntegration
     TestFilePathLockingIntegration
+    TestAnnotationDecisionIntegration
+    TestIndexerEnrichmentIntegration
     TestRecomputePerson
     TestManagedEmbeddingEntitlementPostgres
     TestManagedSearchReplayPostgres
@@ -232,13 +242,14 @@ run_postgres_tests() {
     MEM_TEST_DB="$MEM_TEST_DB" go test \
       ${race_flag:+"$race_flag"} \
       -v -count=1 -p 1 -timeout 20m \
-      -run '^(TestMemoryPostgres|TestHandoffPostgres|TestWorkspaceTransferPostgres|TestHandoffCrossAgentHTTPIntegration|TestMemoryPathLifecycleIntegration|TestWorkspacePathLockingIntegration|TestFilePathLockingIntegration|TestRecomputePerson|TestManagedEmbeddingEntitlementPostgres|TestManagedSearchReplayPostgres|TestManagedEmbeddingHTTPAuthorizationPostgres)$' \
+      -run '^(TestMemoryPostgres|TestHandoffPostgres|TestWorkspaceTransferPostgres|TestHandoffCrossAgentHTTPIntegration|TestMemoryPathLifecycleIntegration|TestWorkspacePathLockingIntegration|TestFilePathLockingIntegration|TestAnnotationDecisionIntegration|TestIndexerEnrichmentIntegration|TestRecomputePerson|TestManagedEmbeddingEntitlementPostgres|TestManagedSearchReplayPostgres|TestManagedEmbeddingHTTPAuthorizationPostgres)$' \
       ./internal/memory \
       ./internal/handoff \
       ./internal/workspacetransfer \
       ./internal/api \
       ./internal/folder \
       ./internal/file \
+      ./internal/indexer \
       ./internal/relator \
       ./internal/entitlement \
       ./internal/search

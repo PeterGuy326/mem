@@ -6,6 +6,8 @@ import type {
   AgentMemoryRecord,
   AgentMemorySummary,
   Capabilities,
+  FileAnnotationDecision,
+  FileSourceMetadata,
   MemFile,
   IndexStatus,
   MemoryEvent,
@@ -31,6 +33,36 @@ import {
 import { WORKSPACE_BUNDLE_MEDIA_TYPE } from '@/lib/workspace-transfer';
 
 const BASE = '/v1';
+const EMPTY_ENRICHMENT_FILE_ID = 'empty-enrichment-e2e';
+const OFFLINE_ENRICHMENT_FILE_ID = 'offline-enrichment-e2e';
+const EMPTY_ENRICHMENT_FILE: MemFile = {
+  id: EMPTY_ENRICHMENT_FILE_ID,
+  user_id: 'user-1',
+  name: 'empty-enrichment.txt',
+  path: '/empty-enrichment.txt',
+  size: 20,
+  sha256: 'e'.repeat(64),
+  mime: 'text/plain',
+  storage_key: 's3://mem/mock/empty-enrichment',
+  summary: null,
+  caption: null,
+  tags: [],
+  user_tags: [],
+  timeline_at: '2026-07-29T08:00:00Z',
+  geo: null,
+  source_metadata: { source_kind: 'web' },
+  processor_metadata: { processor: 'text', status: 'ok' },
+  annotations: [],
+  annotations_truncated: false,
+  index_status: 'done',
+  created_at: '2026-07-29T08:00:00Z',
+  updated_at: '2026-07-29T08:00:00Z',
+  kind: 'text',
+  preview_url: null,
+  thumbnail_url: null,
+  download_url: null,
+  entities: [],
+};
 
 function jitter(min = 120, max = 320) {
   return delay(min + Math.random() * (max - min));
@@ -44,6 +76,149 @@ function inferKind(mime: string, name: string): MemFile['kind'] {
   if (mime.startsWith('text/') || /\.(md|txt|json|log|ya?ml)$/i.test(name)) return 'text';
   if (/\.(docx?|xlsx?|pptx?)$/i.test(name)) return 'doc';
   return 'other';
+}
+
+const MOCK_SOURCE_KINDS = new Set([
+  'api',
+  'web',
+  'cli',
+  'mcp',
+  'mobile',
+  'ai_device',
+  'import',
+  'other',
+]);
+const MOCK_SOURCE_KEYS = new Set(['captured_at', 'location', 'source_kind', 'source_name']);
+const MOCK_LOCATION_KEYS = new Set(['lat', 'lon', 'accuracy_m', 'label']);
+
+type SourceMetadataParseResult =
+  | { metadata: FileSourceMetadata; error?: never }
+  | { metadata?: never; error: string };
+
+function parseMockSourceMetadata(raw: FormDataEntryValue | null): SourceMetadataParseResult {
+  if (raw === null) return { metadata: {} };
+  if (typeof raw !== 'string') return { error: 'source_metadata must be a JSON object' };
+  if (new TextEncoder().encode(raw).byteLength > 4 * 1024) {
+    return { error: 'source_metadata exceeds 4096 bytes' };
+  }
+  if (raw.trim() === '') return { metadata: {} };
+
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return { error: 'source_metadata must be valid JSON' };
+  }
+  if (!isPlainRecord(value)) return { error: 'source_metadata must be a JSON object' };
+  if (Object.keys(value).some((key) => !MOCK_SOURCE_KEYS.has(key))) {
+    return { error: 'source_metadata contains an unknown field' };
+  }
+  if (Object.keys(value).some((key) => value[key] === null)) {
+    return { error: 'source_metadata fields must not be null' };
+  }
+
+  const capturedAt = value.captured_at;
+  if (capturedAt !== undefined) {
+    if (
+      typeof capturedAt !== 'string' ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(
+        capturedAt,
+      ) ||
+      !Number.isFinite(Date.parse(capturedAt))
+    ) {
+      return { error: 'captured_at must be RFC3339 with an explicit timezone' };
+    }
+  }
+
+  const sourceKind = value.source_kind;
+  if (
+    sourceKind !== undefined &&
+    (typeof sourceKind !== 'string' || (sourceKind !== '' && !MOCK_SOURCE_KINDS.has(sourceKind)))
+  ) {
+    return { error: 'source_kind is not supported' };
+  }
+  if (
+    value.source_name !== undefined &&
+    !validMockMetadataText(value.source_name)
+  ) {
+    return { error: 'source_name must be bounded text without control characters' };
+  }
+
+  const location = value.location;
+  if (location !== undefined) {
+    if (!isPlainRecord(location)) return { error: 'location must be a JSON object' };
+    if (Object.keys(location).some((key) => !MOCK_LOCATION_KEYS.has(key))) {
+      return { error: 'location contains an unknown field' };
+    }
+    if (Object.keys(location).some((key) => location[key] === null)) {
+      return { error: 'location fields must not be null' };
+    }
+    if (
+      typeof location.lat !== 'number' ||
+      !Number.isFinite(location.lat) ||
+      location.lat < -90 ||
+      location.lat > 90
+    ) {
+      return { error: 'location.lat must be between -90 and 90' };
+    }
+    if (
+      typeof location.lon !== 'number' ||
+      !Number.isFinite(location.lon) ||
+      location.lon < -180 ||
+      location.lon > 180
+    ) {
+      return { error: 'location.lon must be between -180 and 180' };
+    }
+    if (
+      location.accuracy_m !== undefined &&
+      (typeof location.accuracy_m !== 'number' ||
+        !Number.isFinite(location.accuracy_m) ||
+        location.accuracy_m < 0 ||
+        location.accuracy_m > 40_100_000)
+    ) {
+      return { error: 'location.accuracy_m is out of range' };
+    }
+    if (
+      location.label !== undefined &&
+      !validMockMetadataText(location.label)
+    ) {
+      return { error: 'location.label must be bounded text without control characters' };
+    }
+  }
+
+  const metadata: FileSourceMetadata = {};
+  if (typeof capturedAt === 'string') metadata.captured_at = capturedAt;
+  if (typeof sourceKind === 'string' && sourceKind !== '') {
+    metadata.source_kind = sourceKind as FileSourceMetadata['source_kind'];
+  }
+  if (typeof value.source_name === 'string' && value.source_name !== '') {
+    metadata.source_name = value.source_name;
+  }
+  if (isPlainRecord(location)) {
+    metadata.location = {
+      lat: location.lat as number,
+      lon: location.lon as number,
+      ...(typeof location.accuracy_m === 'number'
+        ? { accuracy_m: location.accuracy_m }
+        : {}),
+      ...(typeof location.label === 'string' && location.label !== ''
+        ? { label: location.label }
+        : {}),
+    };
+  }
+  return { metadata };
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function validMockMetadataText(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    Array.from(value).length <= 512 &&
+    !/[\p{Cc}\p{Cf}\p{Cs}\p{Default_Ignorable_Code_Point}]/u.test(value)
+  );
 }
 
 function listByPath(path: string): MemFile[] {
@@ -823,6 +998,11 @@ export const handlers = [
   // ----- Authenticated file bytes (used by thumbnails and detail previews) -----
   http.get(`${BASE}/files/:id/content`, async ({ params }) => {
     await jitter(30, 80);
+    if (String(params.id) === EMPTY_ENRICHMENT_FILE_ID) {
+      return new HttpResponse('No AI suggestions were produced.', {
+        headers: { 'Content-Type': 'text/plain' },
+      });
+    }
     const file = findFile(String(params.id));
     if (!file) {
       return HttpResponse.json({ error: 'not_found', hint: 'no such file' }, { status: 404 });
@@ -849,6 +1029,12 @@ export const handlers = [
   // ----- Files: detail -----
   http.get(`${BASE}/files/:id`, async ({ params }) => {
     await jitter();
+    if (String(params.id) === OFFLINE_ENRICHMENT_FILE_ID) {
+      return HttpResponse.error();
+    }
+    if (String(params.id) === EMPTY_ENRICHMENT_FILE_ID) {
+      return HttpResponse.json(EMPTY_ENRICHMENT_FILE);
+    }
     const file = findFile(String(params.id));
     if (!file) {
       return HttpResponse.json(
@@ -857,6 +1043,106 @@ export const handlers = [
       );
     }
     return HttpResponse.json(file);
+  }),
+
+  // ----- File annotation decisions (optimistic, retry-safe) -----
+  http.put(`${BASE}/files/:fileID/annotations/:annotationID`, async ({ params, request }) => {
+    await jitter(50, 120);
+    if (!mockPermissions(request).write) return mockForbidden();
+
+    const file = findFile(String(params.fileID));
+    const annotation = file?.annotations.find(
+      (candidate) => candidate.id === String(params.annotationID),
+    );
+    if (!file || !annotation) {
+      return HttpResponse.json(
+        { error: 'not_found', hint: 'no such file annotation' },
+        { status: 404 },
+      );
+    }
+
+    const body = (await request.json().catch(() => ({}))) as {
+      decision?: FileAnnotationDecision;
+      expected_version?: number;
+    };
+    if (body.decision !== 'accepted' && body.decision !== 'rejected') {
+      return HttpResponse.json(
+        { error: 'bad_decision', hint: 'decision must be accepted or rejected' },
+        { status: 400 },
+      );
+    }
+    if (!Number.isInteger(body.expected_version) || (body.expected_version ?? 0) <= 0) {
+      return HttpResponse.json(
+        {
+          error: 'bad_expected_version',
+          hint: 'expected_version must be a positive integer',
+        },
+        { status: 400 },
+      );
+    }
+
+    // Replaying the same terminal decision succeeds even with the original
+    // expected_version. An opposite terminal decision is a stable conflict.
+    if (annotation.status === body.decision) {
+      return HttpResponse.json({ annotation, replayed: true });
+    }
+    if (annotation.status !== 'pending') {
+      return HttpResponse.json(
+        {
+          error: 'annotation_decision_conflict',
+          hint: 'annotation already has a different terminal decision',
+        },
+        { status: 409 },
+      );
+    }
+    if (annotation.state_version !== body.expected_version) {
+      return HttpResponse.json(
+        {
+          error: 'annotation_version_conflict',
+          hint: 'annotation changed; reload it and retry with the current state_version',
+        },
+        { status: 409 },
+      );
+    }
+
+    const now = new Date().toISOString();
+    annotation.status = body.decision;
+    annotation.state_version += 1;
+    annotation.decided_by_user_id = 'user-1';
+    annotation.decided_at = now;
+    annotation.updated_at = now;
+
+    const acceptedTags = file.annotations
+      .filter((candidate) => candidate.kind === 'tag' && candidate.status === 'accepted')
+      .map((candidate) => candidate.value_text);
+    file.tags = Array.from(new Set([...file.user_tags, ...acceptedTags]));
+
+    const acceptedDescription = file.annotations
+      .filter((candidate) => candidate.kind === 'description' && candidate.status === 'accepted')
+      .sort((a, b) => (a.decided_at ?? a.updated_at).localeCompare(b.decided_at ?? b.updated_at))
+      .at(-1);
+    if (acceptedDescription) {
+      file.summary = acceptedDescription.value_text;
+    } else if (
+      file.summary !== null &&
+      file.annotations.some(
+        (candidate) =>
+          candidate.kind === 'description' &&
+          (candidate.status === 'rejected' || candidate.status === 'superseded') &&
+          candidate.value_text === file.summary,
+      )
+    ) {
+      file.summary = null;
+    }
+    const pendingDescription = file.annotations
+      .filter((candidate) => candidate.kind === 'description' && candidate.status === 'pending')
+      .sort((a, b) => a.updated_at.localeCompare(b.updated_at))
+      .at(-1);
+    file.caption =
+      acceptedDescription?.value_text ?? pendingDescription?.value_text ?? null;
+    file.updated_at = now;
+
+    return HttpResponse.json({ annotation, replayed: false });
   }),
 
   // ----- Files: related (memd: { related: [flat hit] }) -----
@@ -910,6 +1196,7 @@ export const handlers = [
     const file = form.get('file');
     const nameOverride = String(form.get('name') ?? '');
     const targetPath = normalizePath(String(form.get('path') ?? ROOT_PATH));
+    const rawSourceMetadata = form.get('source_metadata');
 
     if (!(file instanceof File)) {
       return HttpResponse.json(
@@ -917,6 +1204,15 @@ export const handlers = [
         { status: 400 },
       );
     }
+
+    const sourceMetadataResult = parseMockSourceMetadata(rawSourceMetadata);
+    if ('error' in sourceMetadataResult) {
+      return HttpResponse.json(
+        { error: 'bad_source_metadata', hint: sourceMetadataResult.error },
+        { status: 400 },
+      );
+    }
+    const sourceMetadata = sourceMetadataResult.metadata;
 
     const name = nameOverride || file.name;
     const mime = file.type || 'application/octet-stream';
@@ -939,8 +1235,12 @@ export const handlers = [
       summary: null,
       caption: null,
       tags: [],
+      user_tags: [],
       timeline_at: now,
       geo: null,
+      source_metadata: sourceMetadata,
+      processor_metadata: {},
+      annotations: [],
       index_status: status,
       created_at: now,
       updated_at: now,
@@ -958,16 +1258,50 @@ export const handlers = [
       if (!f) return;
       f.index_status = 'done';
       if (f.kind === 'image') {
-        f.caption = '刚上传的照片 — AI 已生成 caption 占位';
-        f.tags = ['新上传'];
+        f.caption = '刚上传的照片 — AI 原始观察占位';
       } else {
-        f.summary = '刚上传的文件 — AI 摘要占位';
-        f.tags = ['新上传'];
+        f.caption = '刚上传的文件 — AI 原始观察占位';
       }
+      const annotationNow = new Date().toISOString();
+      f.processor_metadata = { processor: f.kind, status: 'ok' };
+      f.annotations = [
+        {
+          id: `annotation-${id}-description`,
+          file_id: id,
+          stable_key: `description:${id}:mock`,
+          kind: 'description',
+          value_text: '刚上传的文件 — AI 描述建议',
+          confidence: 0.82,
+          source: 'model',
+          provider: 'mock-provider',
+          processor: f.kind,
+          analysis_version: 'mock-enrichment-v1',
+          status: 'pending',
+          state_version: 1,
+          created_at: annotationNow,
+          updated_at: annotationNow,
+        },
+        {
+          id: `annotation-${id}-tag`,
+          file_id: id,
+          stable_key: `tag:${id}:new-upload`,
+          kind: 'tag',
+          value_text: '新上传',
+          confidence: 0.76,
+          source: 'model',
+          provider: 'mock-provider',
+          processor: f.kind,
+          analysis_version: 'mock-enrichment-v1',
+          status: 'pending',
+          state_version: 1,
+          created_at: annotationNow,
+          updated_at: annotationNow,
+        },
+      ];
       f.updated_at = new Date().toISOString();
     }, 4000);
 
-    return HttpResponse.json(created, { status: 201 });
+    return HttpResponse.json({ file: created, deduped: false }, { status: 201 });
   }),
 
   // ----- Folders: create -----

@@ -11,14 +11,19 @@ import pytest
 from PIL import Image
 
 from mem_worker.processors.base import FileRef
-from mem_worker.processors.image import ImageProcessor
+from mem_worker.processors.image import (
+    ImageProcessor,
+    _extract_exif,
+    _parse_exif_dt,
+    _parse_gps,
+)
 from mem_worker.processors.text import TextProcessor, _chunk_text, _decode_text
-from mem_worker.providers.base import Message
-
+from mem_worker.providers.base import Message, ProviderError
 
 # ---------------------------------------------------------------------------
 # Fakes
 # ---------------------------------------------------------------------------
+
 
 class FakeEmbedder:
     name = "fake:embed"
@@ -71,16 +76,17 @@ class FakeVLM:
 # Text utilities
 # ---------------------------------------------------------------------------
 
+
 def test_decode_text_utf8():
-    assert _decode_text("héllo".encode("utf-8")) == "héllo"
+    assert _decode_text("héllo".encode()) == "héllo"
 
 
 def test_decode_text_with_bom():
-    assert _decode_text("﻿hi".encode("utf-8")) == "hi"
+    assert _decode_text("﻿hi".encode()) == "hi"
 
 
 def test_decode_text_latin1_fallback():
-    raw = bytes([0xe9])                              # 'é' in latin-1
+    raw = bytes([0xE9])  # 'é' in latin-1
     out = _decode_text(raw)
     assert out  # never raises, never empty
 
@@ -96,7 +102,7 @@ def test_chunk_text_basic():
 
 
 def test_chunk_text_yields_tail_when_needed():
-    text = "abcdefgh"   # 8 chars
+    text = "abcdefgh"  # 8 chars
     chunks = list(_chunk_text(text, size=5, overlap=1))
     # step=4: i=0 -> "abcde" (reaches 5); i=4 -> "efgh" (reaches 8, returns).
     assert chunks == ["abcde", "efgh"]
@@ -119,15 +125,20 @@ def test_chunk_text_empty_string():
 # TextProcessor
 # ---------------------------------------------------------------------------
 
+
 def test_text_processor_chunks_and_embeds(monkeypatch):
     embedder = FakeEmbedder()
     llm = FakeLLM(reply="A short summary.")
     proc = TextProcessor(embedder=embedder, llm=llm)
 
-    body = ("hello world. " * 200).encode("utf-8")    # > 200 chars triggers summary
+    body = ("hello world. " * 200).encode("utf-8")  # > 200 chars triggers summary
     fref = FileRef(
-        file_id="f1", storage_uri="file:///x.txt", mime="text/plain",
-        sha256="", user_id="u", data=body,
+        file_id="f1",
+        storage_uri="file:///x.txt",
+        mime="text/plain",
+        sha256="",
+        user_id="u",
+        data=body,
     )
     r = proc.process(fref)
     assert r.processor == "text"
@@ -143,11 +154,16 @@ def test_text_processor_chunks_and_embeds(monkeypatch):
     assert embedder.calls[0] == [row.chunk_text for row in r.embeddings["text"].rows]
 
 
-def test_text_processor_default_path_does_not_call_general_llm():
+def test_text_processor_can_disable_default_annotation_llm(env):
+    env(MEM_DEFAULT_LLM="")
     proc = TextProcessor(embedder=FakeEmbedder())
     fref = FileRef(
-        file_id="f1", storage_uri="file:///x.txt", mime="text/plain",
-        sha256="", user_id="u", data=("long source text. " * 100).encode("utf-8"),
+        file_id="f1",
+        storage_uri="file:///x.txt",
+        mime="text/plain",
+        sha256="",
+        user_id="u",
+        data=("long source text. " * 100).encode("utf-8"),
     )
     r = proc.process(fref)
     assert "text" in r.embeddings
@@ -160,8 +176,12 @@ def test_text_processor_short_doc_skips_summary():
     llm = FakeLLM()
     proc = TextProcessor(embedder=embedder, llm=llm)
     fref = FileRef(
-        file_id="f1", storage_uri="file:///x.txt", mime="text/plain",
-        sha256="", user_id="u", data=b"tiny",
+        file_id="f1",
+        storage_uri="file:///x.txt",
+        mime="text/plain",
+        sha256="",
+        user_id="u",
+        data=b"tiny",
     )
     r = proc.process(fref)
     assert r.summary is None
@@ -171,8 +191,12 @@ def test_text_processor_short_doc_skips_summary():
 def test_text_processor_empty_payload():
     proc = TextProcessor(embedder=FakeEmbedder(), llm=FakeLLM())
     fref = FileRef(
-        file_id="f1", storage_uri="file:///x.txt", mime="text/plain",
-        sha256="", user_id="u", data=b"   \n\n  ",
+        file_id="f1",
+        storage_uri="file:///x.txt",
+        mime="text/plain",
+        sha256="",
+        user_id="u",
+        data=b"   \n\n  ",
     )
     r = proc.process(fref)
     assert r.embeddings == {}
@@ -182,6 +206,7 @@ def test_text_processor_empty_payload():
 # ---------------------------------------------------------------------------
 # ImageProcessor
 # ---------------------------------------------------------------------------
+
 
 def _png_bytes() -> bytes:
     """Produce a tiny valid PNG."""
@@ -197,8 +222,12 @@ def test_image_processor_runs_vlm_and_embeds():
     proc = ImageProcessor(vlm=vlm, embedder=embedder)
 
     fref = FileRef(
-        file_id="img1", storage_uri="file:///a.png", mime="image/png",
-        sha256="", user_id="u", data=_png_bytes(),
+        file_id="img1",
+        storage_uri="file:///a.png",
+        mime="image/png",
+        sha256="",
+        user_id="u",
+        data=_png_bytes(),
     )
     r = proc.process(fref)
     assert r.processor == "image"
@@ -245,8 +274,12 @@ def test_image_processor_provider_probe_stops_after_caption():
 def test_image_processor_handles_undecodable_bytes():
     proc = ImageProcessor(vlm=FakeVLM(), embedder=FakeEmbedder())
     fref = FileRef(
-        file_id="img1", storage_uri="file:///a.png", mime="image/png",
-        sha256="", user_id="u", data=b"NOT-A-PNG",
+        file_id="img1",
+        storage_uri="file:///a.png",
+        mime="image/png",
+        sha256="",
+        user_id="u",
+        data=b"NOT-A-PNG",
     )
     r = proc.process(fref)
     assert r.caption is None
@@ -256,15 +289,21 @@ def test_image_processor_handles_undecodable_bytes():
 def test_image_processor_handles_vlm_failure():
     class BoomVLM:
         name = "boom"
+
         def caption(self, image, **kw):
             raise RuntimeError("ollama down")
+
         def vqa(self, image, question, **kw):
             raise RuntimeError
 
     proc = ImageProcessor(vlm=BoomVLM(), embedder=FakeEmbedder())
     fref = FileRef(
-        file_id="img1", storage_uri="file:///a.png", mime="image/png",
-        sha256="", user_id="u", data=_png_bytes(),
+        file_id="img1",
+        storage_uri="file:///a.png",
+        mime="image/png",
+        sha256="",
+        user_id="u",
+        data=_png_bytes(),
     )
     r = proc.process(fref)
     # Image still decoded, but caption empty + embedding not produced.
@@ -274,12 +313,112 @@ def test_image_processor_handles_vlm_failure():
     assert "visual" not in r.embeddings
 
 
+def test_parse_exif_datetime_preserves_explicit_offset():
+    parsed = _parse_exif_dt("2026:07:29 08:15:30", "+08:00")
+
+    assert parsed is not None
+    assert parsed.isoformat() == "2026-07-29T08:15:30+08:00"
+
+
+def test_parse_exif_datetime_without_offset_remains_naive():
+    parsed = _parse_exif_dt("2026:07:29 08:15:30")
+
+    assert parsed is not None
+    assert parsed.tzinfo is None
+
+
+def test_extract_exif_reads_real_offset_and_gps_ifd():
+    image = Image.new("RGB", (2, 2), "red")
+    exif = Image.Exif()
+    exif[36867] = "2026:07:29 08:15:30"  # DateTimeOriginal
+    exif[36881] = "+08:00"  # OffsetTimeOriginal
+    exif[34853] = {  # GPSInfo
+        1: "N",
+        2: (31.0, 13.0, 49.44),
+        3: "E",
+        4: (121.0, 28.0, 25.32),
+    }
+    encoded = io.BytesIO()
+    image.save(encoded, format="JPEG", exif=exif)
+    decoded = Image.open(io.BytesIO(encoded.getvalue()))
+    decoded.load()
+
+    metadata = _extract_exif(decoded)
+
+    assert metadata["timeline_at"] == "2026-07-29T08:15:30+08:00"
+    assert metadata["gps"]["lat"] == pytest.approx(31.2304)
+    assert metadata["gps"]["lng"] == pytest.approx(121.4737)
+
+
+@pytest.mark.parametrize(
+    ("missing_key", "replacement"),
+    [
+        (1, None),
+        (3, None),
+        (1, "Q"),
+        (3, "Q"),
+    ],
+    ids=[
+        "missing-latitude-ref",
+        "missing-longitude-ref",
+        "invalid-latitude-ref",
+        "invalid-longitude-ref",
+    ],
+)
+def test_parse_gps_requires_valid_hemisphere_refs(missing_key, replacement):
+    gps = {
+        1: "N",
+        2: (31.0, 13.0, 49.44),
+        3: "E",
+        4: (121.0, 28.0, 25.32),
+    }
+    if replacement is None:
+        del gps[missing_key]
+    else:
+        gps[missing_key] = replacement
+
+    assert _parse_gps(gps) == (None, None)
+
+
+@pytest.mark.parametrize(
+    ("component_key", "components"),
+    [
+        (2, (31.0, 60.0, 0.0)),
+        (2, (31.0, 0.0, 60.0)),
+        (4, (121.0, -1.0, 0.0)),
+        (4, (121.0, 0.0, float("inf"))),
+        (2, (91.0, 0.0, 0.0)),
+        (4, (180.0, 0.0, 0.1)),
+    ],
+    ids=[
+        "latitude-minutes",
+        "latitude-seconds",
+        "longitude-negative-minutes",
+        "longitude-non-finite-seconds",
+        "latitude-degrees",
+        "longitude-boundary-components",
+    ],
+)
+def test_parse_gps_rejects_invalid_dms_components(component_key, components):
+    gps = {
+        1: "N",
+        2: (31.0, 13.0, 49.44),
+        3: "E",
+        4: (121.0, 28.0, 25.32),
+    }
+    gps[component_key] = components
+
+    assert _parse_gps(gps) == (None, None)
+
+
 # ---------------------------------------------------------------------------
 # PDFProcessor
 # ---------------------------------------------------------------------------
 
+
 def _pdf_bytes(lines):
     """Build a minimal valid single-page PDF with an extractable text layer."""
+
     def esc(s):
         return s.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
 
@@ -287,7 +426,7 @@ def _pdf_bytes(lines):
     for i, ln in enumerate(lines):
         if i:
             parts.append("T*")
-        parts.append("(%s) Tj" % esc(ln))
+        parts.append(f"({esc(ln)}) Tj")
     parts.append("ET")
     stream = "\n".join(parts).encode("latin-1")
 
@@ -309,7 +448,9 @@ def _pdf_bytes(lines):
     for off in offsets:
         out += b"%010d 00000 n \n" % off
     out += b"trailer\n<</Size %d /Root 1 0 R>>\nstartxref\n%d\n%%%%EOF\n" % (
-        len(objs) + 1, xref_pos)
+        len(objs) + 1,
+        xref_pos,
+    )
     return bytes(out)
 
 
@@ -325,8 +466,12 @@ def test_pdf_processor_extracts_text_and_runs_text_pipeline():
     emb, llm = FakeEmbedder(), FakeLLM(reply="A lease summary.")
     proc = PDFProcessor(embedder=emb, llm=llm)
     fref = FileRef(
-        file_id="pdf1", storage_uri="file:///lease.pdf", mime="application/pdf",
-        sha256="", user_id="u", data=_pdf_bytes(lines),
+        file_id="pdf1",
+        storage_uri="file:///lease.pdf",
+        mime="application/pdf",
+        sha256="",
+        user_id="u",
+        data=_pdf_bytes(lines),
     )
     r = proc.process(fref)
 
@@ -345,8 +490,12 @@ def test_pdf_processor_malformed_is_non_fatal():
 
     proc = PDFProcessor(embedder=FakeEmbedder(), llm=FakeLLM())
     fref = FileRef(
-        file_id="pdf2", storage_uri="file:///x.pdf", mime="application/pdf",
-        sha256="", user_id="u", data=b"%PDF-1.4 not really a pdf",
+        file_id="pdf2",
+        storage_uri="file:///x.pdf",
+        mime="application/pdf",
+        sha256="",
+        user_id="u",
+        data=b"%PDF-1.4 not really a pdf",
     )
     r = proc.process(fref)
     assert r.processor == "pdf"
@@ -360,18 +509,25 @@ def test_pdf_processor_malformed_is_non_fatal():
 # AudioProcessor
 # ---------------------------------------------------------------------------
 
+
 class FakeASR:
     name = "fake:asr"
 
-    def __init__(self, text="hello world", language="en", duration=1.5, boom=False):
+    def __init__(
+        self,
+        text="hello world",
+        language="en",
+        duration=1.5,
+        error: Exception | None = None,
+    ):
         from mem_worker.providers.base import Transcription
+
         self._t = Transcription(text=text, language=language, duration=duration)
-        self._boom = boom
+        self._error = error
 
     def transcribe(self, audio, **kw):
-        if self._boom:
-            from mem_worker.providers.base import ProviderError
-            raise ProviderError("asr down")
+        if self._error is not None:
+            raise self._error
         return self._t
 
 
@@ -389,8 +545,12 @@ def test_audio_processor_transcribes_and_runs_text_pipeline():
     emb, llm = FakeEmbedder(), FakeLLM(reply="A patriotic call to service.")
     proc = AudioProcessor(asr=asr, embedder=emb, llm=llm)
     fref = FileRef(
-        file_id="aud1", storage_uri="file:///jfk.flac", mime="audio/flac",
-        sha256="", user_id="u", data=b"FAKE-AUDIO-BYTES",
+        file_id="aud1",
+        storage_uri="file:///jfk.flac",
+        mime="audio/flac",
+        sha256="",
+        user_id="u",
+        data=b"FAKE-AUDIO-BYTES",
     )
     r = proc.process(fref)
 
@@ -405,17 +565,43 @@ def test_audio_processor_transcribes_and_runs_text_pipeline():
     assert "country" in emb.calls[0][0]
 
 
-def test_audio_processor_asr_failure_is_non_fatal():
+@pytest.mark.parametrize(
+    "failure",
+    [
+        pytest.param(
+            ProviderError("private ASR upstream response"),
+            id="provider-error",
+        ),
+        pytest.param(
+            NotImplementedError("private unsupported-ASR detail"),
+            id="not-implemented",
+        ),
+        pytest.param(
+            RuntimeError("private unexpected ASR response"),
+            id="unexpected-error",
+        ),
+    ],
+)
+def test_audio_processor_asr_failure_is_non_fatal(failure: Exception):
     from mem_worker.processors.audio import AudioProcessor
 
-    proc = AudioProcessor(asr=FakeASR(boom=True), embedder=FakeEmbedder(), llm=FakeLLM())
+    proc = AudioProcessor(
+        asr=FakeASR(error=failure),
+        embedder=FakeEmbedder(),
+        llm=FakeLLM(),
+    )
     fref = FileRef(
-        file_id="aud2", storage_uri="file:///x.mp3", mime="audio/mpeg",
-        sha256="", user_id="u", data=b"\xff\xfb",
+        file_id="aud2",
+        storage_uri="file:///x.mp3",
+        mime="audio/mpeg",
+        sha256="",
+        user_id="u",
+        data=b"\xff\xfb",
     )
     r = proc.process(fref)
     assert r.processor == "audio"
-    assert "asr_error" in r.metadata
+    assert r.metadata["asr_error"] == "provider_unavailable"
+    assert str(failure) not in repr(r.metadata)
     assert "text" not in r.embeddings
 
 
@@ -424,8 +610,12 @@ def test_audio_processor_empty_transcript_marker():
 
     proc = AudioProcessor(asr=FakeASR(text="   "), embedder=FakeEmbedder(), llm=FakeLLM())
     fref = FileRef(
-        file_id="aud3", storage_uri="file:///silent.wav", mime="audio/wav",
-        sha256="", user_id="u", data=b"RIFF....",
+        file_id="aud3",
+        storage_uri="file:///silent.wav",
+        mime="audio/wav",
+        sha256="",
+        user_id="u",
+        data=b"RIFF....",
     )
     r = proc.process(fref)
     assert r.metadata.get("transcript_empty") is True

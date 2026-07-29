@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, getWorkspaceCacheKey } from '@/lib/api';
+import { api, ApiException, getWorkspaceCacheKey } from '@/lib/api';
 import type {
+  FileAnnotation,
+  FileAnnotationDecision,
   FileKind,
   ListFilesResponse,
   MemFile,
@@ -22,8 +24,8 @@ export const fileKeys = {
 };
 
 export const searchKeys = {
-  query: (params: Record<string, unknown>) =>
-    ['workspace', getWorkspaceCacheKey(), 'search', params] as const,
+  all: () => ['workspace', getWorkspaceCacheKey(), 'search'] as const,
+  query: (params: Record<string, unknown>) => [...searchKeys.all(), params] as const,
 };
 
 /**
@@ -34,9 +36,17 @@ export const searchKeys = {
 function normalizeFile(f: MemFile): MemFile {
   return {
     ...f,
+    summary: f.summary ?? null,
     caption: f.caption ?? null,
+    tags: f.tags ?? [],
+    user_tags: f.user_tags ?? f.tags ?? [],
     timeline_at: f.timeline_at ?? null,
     geo: f.geo ?? null,
+    source_metadata: f.source_metadata ?? {},
+    processor_metadata: f.processor_metadata ?? {},
+    annotations: f.annotations ?? [],
+    annotations_truncated: f.annotations_truncated ?? false,
+    index_status: f.index_status ?? 'pending',
     kind: f.kind ?? mimeToKind(f.mime),
     preview_url: f.preview_url ?? null,
     thumbnail_url: f.thumbnail_url ?? null,
@@ -134,8 +144,13 @@ function makeMemFile(p: {
     summary: p.summary ?? null,
     caption: p.caption ?? null,
     tags: [],
+    user_tags: [],
     timeline_at: p.timeline_at ?? null,
     geo: null,
+    source_metadata: {},
+    processor_metadata: {},
+    annotations: [],
+    annotations_truncated: false,
     index_status: 'done',
     created_at: p.created_at ?? '',
     updated_at: p.created_at ?? '',
@@ -262,6 +277,7 @@ export function useUpload() {
         fd.append('file', file);
         fd.append('name', file.name);
         fd.append('path', path);
+        fd.append('source_metadata', JSON.stringify({ source_kind: 'web' }));
         const res = await api.upload<{ file: MemFile; deduped: boolean }>('/files', fd);
         results.push(normalizeFile(res.file));
       }
@@ -269,6 +285,48 @@ export function useUpload() {
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: fileKeys.all() });
+    },
+  });
+}
+
+export interface DecideFileAnnotationInput {
+  annotationID: string;
+  decision: FileAnnotationDecision;
+  expectedVersion: number;
+}
+
+export interface FileAnnotationDecisionResult {
+  annotation: FileAnnotation;
+  replayed: boolean;
+}
+
+/**
+ * Review a model suggestion through the canonical optimistic-locking API.
+ *
+ * A 409 means another reviewer or retry won the race. Refetch the active file
+ * immediately so the caller can explain the conflict against current state.
+ */
+export function useDecideFileAnnotation(fileID: string) {
+  const qc = useQueryClient();
+  return useMutation<FileAnnotationDecisionResult, ApiException, DecideFileAnnotationInput>({
+    mutationFn: ({ annotationID, decision, expectedVersion }) =>
+      api.put<FileAnnotationDecisionResult>(`/files/${fileID}/annotations/${annotationID}`, {
+        decision,
+        expected_version: expectedVersion,
+      }),
+    onSuccess: async () => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: fileKeys.all() }),
+        qc.invalidateQueries({ queryKey: searchKeys.all() }),
+      ]);
+    },
+    onError: async (error) => {
+      if (error.status === 409) {
+        await Promise.all([
+          qc.invalidateQueries({ queryKey: fileKeys.all() }),
+          qc.invalidateQueries({ queryKey: searchKeys.all() }),
+        ]);
+      }
     },
   });
 }

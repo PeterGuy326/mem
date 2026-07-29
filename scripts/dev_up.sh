@@ -280,6 +280,7 @@ start_worker() {
           OPENAI_API_KEY="${OPENAI_API_KEY:-}" \
           MEM_DEFAULT_EMBEDDING="${MEM_DEFAULT_EMBEDDING:-ollama:nomic-embed-text}" \
           MEM_DEFAULT_VISUAL_EMBEDDING="${MEM_DEFAULT_VISUAL_EMBEDDING:-clip:ViT-B-32}" \
+          MEM_DEFAULT_LLM="${MEM_DEFAULT_LLM-ollama:qwen2.5:7b}" \
           MEM_DEFAULT_VLM="${MEM_DEFAULT_VLM:-ollama:minicpm-v}" \
           MEM_LOG_LEVEL=INFO \
           $SETSID "$py" -m mem_worker.server >"${LOG_DIR}/worker.log" 2>&1 < /dev/null & \

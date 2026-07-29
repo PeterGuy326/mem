@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,9 +20,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/PeterGuy326/mem/server/internal/folder"
+	"github.com/PeterGuy326/mem/server/internal/modeltext"
 	"github.com/PeterGuy326/mem/server/internal/pathx"
 	"github.com/PeterGuy326/mem/server/internal/storage"
 	"github.com/PeterGuy326/mem/server/internal/workspacelock"
@@ -29,22 +32,28 @@ import (
 
 // File mirrors the `files` table.
 type File struct {
-	ID          uuid.UUID  `json:"id"`
-	UserID      uuid.UUID  `json:"user_id"`
-	Name        string     `json:"name"`
-	Path        string     `json:"path"`
-	FolderID    *uuid.UUID `json:"folder_id,omitempty"`
-	Size        int64      `json:"size"`
-	SHA256      string     `json:"sha256"`
-	MIME        string     `json:"mime"`
-	StorageKey  string     `json:"storage_key"`
-	Summary     *string    `json:"summary,omitempty"`
-	Caption     *string    `json:"caption,omitempty"`
-	Tags        []string   `json:"tags"`
-	TimelineAt  *time.Time `json:"timeline_at,omitempty"`
-	IndexStatus string     `json:"index_status"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	ID                   uuid.UUID       `json:"id"`
+	UserID               uuid.UUID       `json:"user_id"`
+	Name                 string          `json:"name"`
+	Path                 string          `json:"path"`
+	FolderID             *uuid.UUID      `json:"folder_id,omitempty"`
+	Size                 int64           `json:"size"`
+	SHA256               string          `json:"sha256"`
+	MIME                 string          `json:"mime"`
+	StorageKey           string          `json:"storage_key"`
+	Summary              *string         `json:"summary,omitempty"`
+	Caption              *string         `json:"caption,omitempty"`
+	Tags                 []string        `json:"tags"`
+	UserTags             []string        `json:"user_tags"`
+	TimelineAt           *time.Time      `json:"timeline_at,omitempty"`
+	Geo                  *Geo            `json:"geo"`
+	SourceMetadata       json.RawMessage `json:"source_metadata"`
+	ProcessorMetadata    json.RawMessage `json:"processor_metadata"`
+	Annotations          []Annotation    `json:"annotations"`
+	AnnotationsTruncated bool            `json:"annotations_truncated,omitempty"`
+	IndexStatus          string          `json:"index_status"`
+	CreatedAt            time.Time       `json:"created_at"`
+	UpdatedAt            time.Time       `json:"updated_at"`
 }
 
 // PutResult is returned from Put — `Deduped` is true when an existing file with
@@ -137,7 +146,15 @@ var ErrNotFound = errors.New("file not found")
 // `targetPath` is the destination folder absolute path (e.g. "/Photos/2012");
 // pass "/" or "" for root. Missing parent folders are auto-created
 // (`mkdir -p`).
-func (s *Service) Put(ctx context.Context, userID uuid.UUID, name, declaredMIME, targetPath string, size int64, tags []string, body io.Reader) (*PutResult, error) {
+func (s *Service) Put(
+	ctx context.Context,
+	userID uuid.UUID,
+	name, declaredMIME, targetPath string,
+	size int64,
+	tags []string,
+	sourceMetadata SourceMetadata,
+	body io.Reader,
+) (*PutResult, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, errors.New("name is required")
@@ -148,6 +165,10 @@ func (s *Service) Put(ctx context.Context, userID uuid.UUID, name, declaredMIME,
 	destPath, err := pathx.Normalize(targetPath)
 	if err != nil {
 		return nil, fmt.Errorf("target path: %w", err)
+	}
+	sourceMetadataJSON, err := sourceMetadata.canonicalJSON()
+	if err != nil {
+		return nil, fmt.Errorf("source metadata: %w", err)
 	}
 
 	// Buffer to temp file? For W1 we keep it simple: hash-then-upload by
@@ -230,27 +251,58 @@ func (s *Service) Put(ctx context.Context, userID uuid.UUID, name, declaredMIME,
 	if tags == nil {
 		tags = []string{}
 	}
+	var (
+		timelineAt *time.Time
+		geoPoint   pgtype.Point
+		geo        *Geo
+	)
+	if sourceMetadata.CapturedAt != nil {
+		capturedAt := *sourceMetadata.CapturedAt
+		timelineAt = &capturedAt
+	}
+	if sourceMetadata.Location != nil {
+		geoPoint = pgtype.Point{
+			P: pgtype.Vec2{
+				X: sourceMetadata.Location.Lon,
+				Y: sourceMetadata.Location.Lat,
+			},
+			Valid: true,
+		}
+		geo = &Geo{
+			Lat: sourceMetadata.Location.Lat,
+			Lon: sourceMetadata.Location.Lon,
+		}
+	}
 	f := &File{
-		ID:          id,
-		UserID:      userID,
-		Name:        name,
-		Path:        destPath,
-		FolderID:    folderID,
-		Size:        written,
-		SHA256:      sum,
-		MIME:        mime,
-		StorageKey:  key,
-		Tags:        tags,
-		IndexStatus: "pending",
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:                id,
+		UserID:            userID,
+		Name:              name,
+		Path:              destPath,
+		FolderID:          folderID,
+		Size:              written,
+		SHA256:            sum,
+		MIME:              mime,
+		StorageKey:        key,
+		Tags:              tags,
+		UserTags:          append([]string{}, tags...),
+		TimelineAt:        timelineAt,
+		Geo:               geo,
+		SourceMetadata:    append(json.RawMessage(nil), sourceMetadataJSON...),
+		ProcessorMetadata: json.RawMessage(`{}`),
+		Annotations:       []Annotation{},
+		IndexStatus:       "pending",
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	}
 	_, err = tx.Exec(ctx,
 		`INSERT INTO files
-		 (id, user_id, name, path, folder_id, size, sha256, mime, storage_key, tags, index_status, created_at, updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+		 (id, user_id, name, path, folder_id, size, sha256, mime, storage_key,
+		  tags, user_tags, source_metadata, processor_metadata, timeline_at, geo,
+		  index_status, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
 		f.ID, f.UserID, f.Name, f.Path, f.FolderID, f.Size, f.SHA256, f.MIME, f.StorageKey,
-		f.Tags, f.IndexStatus, f.CreatedAt, f.UpdatedAt,
+		f.Tags, f.UserTags, []byte(f.SourceMetadata), []byte(f.ProcessorMetadata),
+		f.TimelineAt, geoPoint, f.IndexStatus, f.CreatedAt, f.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("insert file: %w", err)
@@ -267,17 +319,25 @@ func (s *Service) Get(ctx context.Context, userID, id uuid.UUID) (*File, error) 
 	if err != nil {
 		return nil, err
 	}
+	f.Annotations, f.AnnotationsTruncated, err = s.loadAnnotations(ctx, id)
+	if err != nil {
+		return nil, err
+	}
 	return f, nil
 }
 
 // selectFileSQL is the canonical column projection used by every read path.
 const selectFileSQL = `SELECT id, user_id, name, path, folder_id, size, sha256, mime, storage_key,
-		        summary, caption, tags, timeline_at, index_status, created_at, updated_at
-		 FROM files`
+			        summary, caption, tags, user_tags, timeline_at, geo,
+			        source_metadata, processor_metadata,
+			        index_status, created_at, updated_at
+			 FROM files`
 
 // Content returns a reader for the file's bytes.
 func (s *Service) Content(ctx context.Context, userID, id uuid.UUID) (*File, io.ReadCloser, error) {
-	f, err := s.Get(ctx, userID, id)
+	// Content only needs authorization and the storage key. Avoid loading the
+	// bounded review history on every byte download.
+	f, err := s.scanOne(ctx, selectFileSQL+` WHERE id = $1 AND user_id = $2`, id, userID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -418,13 +478,52 @@ type scanRow interface {
 }
 
 func scanFileRow(r scanRow) (*File, error) {
-	var f File
+	var (
+		f                 File
+		geoPoint          pgtype.Point
+		sourceMetadata    []byte
+		processorMetadata []byte
+	)
 	if err := r.Scan(
 		&f.ID, &f.UserID, &f.Name, &f.Path, &f.FolderID, &f.Size, &f.SHA256, &f.MIME, &f.StorageKey,
-		&f.Summary, &f.Caption, &f.Tags, &f.TimelineAt, &f.IndexStatus, &f.CreatedAt, &f.UpdatedAt,
+		&f.Summary, &f.Caption, &f.Tags, &f.UserTags, &f.TimelineAt, &geoPoint,
+		&sourceMetadata, &processorMetadata,
+		&f.IndexStatus, &f.CreatedAt, &f.UpdatedAt,
 	); err != nil {
 		return nil, err
 	}
+	if geoPoint.Valid {
+		f.Geo = &Geo{Lat: geoPoint.P.Y, Lon: geoPoint.P.X}
+	}
+	if len(sourceMetadata) == 0 {
+		sourceMetadata = []byte(`{}`)
+	}
+	if len(processorMetadata) == 0 {
+		processorMetadata = []byte(`{}`)
+	}
+	f.SourceMetadata = append(json.RawMessage(nil), sourceMetadata...)
+	f.ProcessorMetadata = append(json.RawMessage(nil), processorMetadata...)
+	if f.Caption != nil {
+		if caption, ok := modeltext.NormalizePlain(*f.Caption, 2000); ok {
+			f.Caption = &caption
+		} else {
+			f.Caption = nil
+		}
+	}
+	if f.Summary != nil {
+		if summary, ok := modeltext.NormalizePlain(*f.Summary, 2000); ok {
+			f.Summary = &summary
+		} else {
+			f.Summary = nil
+		}
+	}
+	if f.Tags == nil {
+		f.Tags = []string{}
+	}
+	if f.UserTags == nil {
+		f.UserTags = []string{}
+	}
+	f.Annotations = []Annotation{}
 	return &f, nil
 }
 

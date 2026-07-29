@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/PeterGuy326/mem/server/internal/auth"
+	"github.com/PeterGuy326/mem/server/internal/modeltext"
 )
 
 // handleTimeline → GET /v1/timeline?year=YYYY[&until=YYYY]
@@ -65,6 +66,8 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 		if !tokenAllowsPath(r, e.Path) {
 			continue
 		}
+		e.Summary = sanitizeTimelineDerivedText(e.Summary)
+		e.Caption = sanitizeTimelineDerivedText(e.Caption)
 		key := e.At.Format("2006-01")
 		if _, ok := groups[key]; !ok {
 			order = append(order, key)
@@ -91,6 +94,17 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 		"until":  to,
 		"months": out,
 	})
+}
+
+func sanitizeTimelineDerivedText(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	normalized, ok := modeltext.NormalizePlain(*value, 2000)
+	if !ok {
+		return nil
+	}
+	return &normalized
 }
 
 // parseYearRange accepts "2012" → [2012-01-01, 2013-01-01) or

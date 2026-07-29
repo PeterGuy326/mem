@@ -1,9 +1,10 @@
-# ADR 0004: Workspace bundle v1
+# ADR 0004: Workspace bundle v1/v2
 
 - Status: Accepted
 - Date: 2026-07-28
 - Contract: `mem.workspace_bundle`
-- Schema version: `1`
+- Current writer schema: `2`
+- Reader schemas: `1`, `2`
 - Extension: `.membundle`
 - Media type: `application/vnd.mem.workspace-bundle+zip`
 
@@ -32,7 +33,7 @@ The writer may use classic ZIP fields for small archives and emits ZIP64
 extensions automatically when classic size or entry-count limits are crossed.
 Consumers MUST NOT impose classic ZIP's 4 GiB or 65,535-entry limits.
 
-Every v1 archive has this fixed layout:
+Both schemas use this fixed layout:
 
 ```text
 manifest.json
@@ -117,6 +118,19 @@ memory events, tasks, checkpoints, and checkpoint refs.
   Multiple file records may share that SHA. The archive stores one blob entry
   per unique digest, so file-entry count and blob count are intentionally
   different concepts.
+- File records preserve caller/source metadata, explicit user tags, effective
+  tags/time/location, and bounded annotation review state. Accepted/rejected
+  decisions retain their stable IDs, versions, provenance and decision time.
+  Target-local decision actor user IDs are excluded.
+- Schema v2 adds those enrichment fields. Its redundant effective tags and
+  summary must exactly equal values derived from explicit user tags and
+  accepted annotations; source capture time/location must equal the effective
+  time/location projection. Stable annotation keys are recomputed during
+  validation. The writer emits v2 only.
+- The reader still accepts historical v1 records, which do not contain v2
+  fields. On import, their effective tags are conservatively promoted to user
+  tags, while an unreviewed legacy summary is not restored as a confirmed,
+  searchable summary. A v1 manifest carrying v2 fields is rejected.
 - Duplicate UUIDs, task keys, idempotency-key hashes, checkpoint sequences,
   ref ordinals, payload paths, blob digests, or blob paths are rejected.
 - A memory source file ID must resolve and its recorded SHA must match.
@@ -139,7 +153,7 @@ memory events, tasks, checkpoints, and checkpoint refs.
 
 ### Restore semantics
 
-v1 is a complete root snapshot only:
+Both schemas are complete root snapshots only:
 
 ```json
 {"path": "/", "complete": true}
@@ -152,7 +166,7 @@ It declares two future service modes:
 - `merge_conservative`: disjoint objects and exact replays may be accepted;
   any divergent immutable identity or task history is a blocking conflict.
 
-v1 forbids path rewriting. It also forbids checkpoint renumbering, automatic
+Both schemas forbid path rewriting. They also forbid checkpoint renumbering, automatic
 branching, URI rewriting, content-identity aliasing, and silent overwrites.
 Folder IDs may be mapped by a future restore repository, but stable file,
 memory, task, and checkpoint IDs must be preserved so `mem://` URIs and
@@ -187,14 +201,18 @@ preserved objects unclaimed.
 
 ### Exclusions
 
-The manifest contains the exact ordered exclusion declaration. v1 never
-transports:
+The manifest contains a schema-specific exact ordered exclusion declaration.
+Historical v1 keeps its original 22-item list. V2 appends explicit exclusions
+for file processor metadata, raw processor/provider errors, and generated
+reasoning. Neither schema transports:
 
 - users, password hashes, tokens, token hashes, sessions, memberships, or
   embedded user/token provenance IDs;
 - raw memory and memory-event idempotency keys;
 - S3/storage keys or presigned URLs;
 - provider settings, provider credentials, or environment secrets;
+- reproducible processor metadata, raw processor/provider errors, and generated
+  reasoning; file source metadata and human annotation decisions are portable;
 - text, visual, or face embeddings;
 - entities, file-entity edges, or file relations;
 - worker jobs or runtime index state.

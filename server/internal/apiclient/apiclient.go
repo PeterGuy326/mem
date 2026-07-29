@@ -14,6 +14,8 @@ import (
 	"time"
 )
 
+const sourceMetadataHeader = "X-Mem-Source-Metadata"
+
 // Client is a thin HTTP wrapper over the memd REST surface. It injects the
 // bearer token, parses {error, hint} bodies into *APIError, and exposes the
 // few non-JSON shapes (multipart upload, streaming upload, streaming
@@ -23,6 +25,26 @@ type Client struct {
 	token     string
 	workspace string
 	hc        *http.Client
+}
+
+// FileSourceLocation is caller-supplied capture location metadata. Lat/Lon
+// intentionally use the API-facing order; PostgreSQL point storage details
+// remain an implementation concern of memd.
+type FileSourceLocation struct {
+	Lat       float64  `json:"lat"`
+	Lon       float64  `json:"lon"`
+	AccuracyM *float64 `json:"accuracy_m,omitempty"`
+	Label     string   `json:"label,omitempty"`
+}
+
+// FileSourceMetadata carries provenance supplied by an upload adapter or
+// capture device. It is distinct from processor/model metadata so model
+// output can never silently become a user-provided fact.
+type FileSourceMetadata struct {
+	CapturedAt string              `json:"captured_at,omitempty"`
+	Location   *FileSourceLocation `json:"location,omitempty"`
+	SourceKind string              `json:"source_kind,omitempty"`
+	SourceName string              `json:"source_name,omitempty"`
 }
 
 // New constructs a Client. The baseURL is normalized (trailing slash
@@ -97,6 +119,17 @@ func (c *Client) DoJSONWithHeaders(ctx context.Context, method, path string, bod
 // UploadMultipart posts a file via multipart/form-data (POST /v1/files).
 // The body is streamed; size need not be known up-front.
 func (c *Client) UploadMultipart(ctx context.Context, name, mimeType, targetFolder string, body io.Reader, tags []string, out any) error {
+	return c.UploadMultipartWithSourceMetadata(ctx, name, mimeType, targetFolder, body, tags, nil, out)
+}
+
+// UploadMultipartWithSourceMetadata is UploadMultipart with provenance and
+// capture facts supplied by the caller. sourceMetadata is serialized into the
+// upload contract's source_metadata form field.
+func (c *Client) UploadMultipartWithSourceMetadata(ctx context.Context, name, mimeType, targetFolder string, body io.Reader, tags []string, sourceMetadata *FileSourceMetadata, out any) error {
+	sourceJSON, err := marshalSourceMetadata(sourceMetadata)
+	if err != nil {
+		return err
+	}
 	pr, pw := io.Pipe()
 	mw := multipart.NewWriter(pw)
 	errCh := make(chan error, 1)
@@ -112,6 +145,12 @@ func (c *Client) UploadMultipart(ctx context.Context, name, mimeType, targetFold
 		}
 		if targetFolder != "" {
 			if err := mw.WriteField("path", targetFolder); err != nil {
+				errCh <- err
+				return
+			}
+		}
+		if sourceJSON != "" {
+			if err := mw.WriteField("source_metadata", sourceJSON); err != nil {
 				errCh <- err
 				return
 			}
@@ -148,6 +187,14 @@ func (c *Client) UploadMultipart(ctx context.Context, name, mimeType, targetFold
 // UploadStream posts a raw body to POST /v1/files?stream=1. Used when name
 // + mime are known but the body is a pipe (stdin / remote fetch).
 func (c *Client) UploadStream(ctx context.Context, name, mimeType, targetFolder string, size int64, tags []string, body io.Reader, out any) error {
+	return c.UploadStreamWithSourceMetadata(ctx, name, mimeType, targetFolder, size, tags, body, nil, out)
+}
+
+// UploadStreamWithSourceMetadata is UploadStream with caller-supplied
+// provenance and capture facts. The metadata travels in a bounded private
+// request header rather than the URL so precise location data is not copied
+// into ordinary proxy and access logs.
+func (c *Client) UploadStreamWithSourceMetadata(ctx context.Context, name, mimeType, targetFolder string, size int64, tags []string, body io.Reader, sourceMetadata *FileSourceMetadata, out any) error {
 	q := url.Values{}
 	q.Set("stream", "1")
 	q.Set("name", name)
@@ -163,9 +210,16 @@ func (c *Client) UploadStream(ctx context.Context, name, mimeType, targetFolder 
 	if targetFolder != "" {
 		q.Set("path", targetFolder)
 	}
+	sourceJSON, err := marshalSourceMetadata(sourceMetadata)
+	if err != nil {
+		return err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/files?"+q.Encode(), body)
 	if err != nil {
 		return err
+	}
+	if sourceJSON != "" {
+		req.Header.Set(sourceMetadataHeader, sourceJSON)
 	}
 	if mimeType != "" {
 		req.Header.Set("Content-Type", mimeType)
@@ -202,6 +256,17 @@ func (c *Client) DownloadStream(ctx context.Context, fileID string) (io.ReadClos
 }
 
 // --- internals ---
+
+func marshalSourceMetadata(sourceMetadata *FileSourceMetadata) (string, error) {
+	if sourceMetadata == nil {
+		return "", nil
+	}
+	raw, err := json.Marshal(sourceMetadata)
+	if err != nil {
+		return "", fmt.Errorf("encode source metadata: %w", err)
+	}
+	return string(raw), nil
+}
 
 func (c *Client) attachAuth(req *http.Request) {
 	if c.token != "" {

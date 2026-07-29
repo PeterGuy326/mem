@@ -158,6 +158,7 @@ try {
   await page.goto(`${baseURL}/transfer`, { waitUntil: 'domcontentloaded' });
   await page.getByRole('heading', { name: 'Workspace transfer' }).waitFor();
   await page.getByRole('link', { name: 'Transfer' }).waitFor();
+  await page.getByText('mem.workspace_bundle · v2', { exact: true }).waitFor();
   await page.getByText('empty workspace only', { exact: true }).waitFor();
   await page.getByText('merge unavailable', { exact: true }).waitFor();
   await page

@@ -540,16 +540,19 @@ func blobArchive(
 	for index := range fileCount {
 		fileIDs[index] = uuid.New()
 		data.Files = append(data.Files, workspacebundle.FileRecord{
-			ID:        fileIDs[index],
-			Name:      fmt.Sprintf("portable-%d.txt", index),
-			Path:      "/",
-			Size:      int64(len(blob)),
-			SHA256:    digest,
-			MIME:      "text/plain",
-			BlobPath:  blobPath,
-			Tags:      []string{},
-			CreatedAt: now,
-			UpdatedAt: now,
+			ID:             fileIDs[index],
+			Name:           fmt.Sprintf("portable-%d.txt", index),
+			Path:           "/",
+			Size:           int64(len(blob)),
+			SHA256:         digest,
+			MIME:           "text/plain",
+			BlobPath:       blobPath,
+			Tags:           []string{},
+			UserTags:       []string{},
+			SourceMetadata: []byte(`{}`),
+			Annotations:    []workspacebundle.FileAnnotationRecord{},
+			CreatedAt:      now,
+			UpdatedAt:      now,
 		})
 	}
 	data.Manifest = workspacebundle.NewManifest(

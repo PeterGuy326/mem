@@ -25,6 +25,12 @@ The project is not yet publishing stable semantic-versioned releases.
 - A versioned, vendor-neutral local embedding catalog and `mem model
   list|recommend|install|activate` flow with hardware/runtime checks, explicit
   selection, pinned Ollama artifact integrity, and separate activation.
+- Provenance-aware asynchronous file enrichment: bounded phone/device capture
+  time and location, sanitized EXIF/media observations, reviewable AI
+  description/tag suggestions, API/Web/CLI/MCP accept/reject controls,
+  portable decisions, and provenance-aware CLI/MCP upload adapters.
+- Workspace bundle v2 enrichment provenance with strict stable-key/source
+  projection validation and read compatibility for historical v1 archives.
 - Versioned `mem.handoff` v1 checkpoints, optimistic head comparison,
   deterministic `resume`, and task/checkpoint list/get inspection across API,
   CLI and MCP.
@@ -100,6 +106,12 @@ The project is not yet publishing stable semantic-versioned releases.
 - Fail closed for SaaS entitlement readiness and prevent provider fallback,
   duplicate charging, or raw upstream error leakage after timeout and
   indeterminate outcomes.
+- Reject hidden-reasoning wrappers and nested JSON-like model values across
+  Worker, server, database, and workspace-bundle boundaries; keep raw provider
+  errors and malformed processor facts out of persistence, APIs, and bundles.
+- Remove accepted model tags from the legacy effective projection before an
+  enrichment downgrade, preventing a later re-up from reclassifying them as
+  user-authored tags.
 - Exclude credentials, tokens, provider secrets, runtime state and derived
   indexes from workspace bundles; carry only hashed memory idempotency keys.
 - Bound transfer time, archive bytes, expanded metadata/records and concurrent
@@ -127,6 +139,10 @@ The project is not yet publishing stable semantic-versioned releases.
 
 ### Fixed
 
+- Keep rejected/superseded AI descriptions out of file detail, visual-search
+  snippets, and workspace bundle projections; serialize same-file index runs
+  and preserve the last usable text embedding when a partial retry produces no
+  replacement.
 - Preserve uploaded workspace objects after an indeterminate database commit
   and expose a stable `503` recovery contract requiring the exact same bundle.
 - Serialized folder prefix mutations with folder, file, memory and checkpoint

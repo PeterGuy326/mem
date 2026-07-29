@@ -51,9 +51,7 @@ class Settings(BaseSettings):
     s3_use_ssl: bool = Field(default=False, alias="MEM_S3_USE_SSL")
 
     # ---- Provider: Ollama (local default) ----
-    ollama_base_url: str = Field(
-        default="http://localhost:11434", alias="OLLAMA_BASE_URL"
-    )
+    ollama_base_url: str = Field(default="http://localhost:11434", alias="OLLAMA_BASE_URL")
     ollama_timeout: float = Field(default=120.0, alias="OLLAMA_TIMEOUT")
 
     # ---- Provider: OpenAI (stub in W1) ----
@@ -64,13 +62,12 @@ class Settings(BaseSettings):
     anthropic_api_key: Optional[str] = Field(default=None, alias="ANTHROPIC_API_KEY")
 
     # ---- Default provider specs (SPEC §9.4) ----
-    default_embedding: str = Field(
-        default="ollama:nomic-embed-text", alias="MEM_DEFAULT_EMBEDDING"
-    )
+    default_embedding: str = Field(default="ollama:nomic-embed-text", alias="MEM_DEFAULT_EMBEDDING")
     default_visual_embedding: str = Field(
         default="clip:ViT-B-32",  # 512-d shared image+text space (Phase 2)
         alias="MEM_DEFAULT_VISUAL_EMBEDDING",
     )
+    default_llm: str = Field(default="ollama:qwen2.5:7b", alias="MEM_DEFAULT_LLM")
     default_vlm: str = Field(default="ollama:minicpm-v", alias="MEM_DEFAULT_VLM")
     default_asr: str = Field(default="faster-whisper:tiny", alias="MEM_DEFAULT_ASR")
 

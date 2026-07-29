@@ -42,12 +42,19 @@ type namedBytes struct {
 	data []byte
 }
 
-// Write validates input, then emits the deterministic fixed-layout v1 ZIP
-// stream. The standard library automatically emits ZIP64 size/count extensions
-// when an archive crosses classic ZIP limits.
+// Write validates input, then emits the deterministic fixed-layout current
+// schema ZIP stream. Legacy schemas are read-only: serializing them with the
+// current structs would add fields that historical strict readers reject.
 func Write(w io.Writer, input WriteInput, options WriterOptions) error {
 	if w == nil {
 		return fmt.Errorf("%w: writer is nil", ErrInvalidBundle)
+	}
+	if input.Manifest.SchemaVersion != CurrentSchemaVersion {
+		return fmt.Errorf(
+			"%w: writer requires schema_version %d",
+			ErrUnsupportedVersion,
+			CurrentSchemaVersion,
+		)
 	}
 	limits, err := normalizeLimits(options.Limits)
 	if err != nil {

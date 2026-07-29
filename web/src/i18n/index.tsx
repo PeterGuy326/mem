@@ -42,6 +42,8 @@ const dict: Record<string, Partial<Record<Lang, string>>> = {
   'common.clear': { zh: '清空', en: 'Clear' },
   'common.recent': { zh: '最近', en: 'Recent' },
   'common.retry': { zh: '重试', en: 'Retry' },
+  'common.accept': { zh: '接受', en: 'Accept' },
+  'common.reject': { zh: '拒绝', en: 'Reject' },
 
   // ---- file detail ----
   'detail.status': { zh: '状态', en: 'Status' },
@@ -50,8 +52,61 @@ const dict: Record<string, Partial<Record<Lang, string>>> = {
   'detail.timeAnchor': { zh: '时间锚点', en: 'Time anchor' },
   'detail.ingestedAt': { zh: '入库时间', en: 'Indexed at' },
   'detail.aiInsights': { zh: 'AI 洞察', en: 'AI insights' },
-  'detail.summary': { zh: '摘要', en: 'Summary' },
-  'detail.captionVlm': { zh: '图像描述 (VLM)', en: 'Caption (VLM)' },
+  'detail.effectiveValues': { zh: '已确认 / 生效值', en: 'Confirmed / effective values' },
+  'detail.summary': { zh: '生效描述', en: 'Effective description' },
+  'detail.legacySummary': { zh: '旧版 AI 摘要（未审核）', en: 'Legacy AI summary (unreviewed)' },
+  'detail.legacySummaryHint': {
+    zh: '此摘要来自旧版处理流程，未关联人工接受记录。',
+    en: 'This summary came from the legacy pipeline and has no recorded human acceptance.',
+  },
+  'detail.effectiveTags': { zh: '生效标签', en: 'Effective tags' },
+  'detail.userTag': { zh: '用户', en: 'User' },
+  'detail.acceptedTag': { zh: '已接受', en: 'Accepted' },
+  'detail.captionVlm': { zh: 'AI 原始观察（未确认）', en: 'Raw AI observation (unconfirmed)' },
+  'detail.captionHint': {
+    zh: '这是处理器的原始观察，不会自动成为已确认描述。',
+    en: 'This is a processor observation. It is not a confirmed description.',
+  },
+  'detail.reviewSuggestions': { zh: '待审核 AI 建议', en: 'Pending AI suggestions' },
+  'detail.reviewHint': {
+    zh: '模型置信度仅用于排序；建议在你接受前不会成为事实。',
+    en: 'Confidence only ranks review. Suggestions do not become facts until you accept them.',
+  },
+  'detail.pendingDescription': { zh: '描述建议', en: 'Description suggestion' },
+  'detail.pendingTag': { zh: '标签建议', en: 'Tag suggestion' },
+  'detail.confidence': { zh: '置信度 {value}', en: '{value} confidence' },
+  'detail.provenance': { zh: '来源', en: 'Provenance' },
+  'detail.noPendingSuggestions': { zh: '没有待审核建议', en: 'No suggestions awaiting review' },
+  'detail.reviewedSuggestions': { zh: '审核记录', en: 'Review history' },
+  'detail.reviewHistoryTruncated': {
+    zh: '较早的审核记录已从此响应中省略。',
+    en: 'Older review history is omitted from this response.',
+  },
+  'detail.annotation.accepted': { zh: '已接受', en: 'Accepted' },
+  'detail.annotation.rejected': { zh: '已拒绝', en: 'Rejected' },
+  'detail.annotation.superseded': { zh: '已被替代', en: 'Superseded' },
+  'detail.annotation.pending': { zh: '待审核', en: 'Pending' },
+  'detail.captureTime': { zh: '拍摄时间', en: 'Captured at' },
+  'detail.source': { zh: '上传来源', en: 'Upload source' },
+  'detail.sourceLocation': { zh: '来源位置', en: 'Source location' },
+  'detail.effectiveGeo': { zh: '生效位置', en: 'Effective location' },
+  'detail.partialTitle': { zh: 'AI 增强不完整', en: 'AI enrichment is partial' },
+  'detail.partialHint': {
+    zh: '文件仍可使用；部分处理器或模型暂时不可用。可以稍后重新索引。',
+    en: 'The file is still usable. A processor or model was unavailable; reindexing can be retried later.',
+  },
+  'detail.failedTitle': { zh: 'AI 索引失败', en: 'AI indexing failed' },
+  'detail.failedHint': {
+    zh: '文件已保存，但索引未完成。请检查处理服务后重新索引。',
+    en: 'The file is saved, but indexing did not complete. Check the processing service before retrying.',
+  },
+  'detail.reviewError': { zh: '无法保存审核决定', en: 'Could not save review decision' },
+  'detail.acceptSuggestion': { zh: '接受建议：{value}', en: 'Accept suggestion: {value}' },
+  'detail.rejectSuggestion': { zh: '拒绝建议：{value}', en: 'Reject suggestion: {value}' },
+  'detail.reviewConflict': {
+    zh: '其他审核者已更新这条建议。已重新加载最新状态。',
+    en: 'Another reviewer already changed this suggestion. The latest state has been reloaded.',
+  },
   'detail.aiProcessing': {
     zh: 'AI 还在处理中，稍等一下就能看到 caption 和标签。',
     en: 'AI is still processing — caption and tags will appear shortly.',
@@ -175,6 +230,7 @@ const dict: Record<string, Partial<Record<Lang, string>>> = {
   'status.pending': { zh: '等待', en: 'Pending' },
   'status.processing': { zh: '处理中', en: 'Processing' },
   'status.done': { zh: '已就绪', en: 'Ready' },
+  'status.partial': { zh: '部分完成', en: 'Partial' },
   'status.failed': { zh: '失败', en: 'Failed' },
 
   // ---- relative time ----
@@ -195,8 +251,13 @@ const dict: Record<string, Partial<Record<Lang, string>>> = {
     zh: '可能已删除，或 file_id 错了。',
     en: 'It may have been deleted, or the id is wrong.',
   },
+  'detail.loadFailedTitle': { zh: '暂时无法加载文件', en: 'Could not load file' },
+  'detail.loadFailedDesc': {
+    zh: '这不是空结果。请检查网络或服务状态后重试。',
+    en: 'This is not an empty result. Check the network or service, then retry.',
+  },
   'detail.geo': { zh: '经纬', en: 'Geo' },
-  'detail.autoTags': { zh: '自动标签', en: 'Auto tags' },
+  'detail.autoTags': { zh: '生效标签', en: 'Effective tags' },
   'detail.entities': { zh: '识别到的实体', en: 'Detected entities' },
   'detail.deleteTitle': { zh: '删除该文件？', en: 'Delete this file?' },
   'detail.deleteDesc': {
@@ -224,6 +285,13 @@ const dict: Record<string, Partial<Record<Lang, string>>> = {
   'toast.deleteFailed': { zh: '删除失败', en: 'Delete failed' },
   'toast.downloadFailed': { zh: '下载失败', en: 'Download failed' },
   'toast.copiedId': { zh: '已复制 file_id', en: 'Copied file id' },
+  'toast.annotationAccepted': { zh: 'AI 建议已接受', en: 'AI suggestion accepted' },
+  'toast.annotationRejected': { zh: 'AI 建议已拒绝', en: 'AI suggestion rejected' },
+  'toast.annotationConflict': {
+    zh: '这条建议已在其他位置完成审核',
+    en: 'This suggestion was already reviewed elsewhere',
+  },
+  'toast.annotationFailed': { zh: '审核失败', en: 'Review failed' },
   'toast.accountCreated': { zh: '账号已创建', en: 'Account created' },
 
   // ---- login ----
@@ -421,8 +489,8 @@ const dict: Record<string, Partial<Record<Lang, string>>> = {
     en: 'This transfer operation is unsupported',
   },
   'transfer.gate.unsupported.description': {
-    zh: '服务端必须显式声明 workspace transfer、bundle schema v1，以及导入所需的 fresh 恢复模式。',
-    en: 'The server must advertise workspace transfer, bundle schema v1, and—when importing—the fresh restore mode.',
+    zh: '服务端必须显式声明 workspace transfer、当前导出 schema v2（导入兼容 v1/v2），以及导入所需的 fresh 恢复模式。',
+    en: 'The server must advertise workspace transfer, the current v2 export schema (with v1/v2 import compatibility), and—when importing—the fresh restore mode.',
   },
   'transfer.contract.title': { zh: '迁移契约', en: 'Transfer contract' },
   'transfer.contract.schema': { zh: '归档协议', en: 'Archive contract' },
@@ -436,8 +504,8 @@ const dict: Record<string, Partial<Record<Lang, string>>> = {
   'transfer.export.eyebrow': { zh: '步骤 01 · 封装', en: 'Step 01 · Seal' },
   'transfer.export.title': { zh: '导出当前工作区', en: 'Export current workspace' },
   'transfer.export.description': {
-    zh: '服务端先构建并验证完整归档。浏览器仅在状态成功、MIME 为 v1 且归档非空后才会保存文件。',
-    en: 'The server builds and validates the complete archive first. The browser saves it only after a successful status, a v1 MIME check, and a non-empty body.',
+    zh: '服务端先构建并验证完整的 v2 归档。浏览器仅在状态成功、MIME 匹配且归档非空后才会保存文件。',
+    en: 'The server builds and validates the complete v2 archive first. The browser saves it only after a successful status, a matching MIME, and a non-empty body.',
   },
   'transfer.export.contentsTitle': { zh: '归档包含', en: 'Archive contents' },
   'transfer.export.contents': {
@@ -461,8 +529,8 @@ const dict: Record<string, Partial<Record<Lang, string>>> = {
   'transfer.import.eyebrow': { zh: '步骤 02 · 恢复', en: 'Step 02 · Restore' },
   'transfer.import.title': { zh: '恢复到当前工作区', en: 'Restore into current workspace' },
   'transfer.import.description': {
-    zh: '上传一个 .membundle v1 原始归档。服务端会检查结构、完整性、依赖和冲突，全部通过后才写入。',
-    en: 'Upload one raw .membundle v1 archive. The server checks structure, integrity, dependencies, and conflicts before writing anything.',
+    zh: '上传一个 .membundle v1 或 v2 原始归档。服务端会检查结构、完整性、依赖和冲突，全部通过后才写入。',
+    en: 'Upload one raw .membundle v1 or v2 archive. The server checks structure, integrity, dependencies, and conflicts before writing anything.',
   },
   'transfer.import.freshTitle': { zh: '仅支持 fresh 恢复', en: 'Fresh restore only' },
   'transfer.import.freshDescription': {
@@ -471,8 +539,8 @@ const dict: Record<string, Partial<Record<Lang, string>>> = {
   },
   'transfer.import.choose': { zh: '选择或拖入 .membundle', en: 'Choose or drop a .membundle' },
   'transfer.import.fileHint': {
-    zh: '仅接受 .membundle；已报告的 MIME 必须匹配 workspace bundle v1。',
-    en: 'Only .membundle files are accepted; any reported MIME must match workspace bundle v1.',
+    zh: '仅接受 .membundle；已报告的 MIME 必须匹配 workspace bundle（schema 版本在归档 manifest 中校验）。',
+    en: 'Only .membundle files are accepted; any reported MIME must match workspace bundle (the schema version is validated in the archive manifest).',
   },
   'transfer.import.mimeNotReported': {
     zh: '浏览器未报告 MIME',
@@ -484,8 +552,8 @@ const dict: Record<string, Partial<Record<Lang, string>>> = {
     en: 'Choose a workspace archive with the .membundle extension.',
   },
   'transfer.import.fileIssue.mime': {
-    zh: '该文件报告了不兼容的 MIME；请选择 workspace bundle v1。',
-    en: 'This file reports an incompatible MIME. Choose a workspace bundle v1.',
+    zh: '该文件报告了不兼容的 MIME；请选择 workspace bundle v1 或 v2。',
+    en: 'This file reports an incompatible MIME. Choose a workspace bundle v1 or v2.',
   },
   'transfer.import.fileIssue.empty': {
     zh: '归档为空，无法导入。',
@@ -563,8 +631,8 @@ const dict: Record<string, Partial<Record<Lang, string>>> = {
     en: 'Unsupported protocol or response',
   },
   'transfer.error.unsupported.description': {
-    zh: '归档版本、恢复模式、响应 MIME 或返回结构与 Web 支持的 v1 契约不匹配；未保存或提交任何数据。',
-    en: 'The bundle version, restore mode, response MIME, or response shape does not match the v1 web contract. No data was saved or committed.',
+    zh: '归档版本、恢复模式、响应 MIME 或返回结构与 Web 支持的 v1/v2 契约不匹配；未保存或提交任何数据。',
+    en: 'The bundle version, restore mode, response MIME, or response shape does not match the v1/v2 web contract. No data was saved or committed.',
   },
   'transfer.error.too_large.title': {
     zh: '归档超过上传限制',

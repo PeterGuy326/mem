@@ -33,7 +33,7 @@ export const MOCK_CAPABILITIES: Capabilities = {
   },
   handoff_schema_versions: [1],
   workspace_restore_modes: ['fresh'],
-  workspace_bundle_schema_versions: [1],
+  workspace_bundle_schema_versions: [1, 2],
   permissions: {
     read: true,
     search: true,

@@ -1,6 +1,7 @@
 package workspacetransfer
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -8,16 +9,20 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	memdb "github.com/PeterGuy326/mem/server/internal/db"
+	"github.com/PeterGuy326/mem/server/internal/enrichmentkey"
 	"github.com/PeterGuy326/mem/server/internal/handoff"
 	"github.com/PeterGuy326/mem/server/internal/memory"
 	"github.com/PeterGuy326/mem/server/internal/workspacebundle"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -73,6 +78,12 @@ func TestWorkspaceTransferPostgres(t *testing.T) {
 		database,
 		"transfer-failure-target",
 	)
+	legacyUser, legacyWorkspace := createTransferTenant(
+		t,
+		ctx,
+		database,
+		"transfer-v1-target",
+	)
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(
 			context.Background(),
@@ -80,8 +91,8 @@ func TestWorkspaceTransferPostgres(t *testing.T) {
 		)
 		defer cleanupCancel()
 		if _, err := database.Pool.Exec(cleanupCtx, `
-			DELETE FROM users WHERE id = $1 OR id = $2 OR id = $3
-		`, sourceUser, targetUser, failureUser); err != nil {
+			DELETE FROM users WHERE id = $1 OR id = $2 OR id = $3 OR id = $4
+		`, sourceUser, targetUser, failureUser, legacyUser); err != nil {
 			t.Errorf("cleanup transfer tenants: %v", err)
 		}
 	})
@@ -132,6 +143,13 @@ func TestWorkspaceTransferPostgres(t *testing.T) {
 	if !errors.As(err, &conflict) || len(conflict.Conflicts) == 0 {
 		t.Fatalf("global collision error = %v", err)
 	}
+	if !slices.ContainsFunc(conflict.Conflicts, func(value Conflict) bool {
+		return value.Kind == "global_id" &&
+			value.Resource == "file_annotation" &&
+			value.Value == fixture.acceptedAnnotation.String()
+	}) {
+		t.Fatalf("annotation UUID collision missing from preflight: %+v", conflict.Conflicts)
+	}
 	if len(store.puts) != 0 {
 		t.Fatalf("preflight conflict uploaded objects: %v", store.puts)
 	}
@@ -140,6 +158,90 @@ func TestWorkspaceTransferPostgres(t *testing.T) {
 	// while the exported archive and source object remain available.
 	if _, err := database.Pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, sourceUser); err != nil {
 		t.Fatalf("remove source tenant: %v", err)
+	}
+
+	// Historical v1 archives remain importable into a live current-schema
+	// database. They promote legacy tags to user provenance, but never invent
+	// v2 source/review provenance or project an unreviewed legacy summary.
+	legacyBundle := historicalV1Bundle(t, bundle.Bytes(), fixture.fileID)
+	legacyStore := newFakeObjectStore()
+	legacyService := New(database.Pool, legacyStore, Options{
+		Exporter:        "memd-test",
+		ExporterVersion: "v1",
+		Now:             func() time.Time { return fixedNow },
+	})
+	legacyReader := bytes.NewReader(legacyBundle)
+	legacyImported, err := legacyService.Import(ctx, ImportRequest{
+		WorkspaceID: legacyWorkspace,
+		Mode:        RestoreModeFresh,
+		Reader:      legacyReader,
+		Size:        int64(legacyReader.Len()),
+	})
+	if err != nil {
+		t.Fatalf("import historical v1 workspace: %v", err)
+	}
+	if legacyImported.Replayed || legacyImported.BundleID != fixture.bundleID {
+		t.Fatalf("historical v1 import result = %+v", legacyImported)
+	}
+	var (
+		legacySchemaVersion int
+		legacyUserTags      []string
+		legacySource        []byte
+		legacySummary       *string
+		legacyCaption       *string
+		legacyIndexStatus   string
+		legacyAnnotations   int
+	)
+	if err := database.Pool.QueryRow(ctx, `
+		SELECT schema_version
+		  FROM workspace_imports
+		 WHERE target_workspace_id = $1 AND bundle_id = $2
+	`, legacyWorkspace, fixture.bundleID).Scan(&legacySchemaVersion); err != nil {
+		t.Fatalf("load historical v1 import ledger: %v", err)
+	}
+	if err := database.Pool.QueryRow(ctx, `
+		SELECT user_tags, source_metadata, summary, caption, index_status
+		  FROM files
+		 WHERE id = $1 AND user_id = $2
+	`, fixture.fileID, legacyUser).Scan(
+		&legacyUserTags,
+		&legacySource,
+		&legacySummary,
+		&legacyCaption,
+		&legacyIndexStatus,
+	); err != nil {
+		t.Fatalf("load historical v1 imported file: %v", err)
+	}
+	if err := database.Pool.QueryRow(ctx, `
+		SELECT count(*)
+		  FROM file_annotations
+		 WHERE file_id = $1
+	`, fixture.fileID).Scan(&legacyAnnotations); err != nil {
+		t.Fatalf("count historical v1 annotations: %v", err)
+	}
+	if legacySchemaVersion != workspacebundle.SchemaVersionV1 ||
+		!slices.Equal(legacyUserTags, []string{"agent", "reviewed"}) ||
+		string(legacySource) != "{}" ||
+		legacySummary != nil ||
+		legacyCaption == nil ||
+		*legacyCaption != "historical visual caption" ||
+		legacyIndexStatus != "pending" ||
+		legacyAnnotations != 0 ||
+		len(legacyStore.puts) != 2 {
+		t.Fatalf(
+			"historical v1 state schema=%d tags=%v source=%s summary=%v caption=%v status=%s annotations=%d puts=%v",
+			legacySchemaVersion,
+			legacyUserTags,
+			legacySource,
+			legacySummary,
+			legacyCaption,
+			legacyIndexStatus,
+			legacyAnnotations,
+			legacyStore.puts,
+		)
+	}
+	if _, err := database.Pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, legacyUser); err != nil {
+		t.Fatalf("remove historical v1 target tenant: %v", err)
 	}
 
 	// If PostgreSQL fails after the blob has been accepted, the transaction
@@ -360,12 +462,129 @@ func TestWorkspaceTransferPostgres(t *testing.T) {
 	)
 }
 
+type transferZIPEntry struct {
+	header zip.FileHeader
+	data   []byte
+}
+
+func historicalV1Bundle(t *testing.T, raw []byte, captionFileID uuid.UUID) []byte {
+	t.Helper()
+	reader, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
+	if err != nil {
+		t.Fatalf("open current bundle for v1 downgrade: %v", err)
+	}
+	entries := make([]transferZIPEntry, 0, len(reader.File))
+	for _, archiveFile := range reader.File {
+		stream, err := archiveFile.Open()
+		if err != nil {
+			t.Fatalf("open bundle entry %s: %v", archiveFile.Name, err)
+		}
+		data, err := io.ReadAll(stream)
+		closeErr := stream.Close()
+		if err != nil {
+			t.Fatalf("read bundle entry %s: %v", archiveFile.Name, err)
+		}
+		if closeErr != nil {
+			t.Fatalf("close bundle entry %s: %v", archiveFile.Name, closeErr)
+		}
+		header := archiveFile.FileHeader
+		header.CompressedSize64 = 0
+		header.UncompressedSize64 = 0
+		header.CRC32 = 0
+		entries = append(entries, transferZIPEntry{header: header, data: data})
+	}
+
+	for index := range entries {
+		switch entries[index].header.Name {
+		case workspacebundle.ManifestPath:
+			var manifest map[string]any
+			if err := json.Unmarshal(entries[index].data, &manifest); err != nil {
+				t.Fatalf("decode current manifest: %v", err)
+			}
+			manifest["schema_version"] = float64(workspacebundle.SchemaVersionV1)
+			manifest["exclusions"] = workspacebundle.ExclusionsV1()
+			entries[index].data, err = json.Marshal(manifest)
+			if err != nil {
+				t.Fatalf("encode historical v1 manifest: %v", err)
+			}
+		case workspacebundle.FilesIndexPath:
+			lines := bytes.Split(
+				bytes.TrimSuffix(entries[index].data, []byte("\n")),
+				[]byte("\n"),
+			)
+			for lineIndex := range lines {
+				var record map[string]any
+				if err := json.Unmarshal(lines[lineIndex], &record); err != nil {
+					t.Fatalf("decode current file record: %v", err)
+				}
+				delete(record, "user_tags")
+				delete(record, "geo")
+				delete(record, "source_metadata")
+				delete(record, "annotations")
+				if record["id"] == captionFileID.String() {
+					record["caption"] = " \u00a0historical visual caption\u3000 "
+				}
+				lines[lineIndex], err = json.Marshal(record)
+				if err != nil {
+					t.Fatalf("encode historical v1 file record: %v", err)
+				}
+			}
+			entries[index].data = append(bytes.Join(lines, []byte("\n")), '\n')
+		}
+	}
+
+	checksumEntries := make([]transferZIPEntry, 0, len(entries)-1)
+	for _, entry := range entries {
+		if entry.header.Name == workspacebundle.ChecksumsPath {
+			continue
+		}
+		checksumEntries = append(checksumEntries, entry)
+	}
+	sort.Slice(checksumEntries, func(left, right int) bool {
+		return checksumEntries[left].header.Name < checksumEntries[right].header.Name
+	})
+	var checksumLines strings.Builder
+	for _, entry := range checksumEntries {
+		fmt.Fprintf(
+			&checksumLines,
+			"%s\t%d\t%s\n",
+			digestBytes(entry.data),
+			len(entry.data),
+			entry.header.Name,
+		)
+	}
+	for index := range entries {
+		if entries[index].header.Name == workspacebundle.ChecksumsPath {
+			entries[index].data = []byte(checksumLines.String())
+		}
+	}
+
+	var output bytes.Buffer
+	writer := zip.NewWriter(&output)
+	for _, entry := range entries {
+		stream, err := writer.CreateHeader(&entry.header)
+		if err != nil {
+			t.Fatalf("create historical v1 entry %s: %v", entry.header.Name, err)
+		}
+		if _, err := stream.Write(entry.data); err != nil {
+			t.Fatalf("write historical v1 entry %s: %v", entry.header.Name, err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close historical v1 bundle: %v", err)
+	}
+	return output.Bytes()
+}
+
 type transferFixture struct {
 	bundleID            uuid.UUID
 	folderID            uuid.UUID
 	secondFolderID      uuid.UUID
 	fileID              uuid.UUID
 	secondFileID        uuid.UUID
+	acceptedAnnotation  uuid.UUID
+	acceptedDescription uuid.UUID
+	rejectedAnnotation  uuid.UUID
 	fileSHA             string
 	blob                []byte
 	memoryID            uuid.UUID
@@ -395,6 +614,9 @@ func seedTransferSource(
 	secondFolderID := uuid.New()
 	fileID := uuid.New()
 	secondFileID := uuid.New()
+	acceptedAnnotation := uuid.New()
+	acceptedDescription := uuid.New()
+	rejectedAnnotation := uuid.New()
 	blob := []byte("source object for a portable agent workspace\n")
 	fileSHA := digestBytes(blob)
 	storageKey := "users/" + userID.String() + "/" + fileID.String() + "/state.txt"
@@ -414,21 +636,51 @@ func seedTransferSource(
 	if _, err := database.Pool.Exec(ctx, `
 		INSERT INTO files (
 			id, user_id, name, path, folder_id, size, sha256, mime,
-			storage_key, summary, caption, tags, timeline_at, index_status,
-			created_at, updated_at
+			storage_key, summary, caption, tags, user_tags, timeline_at, geo,
+			source_metadata, processor_metadata, index_status, created_at, updated_at
 		)
 		VALUES
 			(
 				$1, $3, 'state.txt', '/Project', $4, $6, $7, 'text/plain',
-				$8, 'portable summary', NULL, ARRAY['agent'], $10, 'ready', $10, $10
+				$8, 'portable summary', NULL, ARRAY['agent','reviewed'], ARRAY['agent'],
+				$10, point(121.4737,31.2304),
+				'{"captured_at":"2026-07-28T17:00:00+08:00","location":{"accuracy_m":5,"label":"Shanghai","lat":31.2304,"lon":121.4737},"source_kind":"mobile","source_name":"camera sync"}'::jsonb,
+				'{"processor":"text"}'::jsonb, 'ready', $10, $10
 			),
 			(
 				$2, $3, 'state-copy.txt', '/Archive', $5, $6, $7, 'text/plain',
-				$9, 'portable copy', NULL, ARRAY['archive'], $10, 'ready', $10, $10
+				$9, 'portable copy', NULL, ARRAY['archive'], ARRAY['archive'],
+				$10, NULL, '{"source_kind":"import"}'::jsonb, '{}'::jsonb,
+				'ready', $10, $10
 			)
 	`, fileID, secondFileID, userID, folderID, secondFolderID, len(blob),
 		fileSHA, storageKey, secondStorageKey, now); err != nil {
 		t.Fatalf("insert source files with shared content: %v", err)
+	}
+	if _, err := database.Pool.Exec(ctx, `
+		INSERT INTO file_annotations (
+			id, file_id, stable_key, kind, value_text, confidence,
+			source, provider, processor, analysis_version, status,
+			state_version, decided_by_user_id, decided_at, created_at, updated_at
+		)
+		VALUES
+			($1,$4,$6,'tag','reviewed',0.91,'model','fixture:vlm','text',
+			 'file-enrichment-v1','accepted',2,$5,$8,$8,$8),
+			($2,$4,$7,'tag','discarded',0.42,'model','fixture:vlm','text',
+			 'file-enrichment-v1','rejected',2,$5,$8,$8,$8),
+			($3,$4,$9,'description','portable summary',0.84,'model',
+			 'fixture:vlm','text','file-enrichment-v1','accepted',2,$5,$8,$8,$8)
+	`, acceptedAnnotation, rejectedAnnotation, acceptedDescription, fileID, userID,
+		enrichmentkey.Stable("tag", "model", "file-enrichment-v1", "reviewed"),
+		enrichmentkey.Stable("tag", "model", "file-enrichment-v1", "discarded"),
+		now,
+		enrichmentkey.Stable(
+			"description",
+			"model",
+			"file-enrichment-v1",
+			"portable summary",
+		)); err != nil {
+		t.Fatalf("insert source file annotations: %v", err)
 	}
 
 	memoryService := memory.New(database.Pool)
@@ -540,6 +792,9 @@ func seedTransferSource(
 		secondFolderID:      secondFolderID,
 		fileID:              fileID,
 		secondFileID:        secondFileID,
+		acceptedAnnotation:  acceptedAnnotation,
+		acceptedDescription: acceptedDescription,
+		rejectedAnnotation:  rejectedAnnotation,
 		fileSHA:             fileSHA,
 		blob:                blob,
 		memoryID:            remembered.Memory.ID,
@@ -617,6 +872,92 @@ func assertImportedState(
 	if len(storageKeys) != 2 ||
 		storageKeys[fixture.fileID] == storageKeys[fixture.secondFileID] {
 		t.Fatalf("shared-content file storage keys are not independent: %v", storageKeys)
+	}
+	var (
+		effectiveTags     []string
+		userTags          []string
+		timelineAt        time.Time
+		geo               pgtype.Point
+		sourceMetadata    string
+		processorMetadata string
+		summary           *string
+	)
+	if err := database.Pool.QueryRow(ctx, `
+		SELECT tags, user_tags, timeline_at, geo, summary,
+		       source_metadata::text, processor_metadata::text
+		  FROM files
+		 WHERE id = $1
+	`, fixture.fileID).Scan(
+		&effectiveTags,
+		&userTags,
+		&timelineAt,
+		&geo,
+		&summary,
+		&sourceMetadata,
+		&processorMetadata,
+	); err != nil {
+		t.Fatalf("load imported file enrichment: %v", err)
+	}
+	if !slices.Equal(effectiveTags, []string{"agent", "reviewed"}) ||
+		!slices.Equal(userTags, []string{"agent"}) ||
+		!timelineAt.Equal(fixture.eventAt) ||
+		!geo.Valid || geo.P.X != 121.4737 || geo.P.Y != 31.2304 ||
+		summary == nil || *summary != "portable summary" ||
+		!strings.Contains(sourceMetadata, `"source_kind": "mobile"`) ||
+		processorMetadata != "{}" {
+		t.Fatalf(
+			"file enrichment tags=%v user_tags=%v summary=%v timeline=%s geo=%+v source=%s processor=%s",
+			effectiveTags,
+			userTags,
+			summary,
+			timelineAt,
+			geo,
+			sourceMetadata,
+			processorMetadata,
+		)
+	}
+	annotationRows, err := database.Pool.Query(ctx, `
+		SELECT id, status, decided_by_user_id, decided_at
+		  FROM file_annotations
+		 WHERE file_id = $1
+		 ORDER BY id
+	`, fixture.fileID)
+	if err != nil {
+		t.Fatalf("load imported file annotations: %v", err)
+	}
+	importedDecisions := make(map[uuid.UUID]string)
+	for annotationRows.Next() {
+		var (
+			annotationID uuid.UUID
+			status       string
+			actorID      *uuid.UUID
+			decidedAt    *time.Time
+		)
+		if err := annotationRows.Scan(&annotationID, &status, &actorID, &decidedAt); err != nil {
+			annotationRows.Close()
+			t.Fatalf("scan imported file annotation: %v", err)
+		}
+		if actorID != nil || decidedAt == nil || !decidedAt.Equal(fixture.eventAt) {
+			annotationRows.Close()
+			t.Fatalf(
+				"annotation %s actor=%v decided_at=%v",
+				annotationID,
+				actorID,
+				decidedAt,
+			)
+		}
+		importedDecisions[annotationID] = status
+	}
+	if err := annotationRows.Err(); err != nil {
+		annotationRows.Close()
+		t.Fatalf("iterate imported file annotations: %v", err)
+	}
+	annotationRows.Close()
+	if importedDecisions[fixture.acceptedAnnotation] != "accepted" ||
+		importedDecisions[fixture.acceptedDescription] != "accepted" ||
+		importedDecisions[fixture.rejectedAnnotation] != "rejected" ||
+		len(importedDecisions) != 3 {
+		t.Fatalf("imported annotation decisions = %v", importedDecisions)
 	}
 	var (
 		memoryWorkspace uuid.UUID

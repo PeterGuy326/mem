@@ -16,8 +16,10 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const (
@@ -27,6 +29,15 @@ const (
 	ownershipNonceBytes       = 32
 	ownershipFragmentPrefix   = "mem-testdb-owner="
 	maxPostgresIdentifierSize = 63
+	migrationFileUserID       = "7f000000-0000-0000-0000-000000000001"
+	migrationFileID           = "7f000000-0000-0000-0000-000000000002"
+	migrationUnsafeFileID     = "7f000000-0000-0000-0000-000000000003"
+	migrationReasoningFileID  = "7f000000-0000-0000-0000-000000000004"
+	migrationUnicodeFileID    = "7f000000-0000-0000-0000-000000000005"
+	migrationFormatFileID     = "7f000000-0000-0000-0000-000000000006"
+	migrationFormatRangeID    = "7f000000-0000-0000-0000-000000000007"
+	migrationIgnorableFileID  = "7f000000-0000-0000-0000-000000000008"
+	migrationTrimmedLimitID   = "7f000000-0000-0000-0000-000000000009"
 )
 
 var (
@@ -47,7 +58,11 @@ func main() {
 
 func run() error {
 	if len(os.Args) < 2 {
-		return errors.New("usage: testdb <check|create|drop|version|assert-state>")
+		return errors.New(
+			"usage: testdb <check|create|drop|version|assert-state|" +
+				"seed-file-enrichment|assert-file-preserved <down|up>|" +
+				"seed-unsafe-derived-text|assert-unsafe-derived-text-scrubbed>",
+		)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -98,9 +113,645 @@ func run() error {
 			return errors.New("assert-state requires down or up")
 		}
 		return assertMigrationState(ctx, os.Args[2])
+	case "seed-file-enrichment":
+		if len(os.Args) != 2 {
+			return errors.New("seed-file-enrichment takes no arguments")
+		}
+		return seedFileEnrichment(ctx)
+	case "assert-file-preserved":
+		if len(os.Args) != 3 ||
+			(os.Args[2] != "down" && os.Args[2] != "up") {
+			return errors.New("assert-file-preserved requires down or up")
+		}
+		return assertFilePreserved(ctx, os.Args[2])
+	case "seed-unsafe-derived-text":
+		if len(os.Args) != 2 {
+			return errors.New("seed-unsafe-derived-text takes no arguments")
+		}
+		return seedUnsafeDerivedText(ctx)
+	case "assert-unsafe-derived-text-scrubbed":
+		if len(os.Args) != 2 {
+			return errors.New("assert-unsafe-derived-text-scrubbed takes no arguments")
+		}
+		return assertUnsafeDerivedTextScrubbed(ctx)
 	default:
 		return fmt.Errorf("unknown command %q", os.Args[1])
 	}
+}
+
+func seedUnsafeDerivedText(ctx context.Context) error {
+	conn, err := targetConnection(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close(ctx)
+	if _, err := conn.Exec(ctx, `
+INSERT INTO files (
+  id, user_id, name, path, size, sha256, mime, storage_key,
+  summary, caption, tags, index_status
+)
+VALUES (
+  $1, $2, 'unsafe-legacy.txt', '/', 1, repeat('b', 64), 'text/plain',
+  'migration/unsafe-derived-text', '{"analysis":"private"}',
+  E'visible\nprivate', ARRAY[]::text[], 'done'
+), (
+  $3, $2, 'reasoning-legacy.txt', '/', 1, repeat('c', 64), 'text/plain',
+  'migration/reasoning-derived-text',
+  '<reasoning visibility="hidden">private</reasoning>visible',
+  'visible</reasoning>', ARRAY[]::text[], 'done'
+), (
+  $4, $2, 'unicode-whitespace-legacy.txt', '/', 1, repeat('d', 64), 'text/plain',
+  'migration/unicode-whitespace-derived-text',
+  U&'\00A0{"analysis":"private"}',
+  U&'\3000Reasoning: private', ARRAY[]::text[], 'done'
+), (
+  $5, $2, 'format-character-legacy.txt', '/', 1, repeat('e', 64), 'text/plain',
+  'migration/format-character-derived-text',
+  U&'\FEFF{"analysis":"private","answer":"public"}',
+  U&'\200B["private"]', ARRAY[]::text[], 'done'
+), (
+  $6, $2, 'format-range-legacy.txt', '/', 1, repeat('f', 64), 'text/plain',
+  'migration/format-range-derived-text',
+  U&'visible\2060private',
+  U&'visible\+013439private', ARRAY[]::text[], 'done'
+), (
+  $7, $2, 'default-ignorable-legacy.txt', '/', 1, repeat('0', 64), 'text/plain',
+  'migration/default-ignorable-derived-text',
+  U&'visible\FE0Fprivate',
+  U&'visible\034Fprivate', ARRAY[]::text[], 'done'
+), (
+  $8, $2, 'trimmed-limit-legacy.txt', '/', 1, repeat('1', 64), 'text/plain',
+  'migration/trimmed-limit-derived-text',
+  ' ' || repeat('s', 2000) || ' ',
+  ' ' || repeat('c', 2000) || ' ', ARRAY[]::text[], 'done'
+)
+ON CONFLICT (id) DO UPDATE
+   SET summary = EXCLUDED.summary,
+       caption = EXCLUDED.caption
+`,
+		migrationUnsafeFileID,
+		migrationFileUserID,
+		migrationReasoningFileID,
+		migrationUnicodeFileID,
+		migrationFormatFileID,
+		migrationFormatRangeID,
+		migrationIgnorableFileID,
+		migrationTrimmedLimitID,
+	); err != nil {
+		return fmt.Errorf("seed unsafe legacy derived text: %w", err)
+	}
+	return nil
+}
+
+func assertUnsafeDerivedTextScrubbed(ctx context.Context) error {
+	conn, err := targetConnection(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close(ctx)
+	for _, fileID := range []string{
+		migrationUnsafeFileID,
+		migrationReasoningFileID,
+		migrationUnicodeFileID,
+		migrationFormatFileID,
+		migrationFormatRangeID,
+		migrationIgnorableFileID,
+	} {
+		var summary, caption *string
+		if err := conn.QueryRow(ctx, `
+SELECT summary, caption
+  FROM files
+ WHERE id = $1 AND user_id = $2
+`, fileID, migrationFileUserID).Scan(&summary, &caption); err != nil {
+			return fmt.Errorf("load scrubbed legacy derived text %s: %w", fileID, err)
+		}
+		if summary != nil || caption != nil {
+			return fmt.Errorf(
+				"unsafe legacy derived text survived migration for %s: summary=%v caption=%v",
+				fileID,
+				summary,
+				caption,
+			)
+		}
+	}
+
+	// Search and timeline project these columns directly. Re-run their read
+	// shapes against the legacy Cf row so migration scrub is the regression
+	// boundary, not an assumption that every reader sanitizes independently.
+	var searchSummary *string
+	if err := conn.QueryRow(ctx, `
+SELECT f.summary
+  FROM files AS f
+ WHERE f.id = $1 AND f.user_id = $2
+`, migrationFormatRangeID, migrationFileUserID).Scan(&searchSummary); err != nil {
+		return fmt.Errorf("load legacy Cf search projection: %w", err)
+	}
+	var timelineSummary, timelineCaption *string
+	if err := conn.QueryRow(ctx, `
+SELECT summary, caption
+  FROM files
+ WHERE id = $1 AND user_id = $2
+ ORDER BY COALESCE(timeline_at, created_at)
+`, migrationFormatRangeID, migrationFileUserID).Scan(
+		&timelineSummary,
+		&timelineCaption,
+	); err != nil {
+		return fmt.Errorf("load legacy Cf timeline projection: %w", err)
+	}
+	if searchSummary != nil || timelineSummary != nil || timelineCaption != nil {
+		return fmt.Errorf(
+			"legacy Cf leaked through search/timeline projections: search=%v timeline_summary=%v timeline_caption=%v",
+			searchSummary,
+			timelineSummary,
+			timelineCaption,
+		)
+	}
+
+	var limitSummary, limitCaption string
+	if err := conn.QueryRow(ctx, `
+SELECT summary, caption
+  FROM files
+ WHERE id = $1 AND user_id = $2
+`, migrationTrimmedLimitID, migrationFileUserID).Scan(
+		&limitSummary,
+		&limitCaption,
+	); err != nil {
+		return fmt.Errorf("load trimmed-limit legacy text: %w", err)
+	}
+	if len([]rune(strings.TrimSpace(limitSummary))) != 2000 ||
+		len([]rune(strings.TrimSpace(limitCaption))) != 2000 {
+		return fmt.Errorf(
+			"trimmed-limit legacy text was not preserved: summary=%d caption=%d",
+			len([]rune(strings.TrimSpace(limitSummary))),
+			len([]rune(strings.TrimSpace(limitCaption))),
+		)
+	}
+
+	nonDisplayValues := make([]string, 0, 4206)
+	for value := rune(0); value <= unicode.MaxRune; value++ {
+		if unicode.Is(unicode.Cf, value) ||
+			unicode.Is(unicode.Variation_Selector, value) ||
+			unicode.Is(unicode.Other_Default_Ignorable_Code_Point, value) {
+			nonDisplayValues = append(nonDisplayValues, string(value))
+		}
+	}
+	if len(nonDisplayValues) != 4206 {
+		return fmt.Errorf(
+			"Go Unicode non-display set has %d values, want pinned Unicode 15 count 4206",
+			len(nonDisplayValues),
+		)
+	}
+	var allNonDisplayValuesDetected bool
+	if err := conn.QueryRow(ctx, `
+SELECT COALESCE(bool_and(mem_model_text_has_non_display_character(value)), false)
+  FROM unnest($1::text[]) AS values(value)
+`, nonDisplayValues).Scan(&allNonDisplayValuesDetected); err != nil {
+		return fmt.Errorf("verify database non-display character set: %w", err)
+	}
+	if !allNonDisplayValuesDetected {
+		return errors.New("database non-display character set does not cover Go Unicode 15")
+	}
+	var safeValueMisclassified bool
+	if err := conn.QueryRow(ctx, `
+SELECT COALESCE(bool_or(mem_model_text_has_non_display_character(value)), false)
+  FROM unnest($1::text[]) AS values(value)
+`, []string{"plain text", "café", "中文", "visible emoji 😀"}).Scan(
+		&safeValueMisclassified,
+	); err != nil {
+		return fmt.Errorf("verify safe database display values: %w", err)
+	}
+	if safeValueMisclassified {
+		return errors.New("database non-display character set rejects ordinary display text")
+	}
+
+	constraintTests := []struct {
+		name  string
+		query string
+		args  []any
+	}{
+		{
+			name:  "caption reasoning opener",
+			query: `UPDATE files SET caption = $1 WHERE id = $2`,
+			args: []any{
+				`<ReAsOnInG visibility="hidden">private`,
+				migrationReasoningFileID,
+			},
+		},
+		{
+			name:  "summary reasoning closer",
+			query: `UPDATE files SET summary = $1 WHERE id = $2`,
+			args:  []any{"visible</ReAsOnInG>", migrationReasoningFileID},
+		},
+		{
+			name: "annotation reasoning opener",
+			query: `
+INSERT INTO file_annotations (
+  file_id, stable_key, kind, value_text, confidence, source, analysis_version
+)
+VALUES ($1, $2, 'tag', $3, 0.5, 'model', 'migration-guard-v1')
+`,
+			args: []any{
+				migrationReasoningFileID,
+				"migration-reasoning-opener",
+				`<reasoning visibility="hidden">private`,
+			},
+		},
+		{
+			name: "annotation reasoning closer",
+			query: `
+INSERT INTO file_annotations (
+  file_id, stable_key, kind, value_text, confidence, source, analysis_version
+)
+VALUES ($1, $2, 'tag', $3, 0.5, 'model', 'migration-guard-v1')
+`,
+			args: []any{
+				migrationReasoningFileID,
+				"migration-reasoning-closer",
+				"visible</reasoning>",
+			},
+		},
+		{
+			name: "annotation JSON-like value",
+			query: `
+INSERT INTO file_annotations (
+  file_id, stable_key, kind, value_text, confidence, source, analysis_version
+)
+VALUES ($1, $2, 'tag', $3, 0.5, 'model', 'migration-guard-v1')
+`,
+			args: []any{
+				migrationReasoningFileID,
+				"migration-json-like-value",
+				`{"analysis":"private"}`,
+			},
+		},
+		{
+			name:  "caption Unicode-whitespace JSON-like value",
+			query: `UPDATE files SET caption = $1 WHERE id = $2`,
+			args: []any{
+				"\u00a0{\"analysis\":\"private\"}",
+				migrationUnicodeFileID,
+			},
+		},
+		{
+			name:  "summary Unicode-whitespace reasoning prefix",
+			query: `UPDATE files SET summary = $1 WHERE id = $2`,
+			args: []any{
+				"\u3000Reasoning: private",
+				migrationUnicodeFileID,
+			},
+		},
+		{
+			name: "description Unicode-whitespace JSON-like value",
+			query: `
+INSERT INTO file_annotations (
+  file_id, stable_key, kind, value_text, confidence, source, analysis_version
+)
+VALUES ($1, $2, 'description', $3, 0.5, 'model', 'migration-guard-v1')
+`,
+			args: []any{
+				migrationUnicodeFileID,
+				"migration-unicode-description",
+				"\u00a0{\"analysis\":\"private\",\"answer\":\"public\"}",
+			},
+		},
+		{
+			name: "tag Unicode-whitespace array value",
+			query: `
+INSERT INTO file_annotations (
+  file_id, stable_key, kind, value_text, confidence, source, analysis_version
+)
+VALUES ($1, $2, 'tag', $3, 0.5, 'model', 'migration-guard-v1')
+`,
+			args: []any{
+				migrationUnicodeFileID,
+				"migration-unicode-tag",
+				"\u3000[\"private\"]",
+			},
+		},
+		{
+			name:  "caption BOM-prefixed JSON-like value",
+			query: `UPDATE files SET caption = $1 WHERE id = $2`,
+			args: []any{
+				"\ufeff{\"analysis\":\"private\",\"answer\":\"public\"}",
+				migrationFormatFileID,
+			},
+		},
+		{
+			name:  "summary embedded zero-width value",
+			query: `UPDATE files SET summary = $1 WHERE id = $2`,
+			args: []any{
+				"visible\u200bprivate",
+				migrationFormatFileID,
+			},
+		},
+		{
+			name: "description BOM-prefixed JSON-like value",
+			query: `
+INSERT INTO file_annotations (
+  file_id, stable_key, kind, value_text, confidence, source, analysis_version
+)
+VALUES ($1, $2, 'description', $3, 0.5, 'model', 'migration-guard-v1')
+`,
+			args: []any{
+				migrationFormatFileID,
+				"migration-format-description",
+				"\ufeff{\"analysis\":\"private\",\"answer\":\"public\"}",
+			},
+		},
+		{
+			name: "tag zero-width-prefixed array value",
+			query: `
+INSERT INTO file_annotations (
+  file_id, stable_key, kind, value_text, confidence, source, analysis_version
+)
+VALUES ($1, $2, 'tag', $3, 0.5, 'model', 'migration-guard-v1')
+`,
+			args: []any{
+				migrationFormatFileID,
+				"migration-format-tag",
+				"\u200b[\"private\"]",
+			},
+		},
+		{
+			name:  "summary embedded word-joiner value",
+			query: `UPDATE files SET summary = $1 WHERE id = $2`,
+			args: []any{
+				"visible\u2060private",
+				migrationFormatRangeID,
+			},
+		},
+		{
+			name:  "caption Unicode-15 format value",
+			query: `UPDATE files SET caption = $1 WHERE id = $2`,
+			args: []any{
+				"visible\U00013439private",
+				migrationFormatRangeID,
+			},
+		},
+		{
+			name: "annotation embedded word-joiner value",
+			query: `
+INSERT INTO file_annotations (
+  file_id, stable_key, kind, value_text, confidence, source, analysis_version
+)
+VALUES ($1, $2, 'tag', $3, 0.5, 'model', 'migration-guard-v1')
+`,
+			args: []any{
+				migrationFormatRangeID,
+				"migration-format-word-joiner",
+				"visible\u2060private",
+			},
+		},
+		{
+			name:  "summary variation-selector value",
+			query: `UPDATE files SET summary = $1 WHERE id = $2`,
+			args: []any{
+				"visible\ufe0fprivate",
+				migrationIgnorableFileID,
+			},
+		},
+		{
+			name:  "caption combining-grapheme-joiner value",
+			query: `UPDATE files SET caption = $1 WHERE id = $2`,
+			args: []any{
+				"visible\u034fprivate",
+				migrationIgnorableFileID,
+			},
+		},
+		{
+			name: "annotation variation-selector value",
+			query: `
+INSERT INTO file_annotations (
+  file_id, stable_key, kind, value_text, confidence, source, analysis_version
+)
+VALUES ($1, $2, 'tag', $3, 0.5, 'model', 'migration-guard-v1')
+`,
+			args: []any{
+				migrationIgnorableFileID,
+				"migration-default-ignorable",
+				"visible\ufe0fprivate",
+			},
+		},
+		{
+			name: "annotation provider word-joiner value",
+			query: `
+INSERT INTO file_annotations (
+  file_id, stable_key, kind, value_text, confidence, source,
+  provider, processor, analysis_version
+)
+VALUES ($1, $2, 'tag', 'safe-provider-provenance', 0.5, 'model',
+        $3, 'text', 'migration-guard-v1')
+`,
+			args: []any{
+				migrationIgnorableFileID,
+				"migration-provider-word-joiner",
+				"test\u2060private-provider",
+			},
+		},
+		{
+			name: "annotation processor variation-selector value",
+			query: `
+INSERT INTO file_annotations (
+  file_id, stable_key, kind, value_text, confidence, source,
+  provider, processor, analysis_version
+)
+VALUES ($1, $2, 'tag', 'safe-processor-provenance', 0.5, 'model',
+        'migration:test', $3, 'migration-guard-v1')
+`,
+			args: []any{
+				migrationIgnorableFileID,
+				"migration-processor-variation-selector",
+				"text\ufe0fprivate-processor",
+			},
+		},
+		{
+			name: "annotation analysis-version grapheme-joiner value",
+			query: `
+INSERT INTO file_annotations (
+  file_id, stable_key, kind, value_text, confidence, source,
+  provider, processor, analysis_version
+)
+VALUES ($1, $2, 'tag', 'safe-version-provenance', 0.5, 'model',
+        'migration:test', 'text', $3)
+`,
+			args: []any{
+				migrationIgnorableFileID,
+				"migration-version-grapheme-joiner",
+				"migration-\u034fprivate-version",
+			},
+		},
+	}
+	for _, test := range constraintTests {
+		if _, err := conn.Exec(ctx, test.query, test.args...); err == nil {
+			return fmt.Errorf("%s unexpectedly passed its database check", test.name)
+		} else {
+			var postgresError *pgconn.PgError
+			if !errors.As(err, &postgresError) || postgresError.Code != "23514" {
+				return fmt.Errorf(
+					"%s returned %v, want PostgreSQL check violation",
+					test.name,
+					err,
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func seedFileEnrichment(ctx context.Context) error {
+	conn, err := targetConnection(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close(ctx)
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin migration file seed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
+INSERT INTO users (id, email, password_hash)
+VALUES ($1, 'migration-file-preservation@example.invalid', 'test')
+ON CONFLICT (id) DO NOTHING
+`, migrationFileUserID); err != nil {
+		return fmt.Errorf("seed migration file owner: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO files (
+  id, user_id, name, path, size, sha256, mime, storage_key,
+  summary, tags, user_tags, source_metadata, processor_metadata, index_status
+)
+VALUES (
+  $2, $1, 'preserved.txt', '/', 17, repeat('a', 64), 'text/plain',
+  'migration/preserved-object', 'accepted description',
+  ARRAY['manual','model-reviewed'], ARRAY['manual'],
+  '{"source_kind":"import"}'::jsonb, '{"processor":"text"}'::jsonb, 'done'
+)
+ON CONFLICT (id) DO NOTHING
+`, migrationFileUserID, migrationFileID); err != nil {
+		return fmt.Errorf("seed migration file: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO file_annotations (
+  file_id, stable_key, kind, value_text, confidence, source,
+  provider, processor, analysis_version, status, state_version,
+  decided_by_user_id, decided_at
+)
+VALUES (
+  $2, 'migration-review', 'tag', 'model-reviewed', 0.9, 'model',
+  'migration:test', 'text', 'migration-v1', 'accepted', 2, $1, now()
+)
+ON CONFLICT (file_id, stable_key) DO NOTHING
+`, migrationFileUserID, migrationFileID); err != nil {
+		return fmt.Errorf("seed migration annotation: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit migration file seed: %w", err)
+	}
+	return nil
+}
+
+func assertFilePreserved(ctx context.Context, state string) error {
+	conn, err := targetConnection(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close(ctx)
+	var (
+		name       string
+		size       int64
+		sha256     string
+		mime       string
+		storageKey string
+		summary    string
+		tags       []string
+	)
+	if err := conn.QueryRow(ctx, `
+SELECT name, size, sha256, mime, storage_key, summary, tags
+  FROM files
+ WHERE id = $1 AND user_id = $2
+`, migrationFileID, migrationFileUserID).Scan(
+		&name,
+		&size,
+		&sha256,
+		&mime,
+		&storageKey,
+		&summary,
+		&tags,
+	); err != nil {
+		return fmt.Errorf("load preserved migration file: %w", err)
+	}
+	if name != "preserved.txt" ||
+		size != 17 ||
+		sha256 != strings.Repeat("a", 64) ||
+		mime != "text/plain" ||
+		storageKey != "migration/preserved-object" ||
+		summary != "accepted description" ||
+		len(tags) != 1 ||
+		tags[0] != "manual" {
+		return fmt.Errorf(
+			"migration file or trust projection changed: name=%q size=%d sha=%q mime=%q key=%q summary=%q tags=%v",
+			name,
+			size,
+			sha256,
+			mime,
+			storageKey,
+			summary,
+			tags,
+		)
+	}
+	var enrichmentSchema bool
+	if err := conn.QueryRow(ctx, `
+SELECT
+  EXISTS (
+    SELECT 1
+      FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name = 'files'
+       AND column_name = 'user_tags'
+  )
+  AND to_regclass('public.file_annotations') IS NOT NULL
+`).Scan(&enrichmentSchema); err != nil {
+		return fmt.Errorf("inspect %s enrichment schema: %w", state, err)
+	}
+	if enrichmentSchema != (state == "up") {
+		return fmt.Errorf(
+			"unexpected %s enrichment schema while checking trust projection: present=%t",
+			state,
+			enrichmentSchema,
+		)
+	}
+	if state == "up" {
+		var userTags []string
+		if err := conn.QueryRow(ctx, `
+SELECT user_tags
+  FROM files
+ WHERE id = $1 AND user_id = $2
+`, migrationFileID, migrationFileUserID).Scan(&userTags); err != nil {
+			return fmt.Errorf("load re-up user tags: %w", err)
+		}
+		if len(userTags) != 1 || userTags[0] != "manual" {
+			return fmt.Errorf(
+				"accepted model tag was laundered into user_tags on re-up: %v",
+				userTags,
+			)
+		}
+		var annotationCount int
+		if err := conn.QueryRow(ctx, `
+SELECT count(*)
+  FROM file_annotations
+ WHERE file_id = $1
+`, migrationFileID).Scan(&annotationCount); err != nil {
+			return fmt.Errorf("count re-up annotations: %w", err)
+		}
+		if annotationCount != 0 {
+			return fmt.Errorf(
+				"discarded downgrade annotations reappeared on re-up: %d",
+				annotationCount,
+			)
+		}
+	}
+	return nil
 }
 
 func connectDisposable(
@@ -567,15 +1218,22 @@ func assertMigrationState(ctx context.Context, state string) error {
 	defer conn.Close(ctx)
 
 	var (
-		rawKey              bool
-		hashedKey           bool
-		replayPrincipal     bool
-		oldFileIndex        bool
-		hashConstraint      bool
-		redactConstraint    bool
-		receiptConstraint   bool
-		replayConstraint    bool
-		managedEntitlements bool
+		rawKey                bool
+		hashedKey             bool
+		replayPrincipal       bool
+		oldFileIndex          bool
+		hashConstraint        bool
+		redactConstraint      bool
+		receiptConstraint     bool
+		replayConstraint      bool
+		managedEntitlements   bool
+		fileUserTags          bool
+		fileSourceMetadata    bool
+		fileProcessorMetadata bool
+		fileAnnotations       bool
+		fileCaptionConstraint bool
+		fileSummaryConstraint bool
+		nonDisplayFunction    bool
 	)
 	err = conn.QueryRow(ctx, `
 SELECT
@@ -619,7 +1277,35 @@ SELECT
     AND to_regclass('public.managed_embedding_usage') IS NOT NULL
     AND to_regclass('public.managed_embedding_usage_events') IS NOT NULL
     AND to_regclass('public.managed_embedding_replay_results') IS NOT NULL
-  )
+  ),
+  EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name = 'files'
+       AND column_name = 'user_tags'
+  ),
+  EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name = 'files'
+       AND column_name = 'source_metadata'
+  ),
+  EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name = 'files'
+       AND column_name = 'processor_metadata'
+  ),
+  to_regclass('public.file_annotations') IS NOT NULL,
+  EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'files_caption_safe_model_text'
+  ),
+  EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'files_summary_safe_model_text'
+  ),
+  to_regprocedure('public.mem_model_text_has_non_display_character(text)') IS NOT NULL
 `).Scan(
 		&rawKey,
 		&hashedKey,
@@ -630,6 +1316,13 @@ SELECT
 		&receiptConstraint,
 		&replayConstraint,
 		&managedEntitlements,
+		&fileUserTags,
+		&fileSourceMetadata,
+		&fileProcessorMetadata,
+		&fileAnnotations,
+		&fileCaptionConstraint,
+		&fileSummaryConstraint,
+		&nonDisplayFunction,
 	)
 	if err != nil {
 		return fmt.Errorf("inspect migration state: %w", err)
@@ -646,7 +1339,14 @@ SELECT
 			redactConstraint &&
 			!receiptConstraint &&
 			!replayConstraint &&
-			!managedEntitlements
+			!managedEntitlements &&
+			!fileUserTags &&
+			!fileSourceMetadata &&
+			!fileProcessorMetadata &&
+			!fileAnnotations &&
+			!fileCaptionConstraint &&
+			!fileSummaryConstraint &&
+			!nonDisplayFunction
 	case "up":
 		valid = !rawKey &&
 			hashedKey &&
@@ -656,11 +1356,18 @@ SELECT
 			redactConstraint &&
 			receiptConstraint &&
 			replayConstraint &&
-			managedEntitlements
+			managedEntitlements &&
+			fileUserTags &&
+			fileSourceMetadata &&
+			fileProcessorMetadata &&
+			fileAnnotations &&
+			fileCaptionConstraint &&
+			fileSummaryConstraint &&
+			nonDisplayFunction
 	}
 	if !valid {
 		return fmt.Errorf(
-			"unexpected %s schema state: raw_key=%t hashed_key=%t replay_principal=%t old_file_index=%t hash_constraint=%t redact_constraint=%t receipt_constraint=%t replay_constraint=%t managed_entitlements=%t",
+			"unexpected %s schema state: raw_key=%t hashed_key=%t replay_principal=%t old_file_index=%t hash_constraint=%t redact_constraint=%t receipt_constraint=%t replay_constraint=%t managed_entitlements=%t file_user_tags=%t file_source_metadata=%t file_processor_metadata=%t file_annotations=%t file_caption_constraint=%t file_summary_constraint=%t non_display_function=%t",
 			state,
 			rawKey,
 			hashedKey,
@@ -671,6 +1378,13 @@ SELECT
 			receiptConstraint,
 			replayConstraint,
 			managedEntitlements,
+			fileUserTags,
+			fileSourceMetadata,
+			fileProcessorMetadata,
+			fileAnnotations,
+			fileCaptionConstraint,
+			fileSummaryConstraint,
+			nonDisplayFunction,
 		)
 	}
 	return nil

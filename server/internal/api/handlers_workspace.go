@@ -57,6 +57,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		workspaceBundleSchemaVersions = append(
 			workspaceBundleSchemaVersions,
 			workspacebundle.SchemaVersionV1,
+			workspacebundle.CurrentSchemaVersion,
 		)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
