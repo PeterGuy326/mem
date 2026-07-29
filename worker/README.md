@@ -113,6 +113,13 @@ docker run --rm -p 127.0.0.1:50051:50051 \
 Provider spec format is **`<vendor>:<model>`**, e.g.
 `ollama:nomic-embed-text`, `clip:ViT-B-32`, `openai:gpt-4o-mini`.
 
+The Ollama embedding adapter uses one batched `POST /api/embed` request with
+`dimensions: 768` and `truncate: false`. It requires one exactly
+768-dimensional numeric vector per input and fails closed otherwise; it never
+truncates or pads vectors to imitate schema compatibility. For curated local
+selection, artifact integrity checks, and explicit activation, see
+[LOCAL_EMBEDDING_MODELS.md](../docs/LOCAL_EMBEDDING_MODELS.md).
+
 ---
 
 ## gRPC contract (`proto/processor.proto`)

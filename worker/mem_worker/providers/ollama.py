@@ -7,7 +7,7 @@ This adapter is intentionally thin — it has no retry policy, no token
 accounting, no streaming buffering. Those concerns live one level up.
 
 W1 scope:
-  * embed_text  via POST /api/embeddings   (default: nomic-embed-text)
+  * embed_text  via batched POST /api/embed (default: nomic-embed-text)
   * complete    via POST /api/chat
   * stream      via POST /api/chat with stream=true
   * caption     via POST /api/chat with multi-modal "images" field
@@ -22,13 +22,15 @@ from __future__ import annotations
 
 import base64
 import json
-from typing import Any, Iterator, Optional
+import math
+from collections.abc import Iterator
+from typing import Any
 
 import requests
 
 from ..config import get_settings
 from ..logging import get_logger
-from .base import EmbeddingProvider, LLMProvider, Message, ProviderError, Vector, VLMProvider
+from .base import Message, ProviderError, Vector
 
 log = get_logger(__name__)
 
@@ -36,6 +38,7 @@ log = get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Shared HTTP helper
 # ---------------------------------------------------------------------------
+
 
 def _post_json(
     base_url: str,
@@ -51,9 +54,7 @@ def _post_json(
     except requests.RequestException as exc:
         raise ProviderError(f"ollama: HTTP request to {url} failed: {exc}") from exc
     if resp.status_code >= 400:
-        raise ProviderError(
-            f"ollama: {url} returned {resp.status_code}: {resp.text[:300]}"
-        )
+        raise ProviderError(f"ollama: {url} returned {resp.status_code}: {resp.text[:300]}")
     return resp
 
 
@@ -61,57 +62,81 @@ def _post_json(
 # Embedding
 # ---------------------------------------------------------------------------
 
+
 class OllamaEmbeddingProvider:
-    """Text embedding via Ollama's ``/api/embeddings`` endpoint.
+    """Text embedding via Ollama's modern batched ``/api/embed`` endpoint.
 
-    The dim is set lazily after the first successful call (since it depends
-    on the model). We seed a sensible default for the canonical model.
+    mem's current PostgreSQL corpus is fixed at 768 dimensions. The adapter
+    requests that dimension explicitly and fails closed when a model cannot
+    honor it; it never truncates text or vectors locally to manufacture
+    compatibility.
     """
-
-    # Known model -> dim hints (best-effort, not exhaustive).
-    _DIM_HINTS = {
-        "nomic-embed-text": 768,
-        "mxbai-embed-large": 1024,
-        "all-minilm": 384,
-        "bge-m3": 1024,
-    }
 
     def __init__(
         self,
         model: str = "nomic-embed-text",
-        base_url: Optional[str] = None,
-        timeout: Optional[float] = None,
+        base_url: str | None = None,
+        timeout: float | None = None,
+        dimensions: int = 768,
     ):
         settings = get_settings()
+        if isinstance(dimensions, bool) or not isinstance(dimensions, int) or dimensions <= 0:
+            raise ProviderError("ollama: embedding dimensions must be positive")
         self.model = model
         self.base_url = base_url or settings.ollama_base_url
         self.timeout = timeout if timeout is not None else settings.ollama_timeout
         self.name = f"ollama:{model}"
-        self.dim = self._DIM_HINTS.get(model.split(":")[0], 0)
+        self.dim = dimensions
 
     def embed_text(self, texts: list[str]) -> list[Vector]:
-        """Encode a batch of strings.
-
-        Ollama's ``/api/embeddings`` accepts a single ``prompt`` per call,
-        so we loop. This is fine for W1 throughput; W2 can switch to the
-        newer ``/api/embed`` batched endpoint if available.
-        """
-        out: list[Vector] = []
-        for text in texts:
-            resp = _post_json(
-                self.base_url,
-                "/api/embeddings",
-                {"model": self.model, "prompt": text},
-                self.timeout,
-            )
+        """Encode a batch of strings while preserving input order."""
+        if not texts:
+            return []
+        resp = _post_json(
+            self.base_url,
+            "/api/embed",
+            {
+                "model": self.model,
+                "input": texts,
+                "dimensions": self.dim,
+                "truncate": False,
+            },
+            self.timeout,
+        )
+        try:
             data = resp.json()
-            vec = data.get("embedding")
-            if not isinstance(vec, list):
-                raise ProviderError(f"ollama: malformed embed response: {data!r}")
-            out.append([float(x) for x in vec])
-            # Real-response dim wins over the static hint; this also keeps
-            # us honest when a model is swapped out without restart.
-            self.dim = len(vec)
+        except (TypeError, ValueError) as exc:
+            raise ProviderError("ollama: malformed embed response") from exc
+        embeddings = data.get("embeddings") if isinstance(data, dict) else None
+        if not isinstance(embeddings, list) or len(embeddings) != len(texts):
+            count = len(embeddings) if isinstance(embeddings, list) else "invalid"
+            raise ProviderError(
+                f"ollama: malformed embed response: got {count} vectors for {len(texts)} inputs"
+            )
+
+        out: list[Vector] = []
+        for index, vector in enumerate(embeddings):
+            if not isinstance(vector, list):
+                raise ProviderError(
+                    f"ollama: malformed embed response: vector {index} is not an array"
+                )
+            if len(vector) != self.dim:
+                raise ProviderError(
+                    f"ollama: embedding dimension mismatch at vector {index}: "
+                    f"got {len(vector)}, want {self.dim}"
+                )
+            if any(
+                isinstance(value, bool) or not isinstance(value, (int, float)) for value in vector
+            ):
+                raise ProviderError(
+                    f"ollama: malformed embed response: vector {index} contains a non-numeric value"
+                )
+            converted = [float(value) for value in vector]
+            if any(not math.isfinite(value) for value in converted):
+                raise ProviderError(
+                    f"ollama: malformed embed response: vector {index} contains a non-finite value"
+                )
+            out.append(converted)
         return out
 
     def embed_image(self, images: list[bytes]) -> list[Vector]:
@@ -125,14 +150,15 @@ class OllamaEmbeddingProvider:
 # LLM
 # ---------------------------------------------------------------------------
 
+
 class OllamaLLMProvider:
     """Chat completion via Ollama's ``/api/chat`` endpoint."""
 
     def __init__(
         self,
         model: str = "qwen2.5:7b",
-        base_url: Optional[str] = None,
-        timeout: Optional[float] = None,
+        base_url: str | None = None,
+        timeout: float | None = None,
     ):
         settings = get_settings()
         self.model = model
@@ -178,6 +204,7 @@ class OllamaLLMProvider:
 # VLM
 # ---------------------------------------------------------------------------
 
+
 class OllamaVLMProvider:
     """Vision-language model via Ollama (e.g. ``minicpm-v``, ``llava``).
 
@@ -193,8 +220,8 @@ class OllamaVLMProvider:
     def __init__(
         self,
         model: str = "minicpm-v",
-        base_url: Optional[str] = None,
-        timeout: Optional[float] = None,
+        base_url: str | None = None,
+        timeout: float | None = None,
     ):
         settings = get_settings()
         self.model = model

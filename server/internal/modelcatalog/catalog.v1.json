@@ -1,0 +1,104 @@
+{
+  "schema_version": "mem.model-catalog/v1",
+  "catalog_version": "2026-07-28",
+  "corpus_dimension": 768,
+  "profiles": [
+    {
+      "id": "nomic-embed-text-v1.5-ollama",
+      "display_name": "Nomic Embed Text v1.5",
+      "runtime": "ollama",
+      "source_model": "nomic-ai/nomic-embed-text-v1.5",
+      "model": "nomic-embed-text:v1.5",
+      "runtime_source_url": "https://ollama.com/library/nomic-embed-text:v1.5",
+      "runtime_manifest_url": "https://registry.ollama.ai/v2/library/nomic-embed-text/manifests/v1.5",
+      "expected_dimension": 768,
+      "artifact_size_bytes": 274302030,
+      "manifest_digest": "sha256:0a109f422b47e3a30ba2b10eca18548e944e8a23073ee3f3e947efcf3c45e59f",
+      "license": "Apache-2.0",
+      "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "source_url": "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5",
+      "languages": ["en"],
+      "language_notes": "English retrieval model; use search_query/search_document prefixes where the caller supports them.",
+      "minimum_hardware": {
+        "memory_bytes": 2147483648,
+        "disk_bytes": 536870912,
+        "operating_systems": ["darwin", "linux", "windows"],
+        "architectures": ["amd64", "arm64"]
+      },
+      "installable": true
+    },
+    {
+      "id": "qwen3-embedding-0.6b-ollama",
+      "display_name": "Qwen3 Embedding 0.6B",
+      "runtime": "ollama",
+      "source_model": "Qwen/Qwen3-Embedding-0.6B",
+      "model": "qwen3-embedding:0.6b",
+      "runtime_source_url": "https://ollama.com/library/qwen3-embedding:0.6b",
+      "runtime_manifest_url": "https://registry.ollama.ai/v2/library/qwen3-embedding/manifests/0.6b",
+      "expected_dimension": 768,
+      "artifact_size_bytes": 639150592,
+      "manifest_digest": "sha256:ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+      "license": "Apache-2.0",
+      "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "source_url": "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B",
+      "languages": ["zh", "en", "ar", "de", "es", "fa", "fr", "hi", "id", "it", "ja", "ko", "nl", "pl", "pt", "ru", "th", "tr", "uk", "ur", "vi", "code"],
+      "language_notes": "Supports 100+ human and programming languages; the profile requests the model's supported 768-dimensional MRL output.",
+      "minimum_hardware": {
+        "memory_bytes": 4294967296,
+        "disk_bytes": 1073741824,
+        "operating_systems": ["darwin", "linux", "windows"],
+        "architectures": ["amd64", "arm64"]
+      },
+      "installable": true
+    },
+    {
+      "id": "granite-embedding-278m-multilingual-ollama",
+      "display_name": "Granite Embedding 278M Multilingual",
+      "runtime": "ollama",
+      "source_model": "ibm-granite/granite-embedding-278m-multilingual",
+      "model": "granite-embedding:278m",
+      "runtime_source_url": "https://ollama.com/library/granite-embedding:278m",
+      "runtime_manifest_url": "https://registry.ollama.ai/v2/library/granite-embedding/manifests/278m",
+      "expected_dimension": 768,
+      "artifact_size_bytes": 562776964,
+      "manifest_digest": "sha256:1a37926bf842899cbf90583e3932f3820548716d9d07661ba622199ffe95c552",
+      "license": "Apache-2.0",
+      "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+      "source_url": "https://huggingface.co/ibm-granite/granite-embedding-278m-multilingual",
+      "languages": ["zh", "en", "de", "es", "fr", "ja", "pt", "ar", "cs", "it", "ko", "nl"],
+      "language_notes": "Native 768-dimensional multilingual model covering 12 documented languages, including Chinese and English.",
+      "minimum_hardware": {
+        "memory_bytes": 4294967296,
+        "disk_bytes": 1073741824,
+        "operating_systems": ["darwin", "linux", "windows"],
+        "architectures": ["amd64", "arm64"]
+      },
+      "installable": true
+    },
+    {
+      "id": "bge-m3-567m-ollama",
+      "display_name": "BGE-M3 567M",
+      "runtime": "ollama",
+      "source_model": "BAAI/bge-m3",
+      "model": "bge-m3:567m",
+      "runtime_source_url": "https://ollama.com/library/bge-m3:567m",
+      "runtime_manifest_url": "https://registry.ollama.ai/v2/library/bge-m3/manifests/567m",
+      "expected_dimension": 1024,
+      "artifact_size_bytes": 1157672268,
+      "manifest_digest": "sha256:7907646426070047a77226ac3e684fbbe8410524f7b4a74d02837e43f2146bab",
+      "license": "MIT",
+      "license_url": "https://opensource.org/license/mit",
+      "source_url": "https://huggingface.co/BAAI/bge-m3",
+      "languages": ["zh", "en"],
+      "language_notes": "Multilingual model with a fixed 1024-dimensional dense output.",
+      "minimum_hardware": {
+        "memory_bytes": 6442450944,
+        "disk_bytes": 2147483648,
+        "operating_systems": ["darwin", "linux", "windows"],
+        "architectures": ["amd64", "arm64"]
+      },
+      "installable": false,
+      "unavailable_reason": "the model's fixed 1024-dimensional output is incompatible with mem's current 768-dimensional corpus"
+    }
+  ]
+}
