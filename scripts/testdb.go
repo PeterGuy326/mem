@@ -61,7 +61,10 @@ func run() error {
 		return errors.New(
 			"usage: testdb <check|create|drop|version|assert-state|" +
 				"seed-file-enrichment|assert-file-preserved <down|up>|" +
-				"seed-unsafe-derived-text|assert-unsafe-derived-text-scrubbed>",
+				"seed-v15-noncanonical-text|assert-v15-noncanonical-text|" +
+				"assert-canonical-model-text-values|" +
+				"assert-canonical-model-text|seed-unsafe-derived-text|" +
+				"assert-unsafe-derived-text-scrubbed>",
 		)
 	}
 
@@ -118,6 +121,28 @@ func run() error {
 			return errors.New("seed-file-enrichment takes no arguments")
 		}
 		return seedFileEnrichment(ctx)
+	case "seed-v15-noncanonical-text":
+		if len(os.Args) != 2 {
+			return errors.New("seed-v15-noncanonical-text takes no arguments")
+		}
+		return seedV15NonCanonicalText(ctx)
+	case "assert-v15-noncanonical-text":
+		if len(os.Args) != 2 {
+			return errors.New("assert-v15-noncanonical-text takes no arguments")
+		}
+		return assertV15NonCanonicalText(ctx)
+	case "assert-canonical-model-text-values":
+		if len(os.Args) != 2 {
+			return errors.New(
+				"assert-canonical-model-text-values takes no arguments",
+			)
+		}
+		return assertCanonicalModelTextValues(ctx)
+	case "assert-canonical-model-text":
+		if len(os.Args) != 2 {
+			return errors.New("assert-canonical-model-text takes no arguments")
+		}
+		return assertCanonicalModelText(ctx)
 	case "assert-file-preserved":
 		if len(os.Args) != 3 ||
 			(os.Args[2] != "down" && os.Args[2] != "up") {
@@ -137,6 +162,168 @@ func run() error {
 	default:
 		return fmt.Errorf("unknown command %q", os.Args[1])
 	}
+}
+
+func seedV15NonCanonicalText(ctx context.Context) error {
+	conn, err := targetConnection(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close(ctx)
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin v15 non-canonical text seed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
+INSERT INTO users (id, email, password_hash)
+VALUES ($1, 'migration-file-preservation@example.invalid', 'test')
+ON CONFLICT (id) DO NOTHING
+`, migrationFileUserID); err != nil {
+		return fmt.Errorf("seed v15 non-canonical text owner: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO files (
+  id, user_id, name, path, size, sha256, mime, storage_key,
+  summary, caption, tags, index_status
+)
+VALUES (
+  $1, $2, 'v15-noncanonical.txt', '/', 1, repeat('1', 64), 'text/plain',
+  'migration/v15-noncanonical',
+  $3, $4, ARRAY[]::text[], 'done'
+)
+ON CONFLICT (id) DO UPDATE
+   SET summary = EXCLUDED.summary,
+       caption = EXCLUDED.caption
+`,
+		migrationTrimmedLimitID,
+		migrationFileUserID,
+		" "+strings.Repeat("s", 2000)+" ",
+		"\u3000"+strings.Repeat("c", 2000)+"\u00a0",
+	); err != nil {
+		return fmt.Errorf("seed v15 non-canonical model text: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit v15 non-canonical text seed: %w", err)
+	}
+	return nil
+}
+
+func assertV15NonCanonicalText(ctx context.Context) error {
+	conn, err := targetConnection(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close(ctx)
+	var summary, caption string
+	if err := conn.QueryRow(ctx, `
+SELECT summary, caption
+  FROM files
+ WHERE id = $1 AND user_id = $2
+`, migrationTrimmedLimitID, migrationFileUserID).Scan(
+		&summary,
+		&caption,
+	); err != nil {
+		return fmt.Errorf("load v15 non-canonical model text: %w", err)
+	}
+	wantSummary := " " + strings.Repeat("s", 2000) + " "
+	wantCaption := "\u3000" + strings.Repeat("c", 2000) + "\u00a0"
+	if summary != wantSummary || caption != wantCaption {
+		return fmt.Errorf(
+			"v15 did not preserve non-canonical model text: summary=%d caption=%d",
+			len([]rune(summary)),
+			len([]rune(caption)),
+		)
+	}
+	return nil
+}
+
+func assertCanonicalModelText(ctx context.Context) error {
+	conn, err := targetConnection(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close(ctx)
+	return assertCanonicalModelTextWithConnection(ctx, conn)
+}
+
+func assertCanonicalModelTextValues(ctx context.Context) error {
+	conn, err := targetConnection(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close(ctx)
+	return assertCanonicalModelTextValuesWithConnection(ctx, conn)
+}
+
+func assertCanonicalModelTextValuesWithConnection(ctx context.Context, conn *pgx.Conn) error {
+	var summary, caption string
+	if err := conn.QueryRow(ctx, `
+SELECT summary, caption
+  FROM files
+ WHERE id = $1 AND user_id = $2
+`, migrationTrimmedLimitID, migrationFileUserID).Scan(
+		&summary,
+		&caption,
+	); err != nil {
+		return fmt.Errorf("load canonical model text: %w", err)
+	}
+	wantSummary := strings.Repeat("s", 2000)
+	wantCaption := strings.Repeat("c", 2000)
+	if summary != wantSummary || caption != wantCaption {
+		return fmt.Errorf(
+			"model text was not canonicalized: summary=%d caption=%d",
+			len([]rune(summary)),
+			len([]rune(caption)),
+		)
+	}
+	return nil
+}
+
+func assertCanonicalModelTextWithConnection(ctx context.Context, conn *pgx.Conn) error {
+	if err := assertCanonicalModelTextValuesWithConnection(ctx, conn); err != nil {
+		return err
+	}
+	constraintTests := []struct {
+		name  string
+		query string
+		value string
+	}{
+		{
+			name:  "caption non-canonical outer whitespace",
+			query: `UPDATE files SET caption = $1 WHERE id = $2`,
+			value: " caption ",
+		},
+		{
+			name:  "summary non-canonical outer Unicode whitespace",
+			query: `UPDATE files SET summary = $1 WHERE id = $2`,
+			value: "\u3000summary\u00a0",
+		},
+	}
+	for _, test := range constraintTests {
+		if _, err := conn.Exec(
+			ctx,
+			test.query,
+			test.value,
+			migrationTrimmedLimitID,
+		); err == nil {
+			return fmt.Errorf(
+				"%s unexpectedly passed its database check",
+				test.name,
+			)
+		} else {
+			var postgresError *pgconn.PgError
+			if !errors.As(err, &postgresError) ||
+				postgresError.Code != "23514" {
+				return fmt.Errorf(
+					"%s returned %v, want PostgreSQL check violation",
+					test.name,
+					err,
+				)
+			}
+		}
+	}
+	return nil
 }
 
 func seedUnsafeDerivedText(ctx context.Context) error {
@@ -267,24 +454,8 @@ SELECT summary, caption
 		)
 	}
 
-	var limitSummary, limitCaption string
-	if err := conn.QueryRow(ctx, `
-SELECT summary, caption
-  FROM files
- WHERE id = $1 AND user_id = $2
-`, migrationTrimmedLimitID, migrationFileUserID).Scan(
-		&limitSummary,
-		&limitCaption,
-	); err != nil {
-		return fmt.Errorf("load trimmed-limit legacy text: %w", err)
-	}
-	if len([]rune(strings.TrimSpace(limitSummary))) != 2000 ||
-		len([]rune(strings.TrimSpace(limitCaption))) != 2000 {
-		return fmt.Errorf(
-			"trimmed-limit legacy text was not preserved: summary=%d caption=%d",
-			len([]rune(strings.TrimSpace(limitSummary))),
-			len([]rune(strings.TrimSpace(limitCaption))),
-		)
+	if err := assertCanonicalModelTextWithConnection(ctx, conn); err != nil {
+		return err
 	}
 
 	nonDisplayValues := make([]string, 0, 4206)
@@ -1233,6 +1404,8 @@ func assertMigrationState(ctx context.Context, state string) error {
 		fileAnnotations       bool
 		fileCaptionConstraint bool
 		fileSummaryConstraint bool
+		canonicalCaption      bool
+		canonicalSummary      bool
 		nonDisplayFunction    bool
 	)
 	err = conn.QueryRow(ctx, `
@@ -1305,6 +1478,16 @@ SELECT
     SELECT 1 FROM pg_constraint
      WHERE conname = 'files_summary_safe_model_text'
   ),
+  EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'files_caption_canonical_model_text'
+       AND conrelid = 'public.files'::regclass
+  ),
+  EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'files_summary_canonical_model_text'
+       AND conrelid = 'public.files'::regclass
+  ),
   to_regprocedure('public.mem_model_text_has_non_display_character(text)') IS NOT NULL
 `).Scan(
 		&rawKey,
@@ -1322,6 +1505,8 @@ SELECT
 		&fileAnnotations,
 		&fileCaptionConstraint,
 		&fileSummaryConstraint,
+		&canonicalCaption,
+		&canonicalSummary,
 		&nonDisplayFunction,
 	)
 	if err != nil {
@@ -1346,6 +1531,8 @@ SELECT
 			!fileAnnotations &&
 			!fileCaptionConstraint &&
 			!fileSummaryConstraint &&
+			!canonicalCaption &&
+			!canonicalSummary &&
 			!nonDisplayFunction
 	case "up":
 		valid = !rawKey &&
@@ -1363,11 +1550,13 @@ SELECT
 			fileAnnotations &&
 			fileCaptionConstraint &&
 			fileSummaryConstraint &&
+			canonicalCaption &&
+			canonicalSummary &&
 			nonDisplayFunction
 	}
 	if !valid {
 		return fmt.Errorf(
-			"unexpected %s schema state: raw_key=%t hashed_key=%t replay_principal=%t old_file_index=%t hash_constraint=%t redact_constraint=%t receipt_constraint=%t replay_constraint=%t managed_entitlements=%t file_user_tags=%t file_source_metadata=%t file_processor_metadata=%t file_annotations=%t file_caption_constraint=%t file_summary_constraint=%t non_display_function=%t",
+			"unexpected %s schema state: raw_key=%t hashed_key=%t replay_principal=%t old_file_index=%t hash_constraint=%t redact_constraint=%t receipt_constraint=%t replay_constraint=%t managed_entitlements=%t file_user_tags=%t file_source_metadata=%t file_processor_metadata=%t file_annotations=%t file_caption_constraint=%t file_summary_constraint=%t canonical_caption=%t canonical_summary=%t non_display_function=%t",
 			state,
 			rawKey,
 			hashedKey,
@@ -1384,6 +1573,8 @@ SELECT
 			fileAnnotations,
 			fileCaptionConstraint,
 			fileSummaryConstraint,
+			canonicalCaption,
+			canonicalSummary,
 			nonDisplayFunction,
 		)
 	}

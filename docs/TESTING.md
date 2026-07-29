@@ -138,11 +138,12 @@ marker before it can drop anything. The control role therefore needs
 
 1. validates migrations on a fresh owned database and applies `0001` through
    the declared head;
-2. asserts the current privacy, enrichment and managed-entitlement schema,
-   performs the explicit `15 → 11 → 15`
-   rollback round trip, asserts both intermediate schema states, and proves
-   accepted model tags are removed before provenance disappears rather than
-   being copied into `user_tags` on re-up;
+2. asserts the current privacy, enrichment and managed-entitlement schema;
+   proves an already-migrated `15 → 16` database canonicalizes bounded model
+   text; performs explicit `16 → 15 → 16` and `16 → 11 → 16` rollback round
+   trips; asserts the intermediate schema states; and proves accepted model
+   tags are removed before provenance disappears rather than being copied into
+   `user_tags` on re-up;
 3. creates separate fresh databases for normal and race runs, then executes
    the real PostgreSQL memory, handoff, workspace-transfer, HTTP-router,
    folder/file path-locking, folder-lifecycle, relator, managed-entitlement,
@@ -165,7 +166,7 @@ Required tests:
 - `TestManagedSearchReplayPostgres`
 - `TestManagedEmbeddingHTTPAuthorizationPostgres`
 
-Expected result: migrations reach the declared current head (currently `15`),
+Expected result: migrations reach the declared current head (currently `16`),
 both rollback-state assertions pass, every named test prints `PASS`, all
 commands exit `0`, and the race run reports no data race.
 
