@@ -1,0 +1,25 @@
+{
+  "schema_version": "mem.recall-dataset.v1",
+  "version": "synthetic-multilingual-v1",
+  "title": "mem synthetic multilingual recall benchmark",
+  "provenance": "hand-authored synthetic data",
+  "license": "CC0-1.0",
+  "required_coverage": {
+    "languages": [
+      "en",
+      "zh"
+    ],
+    "slices": [
+      "exact",
+      "filters",
+      "hard-negative",
+      "paraphrase"
+    ],
+    "source_kinds": [
+      "image_caption",
+      "structured",
+      "text"
+    ]
+  },
+  "notes": "Every name, preference, project, path, caption, and identifier is fictional and was written for this repository. No private or user data was copied."
+}

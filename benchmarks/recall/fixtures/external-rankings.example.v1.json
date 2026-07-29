@@ -1,0 +1,144 @@
+{
+  "schema_version": "mem.recall-rankings.v1",
+  "engine": "external-example",
+  "configuration": {
+    "mode": "vector",
+    "provider": "replace-with-provider",
+    "model": "replace-with-model",
+    "dimension": 768,
+    "index": {
+      "distance": "cosine",
+      "kind": "replace-with-index"
+    },
+    "search": {
+      "top_k": 10,
+      "type": "vector"
+    }
+  },
+  "hardware": {
+    "accelerator": "replace-with-accelerator-or-none",
+    "host": "replace-with-coarse-host-class"
+  },
+  "queries": [
+    {
+      "query_id": "q-zh-structured-exact",
+      "status": "ok",
+      "latency_ms": 1,
+      "results": [
+        {
+          "doc_id": "mem-zh-window",
+          "citation": "mem://memories/mem-zh-window",
+          "score": 1
+        }
+      ]
+    },
+    {
+      "query_id": "q-en-structured-paraphrase",
+      "status": "ok",
+      "latency_ms": 1,
+      "results": [
+        {
+          "doc_id": "mem-en-weekly",
+          "citation": "mem://memories/mem-en-weekly",
+          "score": 1
+        }
+      ]
+    },
+    {
+      "query_id": "q-en-text-exact",
+      "status": "ok",
+      "latency_ms": 1,
+      "results": [
+        {
+          "doc_id": "file-en-cassini",
+          "citation": "mem://files/file-en-cassini",
+          "score": 1
+        }
+      ]
+    },
+    {
+      "query_id": "q-zh-text-paraphrase",
+      "status": "ok",
+      "latency_ms": 1,
+      "results": [
+        {
+          "doc_id": "file-zh-orchid-cancelled",
+          "citation": "mem://files/file-zh-orchid-cancelled",
+          "score": 1
+        }
+      ]
+    },
+    {
+      "query_id": "q-en-image-exact",
+      "status": "ok",
+      "latency_ms": 1,
+      "results": [
+        {
+          "doc_id": "image-en-dog",
+          "citation": "mem://files/image-en-dog",
+          "score": 1
+        }
+      ]
+    },
+    {
+      "query_id": "q-zh-image-paraphrase",
+      "status": "ok",
+      "latency_ms": 1,
+      "results": [
+        {
+          "doc_id": "image-zh-red-panda",
+          "citation": "mem://files/image-zh-red-panda",
+          "score": 1
+        }
+      ]
+    },
+    {
+      "query_id": "q-en-workspace-filter",
+      "status": "ok",
+      "latency_ms": 1,
+      "results": [
+        {
+          "doc_id": "file-en-budget-alpha",
+          "citation": "mem://files/file-en-budget-alpha",
+          "score": 1
+        }
+      ]
+    },
+    {
+      "query_id": "q-zh-path-filter",
+      "status": "ok",
+      "latency_ms": 1,
+      "results": [
+        {
+          "doc_id": "mem-zh-backend-code",
+          "citation": "mem://memories/mem-zh-backend-code",
+          "score": 1
+        }
+      ]
+    },
+    {
+      "query_id": "q-en-hard-negative",
+      "status": "ok",
+      "latency_ms": 1,
+      "results": [
+        {
+          "doc_id": "mem-en-weekly",
+          "citation": "mem://memories/mem-en-weekly",
+          "score": 1
+        }
+      ]
+    },
+    {
+      "query_id": "q-zh-hard-negative",
+      "status": "ok",
+      "latency_ms": 1,
+      "results": [
+        {
+          "doc_id": "file-zh-orchid-cancelled",
+          "citation": "mem://files/file-zh-orchid-cancelled",
+          "score": 1
+        }
+      ]
+    }
+  ]
+}

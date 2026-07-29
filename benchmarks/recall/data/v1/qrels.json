@@ -1,0 +1,37 @@
+{
+  "q-en-hard-negative": {
+    "mem-en-postmortem": 0,
+    "mem-en-weekly": 3
+  },
+  "q-en-image-exact": {
+    "image-en-dog": 3,
+    "image-en-robot": 0
+  },
+  "q-en-structured-paraphrase": {
+    "mem-en-weekly": 3
+  },
+  "q-en-text-exact": {
+    "file-en-cassini": 3,
+    "file-en-cassino": 0
+  },
+  "q-en-workspace-filter": {
+    "file-en-budget-alpha": 3
+  },
+  "q-zh-hard-negative": {
+    "file-zh-magnolia-approved": 0,
+    "file-zh-orchid-cancelled": 3
+  },
+  "q-zh-image-paraphrase": {
+    "image-zh-red-panda": 3
+  },
+  "q-zh-path-filter": {
+    "mem-zh-backend-code": 3
+  },
+  "q-zh-structured-exact": {
+    "mem-zh-aisle": 0,
+    "mem-zh-window": 3
+  },
+  "q-zh-text-paraphrase": {
+    "file-zh-orchid-cancelled": 3
+  }
+}
