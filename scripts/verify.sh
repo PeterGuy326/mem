@@ -4,7 +4,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-unit}"
-EXPECTED_MIGRATION_HEAD=15
+EXPECTED_MIGRATION_HEAD=16
 MIGRATION_ROLLBACK_TARGET=11
 CONTROL_TEST_DB=""
 OWNED_TEST_DATABASE=""
@@ -172,7 +172,7 @@ assert_migration_version() {
 
 run_migration_round_trip() {
   require_command go
-  log "Migration validation and 0012/0013/0014/0015 rollback round trip"
+  log "Migration validation and 0012/0013/0014/0015/0016 rollback round trip"
   (
     cd "${REPO_ROOT}/server"
     go run github.com/pressly/goose/v3/cmd/goose@v3.22.1 \
