@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import io
 import json
 import os
@@ -40,6 +41,37 @@ class FixtureTests(unittest.TestCase):
                 self.assertNotIn("/home/", source)
                 for secret in certify.SECRET_MARKERS:
                     self.assertNotIn(secret, source)
+
+    def test_checked_report_rejects_non_generator_fields(self) -> None:
+        manifests = {
+            item["host_id"]: item
+            for item in certify._load_validated_manifests()
+        }
+        report = json.loads(
+            certify.CHECKED_REPORT.read_text(encoding="utf-8")
+        )
+        report["hosts"]["opencode"]["diagnostic_only"] = {
+            "counts_as_certification": False
+        }
+        with self.assertRaises(certify.CertificationError):
+            certify._validate_real_host_report(report, manifests)
+
+    def test_checked_report_requires_command_traceability(self) -> None:
+        manifests = {
+            item["host_id"]: item
+            for item in certify._load_validated_manifests()
+        }
+        report = json.loads(
+            certify.CHECKED_REPORT.read_text(encoding="utf-8")
+        )
+        command = next(
+            command
+            for row in report["hosts"].values()
+            for command in row["commands"]
+        )
+        command.pop("argv")
+        with self.assertRaises(certify.CertificationError):
+            certify._validate_real_host_report(report, manifests)
 
     def test_codex_fallback_parser_rejects_unknown_section(self) -> None:
         with mock.patch.object(certify, "tomllib", None):
@@ -235,6 +267,19 @@ class ProcessBoundaryTests(unittest.TestCase):
         child_pid = int(item.output.strip())
         self.assertFalse(certify._pid_alive(child_pid))
 
+    @unittest.skipUnless(os.name == "posix", "process-group test requires POSIX")
+    def test_cleanup_is_idempotent_when_reaped_group_is_unsignalable(self) -> None:
+        process = mock.Mock()
+        process.pid = 4242
+        process.poll.return_value = 0
+        with mock.patch.object(
+            certify.os,
+            "killpg",
+            side_effect=PermissionError(1, "Operation not permitted"),
+        ):
+            certify._terminate_process_group(process)
+        process.terminate.assert_not_called()
+
     def test_generated_host_configs_never_materialize_token(self) -> None:
         manifests = {
             item["host_id"]: item for item in certify.validate_fixtures()
@@ -412,6 +457,170 @@ class ProcessBoundaryTests(unittest.TestCase):
         ]
         reason = certify._real_host_reason("opencode", "NOT RUN", evidence)
         self.assertIn("did not identify mem", reason)
+
+    def test_mem_search_invoked_requires_attributable_request_delta(self) -> None:
+        command = {
+            "name": "mcp-search",
+            "validator": "mem-search-invoked",
+        }
+        item = certify.CommandEvidence(
+            "mcp-search",
+            ["host", "mcp-search"],
+            0,
+            "PASS",
+            "INVOKED",
+            "safe",
+        )
+        validated, error = certify._validate_host_evidence(
+            "host",
+            command,
+            item,
+            Path("/tmp/mem-mcp"),
+            [("search", certify.WORKSPACE_A)],
+        )
+        self.assertTrue(validated, error)
+        for request_delta in ([], [("search", certify.WORKSPACE_B)]):
+            with self.subTest(request_delta=request_delta):
+                validated, error = certify._validate_host_evidence(
+                    "host",
+                    command,
+                    item,
+                    Path("/tmp/mem-mcp"),
+                    request_delta,
+                )
+                self.assertFalse(validated)
+                self.assertIn("no attributable", error)
+
+
+class RealHostReportTests(unittest.TestCase):
+    def _generated_without_installed_hosts(self) -> dict[str, object]:
+        with tempfile.TemporaryDirectory(prefix="mem-cert-report-") as raw:
+            binary = Path(raw) / "mem-mcp"
+            binary.write_bytes(b"not executed")
+            with mock.patch.object(certify.shutil, "which", return_value=None):
+                return certify.run_real_hosts(binary)
+
+    def test_generated_report_is_accepted_by_shared_validator(self) -> None:
+        report = self._generated_without_installed_hosts()
+        manifests = {
+            item["host_id"]: item
+            for item in certify._load_validated_manifests()
+        }
+        round_tripped = json.loads(json.dumps(report))
+        certify._validate_real_host_report(round_tripped, manifests)
+        self.assertEqual(set(report["hosts"]), set(certify.HOST_IDS))
+
+    def test_generation_does_not_depend_on_checked_report(self) -> None:
+        missing = Path("/checked-report-must-not-be-read.json")
+        with mock.patch.object(certify, "CHECKED_REPORT", missing):
+            report = self._generated_without_installed_hosts()
+        self.assertEqual(set(report["hosts"]), set(certify.HOST_IDS))
+
+    def test_status_and_result_are_derived_from_command_evidence(self) -> None:
+        report = self._generated_without_installed_hosts()
+        manifests = {
+            item["host_id"]: item
+            for item in certify._load_validated_manifests()
+        }
+        forged = copy.deepcopy(report)
+        forged["hosts"]["openclaw"]["status"] = "INVOKED"
+        forged["hosts"]["openclaw"]["result"] = "PASS"
+        with self.assertRaises(certify.CertificationError):
+            certify._validate_real_host_report(forged, manifests)
+
+    def test_isolation_and_reason_are_derived_from_execution(self) -> None:
+        report = self._generated_without_installed_hosts()
+        manifests = {
+            item["host_id"]: item
+            for item in certify._load_validated_manifests()
+        }
+        forged_isolation = copy.deepcopy(report)
+        forged_isolation["hosts"]["hermes"]["isolation"][
+            "status"
+        ] = "VERIFIED"
+        with self.assertRaises(certify.CertificationError):
+            certify._validate_real_host_report(
+                forged_isolation,
+                manifests,
+            )
+
+        forged_reason = copy.deepcopy(report)
+        forged_reason["hosts"]["hermes"]["reason"] = "hand-written claim"
+        with self.assertRaises(certify.CertificationError):
+            certify._validate_real_host_report(forged_reason, manifests)
+
+    def test_command_validation_is_replayed_from_output(self) -> None:
+        manifests = {
+            item["host_id"]: item
+            for item in certify._load_validated_manifests()
+        }
+        report = json.loads(
+            certify.CHECKED_REPORT.read_text(encoding="utf-8")
+        )
+        forged = copy.deepcopy(report)
+        command = forged["hosts"]["opencode"]["commands"][1]
+        command["output"] = "mem failed"
+        with self.assertRaises(certify.CertificationError):
+            certify._validate_real_host_report(forged, manifests)
+
+    def test_invoked_promotion_replays_attributed_request(self) -> None:
+        report = self._generated_without_installed_hosts()
+        manifests = {
+            item["host_id"]: item
+            for item in certify._load_validated_manifests()
+        }
+        manifests["openclaw"] = copy.deepcopy(manifests["openclaw"])
+        manifests["openclaw"]["real_probe"]["commands"] = [
+            {
+                "name": "mcp-search",
+                "args": ["mcp-search"],
+                "proves": "INVOKED",
+                "validator": "mem-search-invoked",
+            }
+        ]
+        row = report["hosts"]["openclaw"]
+        row["tested_operations"] = ["version", "mcp-search"]
+        row["commands"] = [
+            {
+                "name": "version",
+                "argv": ["<PRIVATE_PATH>/openclaw", "--version"],
+                "exit_code": 1,
+                "outcome": "FAIL",
+                "proves": "NOT RUN",
+                "output": "",
+                "validated": False,
+                "validation_error": "command outcome was FAIL",
+                "attributed_requests": [],
+            },
+            {
+                "name": "mcp-search",
+                "argv": ["<PRIVATE_PATH>/openclaw", "mcp-search"],
+                "exit_code": 0,
+                "outcome": "PASS",
+                "proves": "INVOKED",
+                "output": "safe",
+                "validated": True,
+                "validation_error": "",
+                "attributed_requests": [
+                    {
+                        "operation": "search",
+                        "workspace_id": certify.WORKSPACE_A,
+                    }
+                ],
+            },
+        ]
+        row["isolation"]["status"] = "VERIFIED"
+        row["status"] = "INVOKED"
+        row["result"] = "PASS"
+        row["reason"] = "highest directly observed evidence level"
+        certify._validate_real_host_report(report, manifests)
+
+        forged = copy.deepcopy(report)
+        forged["hosts"]["openclaw"]["commands"][1][
+            "attributed_requests"
+        ] = []
+        with self.assertRaises(certify.CertificationError):
+            certify._validate_real_host_report(forged, manifests)
 
 
 class CurrentAdapterContractTests(unittest.TestCase):

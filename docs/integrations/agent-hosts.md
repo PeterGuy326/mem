@@ -15,12 +15,16 @@ The checked-in certification has two deliberately separate evidence layers:
    documented failure paths.
 2. The opt-in real-host runner uses an installed CLI under that host's
    documented temporary config/state roots. A config parse is never reported
-   as a tool invocation. The sanitized checked-in result is
+   as a tool invocation. The sanitized checked-in result is the verbatim
+   canonical JSON emitted by `real-hosts`; the runner validates the same schema
+   and derives every host status/result from its command rows before returning.
+   That result is
    [agent-host-certification.json](agent-host-certification.json).
 
 CI runs the first layer with no desktop application, hosted model, API key, or
 network download. Real-host execution is an evidence matrix, not a CI
-dependency.
+dependency. Contract output and `diagnose-opencode` output are deliberately not
+copied into the real-host report.
 
 ## Evidence levels
 
@@ -86,39 +90,43 @@ repository's safe Linux/Docker validation workflow described in
 The opt-in real-host probe is:
 
 ```bash
+report="$(mktemp)"
 python3 scripts/agent_certification/certify.py real-hosts \
-  --mcp-binary /absolute/path/to/mem-mcp
+  --mcp-binary /absolute/path/to/mem-mcp >"$report" &&
+  python3 -m json.tool "$report" >/dev/null &&
+  mv "$report" docs/integrations/agent-host-certification.json
 ```
 
 It retains at most 64 KiB of each command's output, bounds command time, kills
 the POSIX process group on completion/timeout, and sanitizes tokens, loopback
 ports, temporary roots, worktree paths, and private home paths. It never sets
-`HOME` or `CODEX_HOME`. POSIX process-tree cleanup is tested; Windows
-process-tree cleanup is `NOT VERIFIED`.
+`HOME` or `CODEX_HOME`. POSIX cleanup covers descendants that remain in the
+runner-created process group; descendants that deliberately escape that group
+are not verified. Windows process-tree cleanup is not implemented. Secret
+scanning guarantees removal of the certification run's known tokens and
+ordinary `Bearer` values; it is not a detector for arbitrary transformed
+secrets.
 
 ## Current real-host result
 
-The 2026-07-28 macOS arm64 run did not produce a host compatibility pass:
+The 2026-07-29 macOS arm64 run did not produce a host compatibility pass:
 
-Every row was observed on 2026-07-28, Darwin 24.5.0 arm64, with stdio and
+Every row was observed on 2026-07-29, Darwin 24.5.0 arm64, with stdio and
 `MEM_TOKEN` bearer authentication supplied through the environment. Each
-version, operation, result, and evidence link is repeated in the
-machine-readable report.
+version, exact sanitized argv, bounded output, validation decision, operation,
+result, and evidence link comes directly from the machine-readable report.
 
 | Host | Version | Tested operations | Status/result | Evidence / reason |
 | --- | --- | --- | --- | --- |
 | OpenClaw | pinned 2026.3.28 | version, isolated MCP list | `NOT RUN` | [manifest](../../scripts/agent_certification/manifests/openclaw.json); both commands exited `-9` |
 | Hermes | no executable | none | `NOT RUN` | [manifest](../../scripts/agent_certification/manifests/hermes.json); static schema only |
-| Claude Code | 2.1.209 | version, isolated MCP list | `NOT RUN` | [manifest](../../scripts/agent_certification/manifests/claude-code.json); pending approval |
-| OpenCode | 1.17.9 | version, isolated MCP list | `NOT RUN` | [manifest](../../scripts/agent_certification/manifests/opencode.json); direct adapter child timed out |
+| Claude Code | pinned 2.1.209; version not observed | version, isolated MCP list | `NOT RUN` | [manifest](../../scripts/agent_certification/manifests/claude-code.json); both commands exited `-9` |
+| OpenCode | 1.17.9 | version, isolated MCP list | `DISCOVERED` / `PARTIAL` | [manifest](../../scripts/agent_certification/manifests/opencode.json); the isolated host reported `mem` connected |
 | Codex | 0.145.0 | version only | `NOT RUN` | [manifest](../../scripts/agent_certification/manifests/codex.json); no safe host-specific config-root isolation |
 
-For diagnosis only, a metadata-only transparent relay showed that OpenCode
-sent `initialize`, `notifications/initialized`, and `tools/list`, and the
-current adapter answered both requests. The direct-child timeout is therefore
-an observed local process/EDR constraint, not evidence of an MCP framing or
-protocol-version defect. The relay result is not counted as
-`DISCOVERED` or `INVOKED`.
+The separate metadata-only OpenCode diagnostic remains available for
+troubleshooting, but its fields cannot enter the canonical certification
+schema and never affect `status` or `result`.
 
 No row that is below `INVOKED` is a production compatibility promise. The
 fallback is the existing [`mem` CLI or canonical HTTP API](../RUN_LOCAL.md)

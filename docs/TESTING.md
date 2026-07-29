@@ -238,17 +238,24 @@ acceptance workflow.
 Installed-host probes are opt-in:
 
 ```bash
+report="$(mktemp)"
 python3 scripts/agent_certification/certify.py real-hosts \
-  --mcp-binary /absolute/path/to/mem-mcp
+  --mcp-binary /absolute/path/to/mem-mcp >"$report" &&
+  python3 -m json.tool "$report" >/dev/null &&
+  mv "$report" docs/integrations/agent-host-certification.json
 ```
 
 The runner configures documented host-specific roots, checks temporary config
 files for token material, retains bounded command output, sanitizes its report,
-and grades registration/discovery/invocation separately. `VERIFIED` isolation
-means those host-specific roots were configured and generated temporary files
-were checked; it is not a syscall/filesystem-audit claim that a third-party
-binary never attempted another read. Codex and absent Hermes remain isolation
-`NOT VERIFIED` and runtime `NOT RUN`. See
+and grades registration/discovery/invocation separately. Before returning, it
+validates the same canonical schema used for the checked file and recomputes
+each status/result solely from the complete sanitized command evidence. The
+checked JSON is therefore the command's verbatim output, not a manually
+transcribed summary. `VERIFIED` isolation means those host-specific roots were
+configured and generated temporary files were checked; it is not a
+syscall/filesystem-audit claim that a third-party binary never attempted
+another read. Codex and absent Hermes remain isolation `NOT VERIFIED` and
+runtime `NOT RUN`. See
 [Agent host certification](integrations/agent-hosts.md) and its
 [machine-readable report](integrations/agent-host-certification.json).
 

@@ -805,7 +805,7 @@ def require_tool_error(result: dict[str, Any], marker: str) -> None:
     require(marker.lower() in text.lower(), f"tool error omitted {marker!r}: {text}")
 
 
-def validate_fixtures() -> list[dict[str, Any]]:
+def _load_validated_manifests() -> list[dict[str, Any]]:
     manifests = []
     for host_id in HOST_IDS:
         manifest_path = MANIFEST_DIR / f"{host_id}.json"
@@ -852,6 +852,11 @@ def validate_fixtures() -> list[dict[str, Any]]:
             f"{host_id}: official evidence must be HTTPS",
         )
         manifests.append(manifest)
+    return manifests
+
+
+def validate_fixtures() -> list[dict[str, Any]]:
+    manifests = _load_validated_manifests()
     _validate_checked_report({item["host_id"]: item for item in manifests})
     return manifests
 
@@ -868,67 +873,366 @@ def _validate_checked_report(manifests: dict[str, dict[str, Any]]) -> None:
         "checked Agent-host report contains a private path",
     )
     report = json.loads(source)
+    _validate_real_host_report(report, manifests)
+
+
+def _validate_real_host_report(
+    report: dict[str, Any],
+    manifests: dict[str, dict[str, Any]],
+) -> None:
+    """Validate the canonical output shared by the runner and checked report."""
+
+    require(isinstance(report, dict), "host report must be an object")
+    serialized = json.dumps(report, sort_keys=True)
+    require(
+        not any(secret in serialized for secret in SECRET_MARKERS),
+        "host report contains a certification token",
+    )
+    require(
+        "/Users/" not in serialized and "/home/" not in serialized,
+        "host report contains a private path",
+    )
+    require(
+        set(report)
+        == {
+            "schema_version",
+            "generated_at",
+            "protocol_version",
+            "platform",
+            "transport",
+            "isolation",
+            "hosts",
+        },
+        "host report contains fields the real-host generator does not emit",
+    )
     require(report.get("schema_version") == 1, "host report schema version")
+    require(
+        report.get("protocol_version") == PROTOCOL_VERSION,
+        "host report protocol version",
+    )
+    generated_at = report.get("generated_at")
+    require(
+        isinstance(generated_at, str)
+        and re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", generated_at)
+        is not None,
+        "host report generated_at must be UTC to whole seconds",
+    )
+    platform_row = report.get("platform")
+    require(
+        isinstance(platform_row, dict)
+        and set(platform_row) == {"os", "release", "arch"}
+        and all(
+            isinstance(platform_row.get(field), str)
+            for field in ("os", "release", "arch")
+        ),
+        "host report platform evidence is invalid",
+    )
+    require(report.get("transport") == "stdio", "host report transport")
+    require(
+        report.get("isolation")
+        == "reported per host; no global isolation claim",
+        "host report isolation claim",
+    )
     hosts = report.get("hosts")
     require(
         isinstance(hosts, dict) and set(hosts) == set(HOST_IDS),
         "host report must contain exactly the five certified host rows",
     )
-    for host_id, row in hosts.items():
+    for host_id in HOST_IDS:
+        row = hosts[host_id]
         require(isinstance(row, dict), f"{host_id}: report row is not an object")
-        for field in (
-            "observed_at",
-            "platform",
-            "transport",
-            "auth_method",
-            "tested_operations",
-            "result",
-            "status",
-            "evidence",
-        ):
-            require(field in row, f"{host_id}: report row missing {field}")
+        require(
+            set(row)
+            == {
+                "host_id",
+                "observed_at",
+                "platform",
+                "transport",
+                "auth_method",
+                "tested_operations",
+                "expected_version",
+                "observed_version",
+                "status",
+                "result",
+                "reason",
+                "isolation",
+                "evidence",
+                "commands",
+            },
+            f"{host_id}: report row does not match generator schema",
+        )
+        require(row["host_id"] == host_id, f"{host_id}: report host id")
+        require(
+            row["observed_at"] == generated_at,
+            f"{host_id}: report observation timestamp",
+        )
+        require(
+            row["platform"] == platform_row,
+            f"{host_id}: report platform differs from run platform",
+        )
         require(row["transport"] == "stdio", f"{host_id}: report transport")
         require(
             row["auth_method"] == "MEM_TOKEN bearer via environment",
             f"{host_id}: report auth method",
         )
+        manifest = manifests[host_id]
         require(
-            isinstance(row["tested_operations"], list),
+            row["expected_version"] == manifest["version"],
+            f"{host_id}: expected version differs from manifest",
+        )
+        require(
+            row["observed_version"] is None
+            or (
+                isinstance(row["observed_version"], str)
+                and bool(row["observed_version"])
+            ),
+            f"{host_id}: invalid observed version",
+        )
+        require(
+            isinstance(row["tested_operations"], list)
+            and all(
+                isinstance(operation, str)
+                for operation in row["tested_operations"]
+            ),
             f"{host_id}: tested_operations must be an array",
         )
-        platform_row = row["platform"]
+        isolation = row["isolation"]
         require(
-            isinstance(platform_row, dict)
-            and isinstance(platform_row.get("os"), str)
-            and isinstance(platform_row.get("arch"), str),
-            f"{host_id}: invalid platform evidence",
+            isinstance(isolation, dict)
+            and set(isolation) == {"status", "scope"}
+            and isolation.get("status") in {"VERIFIED", "NOT VERIFIED"}
+            and isolation.get("scope") == manifest["scope"],
+            f"{host_id}: invalid isolation evidence",
         )
         evidence = row["evidence"]
         require(
             isinstance(evidence, dict)
+            and set(evidence)
+            == {"manifest", "official_docs", "report_anchor"}
             and evidence.get("manifest")
             == f"../../scripts/agent_certification/manifests/{host_id}.json"
             and evidence.get("official_docs")
-            == manifests[host_id]["evidence"]["official_docs"]
+            == manifest["evidence"]["official_docs"]
             and evidence.get("report_anchor") == f"#/hosts/{host_id}",
             f"{host_id}: invalid evidence links",
         )
-        status = row["status"]
-        require(status in STATUS_ORDER, f"{host_id}: invalid report status")
+        expected_command_definitions = [
+            {
+                "name": "version",
+                "proves": "NOT RUN",
+                "args": manifest["real_probe"]["version_args"],
+            },
+            *[
+                command
+                for command in manifest["real_probe"]["commands"]
+            ],
+        ]
+        expected_commands = [
+            (
+                command["name"],
+                command["proves"],
+                command["args"],
+            )
+            for command in expected_command_definitions
+        ]
+        commands = row["commands"]
+        require(
+            isinstance(commands, list),
+            f"{host_id}: commands must be an array",
+        )
+        require(
+            not commands
+            or [
+                (
+                    command.get("name"),
+                    command.get("proves"),
+                    command.get("argv", [])[1:]
+                    if isinstance(command.get("argv"), list)
+                    else None,
+                )
+                for command in commands
+                if isinstance(command, dict)
+            ]
+            == expected_commands,
+            f"{host_id}: commands do not trace the manifest probe sequence",
+        )
+        require(
+            row["tested_operations"]
+            == [
+                command.get("name")
+                for command in commands
+                if isinstance(command, dict)
+            ],
+            f"{host_id}: tested operations do not trace command evidence",
+        )
+        computed_status = "NOT RUN"
+        replayed_evidence: list[CommandEvidence] = []
+        for index, command in enumerate(commands):
+            require(
+                isinstance(command, dict)
+                and set(command)
+                == {
+                    "name",
+                    "argv",
+                    "exit_code",
+                    "outcome",
+                    "proves",
+                    "output",
+                    "validated",
+                    "validation_error",
+                    "attributed_requests",
+                },
+                f"{host_id}: command evidence does not match generator schema",
+            )
+            name = command["name"]
+            argv = command["argv"]
+            exit_code = command["exit_code"]
+            outcome = command["outcome"]
+            validated = command["validated"]
+            validation_error = command["validation_error"]
+            attributed_requests = command["attributed_requests"]
+            require(
+                isinstance(name, str)
+                and isinstance(argv, list)
+                and bool(argv)
+                and all(isinstance(argument, str) for argument in argv),
+                f"{host_id}: invalid command identity",
+            )
+            require(
+                Path(argv[0]).name == manifest["real_probe"]["binary"],
+                f"{host_id}: command executable does not match manifest",
+            )
+            require(
+                isinstance(command["output"], str)
+                and len(command["output"].encode("utf-8"))
+                <= MAX_COMMAND_OUTPUT_BYTES + 100,
+                f"{host_id}: invalid command output",
+            )
+            require(
+                command["proves"] in STATUS_ORDER,
+                f"{host_id}: invalid command evidence level",
+            )
+            require(
+                (
+                    outcome == "PASS"
+                    and type(exit_code) is int
+                    and exit_code == 0
+                )
+                or (
+                    outcome == "FAIL"
+                    and type(exit_code) is int
+                    and exit_code != 0
+                )
+                or (outcome == "TIMEOUT" and exit_code is None),
+                f"{host_id}: command outcome does not match exit code",
+            )
+            require(
+                type(validated) is bool and isinstance(validation_error, str),
+                f"{host_id}: invalid command validation evidence",
+            )
+            require(
+                isinstance(attributed_requests, list)
+                and all(
+                    isinstance(request, dict)
+                    and set(request) == {"operation", "workspace_id"}
+                    and isinstance(request["operation"], str)
+                    and request["workspace_id"] in {WORKSPACE_A, WORKSPACE_B}
+                    for request in attributed_requests
+                ),
+                f"{host_id}: invalid attributed request evidence",
+            )
+            replayed_item = CommandEvidence(
+                name=name,
+                argv=argv,
+                exit_code=exit_code,
+                outcome=outcome,
+                proves=command["proves"],
+                output=command["output"],
+            )
+            expected_validated, expected_validation_error = (
+                _validate_host_evidence(
+                    host_id,
+                    expected_command_definitions[index],
+                    replayed_item,
+                    Path("mem-mcp"),
+                    [
+                        (
+                            request["operation"],
+                            request["workspace_id"],
+                        )
+                        for request in attributed_requests
+                    ],
+                )
+            )
+            replayed_item.validated = expected_validated
+            replayed_item.validation_error = expected_validation_error
+            replayed_item.attributed_requests = attributed_requests
+            replayed_evidence.append(replayed_item)
+            require(
+                validated == expected_validated
+                and validation_error == expected_validation_error,
+                f"{host_id}: command validation is not reproducible",
+            )
+            if outcome == "PASS" and validated:
+                computed_status = _max_status(
+                    computed_status, command["proves"]
+                )
+        expected_isolation_status = (
+            "VERIFIED"
+            if commands
+            and host_id in {"openclaw", "claude-code", "opencode"}
+            else "NOT VERIFIED"
+        )
+        require(
+            isolation["status"] == expected_isolation_status,
+            f"{host_id}: isolation status is not derived from executed commands",
+        )
+        version_commands = [
+            command for command in commands if command["name"] == "version"
+        ]
+        expected_observed_version = None
+        if version_commands and version_commands[0]["outcome"] == "PASS":
+            version_lines = version_commands[0]["output"].strip().splitlines()
+            require(
+                bool(version_lines),
+                f"{host_id}: successful version command returned no version",
+            )
+            expected_observed_version = version_lines[0][:200]
+        require(
+            row["observed_version"] == expected_observed_version,
+            f"{host_id}: observed version is not derived from command evidence",
+        )
+        expected_reason = (
+            "host executable is not installed"
+            if not commands
+            else (
+                _real_host_reason(
+                    host_id,
+                    computed_status,
+                    replayed_evidence,
+                )
+                if computed_status == "NOT RUN"
+                else "highest directly observed evidence level"
+            )
+        )
+        require(
+            row["reason"] == expected_reason,
+            f"{host_id}: report reason is not derived from command evidence",
+        )
+        require(
+            row["status"] == computed_status,
+            f"{host_id}: report status is not derived from command evidence",
+        )
         expected_result = {
             "NOT RUN": "NOT RUN",
             "REGISTERED": "PARTIAL",
             "DISCOVERED": "PARTIAL",
             "INVOKED": "PASS",
-        }[status]
+        }[computed_status]
         require(
             row["result"] == expected_result,
             f"{host_id}: report result does not match status",
         )
-    require(
-        report.get("claims", {}).get("only_invoked_is_pass") is True,
-        "host report must reserve PASS for INVOKED evidence",
-    )
 
 
 def _parse_codex_toml(source: str) -> dict[str, Any]:
@@ -1392,6 +1696,9 @@ class CommandEvidence:
     output: str
     validated: bool = False
     validation_error: str = ""
+    attributed_requests: list[dict[str, str]] = dataclasses.field(
+        default_factory=list
+    )
 
 
 def _run_bounded(
@@ -1482,13 +1789,7 @@ def _terminate_process_group(process: subprocess.Popen[Any]) -> None:
     """Reap a bounded command and every child it left in its new session."""
 
     if os.name != "posix":
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=2)
+        _terminate_direct_process(process)
         return
     pid = process.pid
     if pid <= 1:
@@ -1497,7 +1798,13 @@ def _terminate_process_group(process: subprocess.Popen[Any]) -> None:
         os.killpg(pid, 0)
     except ProcessLookupError:
         return
-    with contextlib.suppress(ProcessLookupError):
+    except PermissionError:
+        # Darwin can return EPERM when the just-reaped process group has
+        # already become unsignalable. Fall back to the known direct child;
+        # the caller's survivor assertion still catches a live descendant.
+        _terminate_direct_process(process)
+        return
+    with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(pid, signal.SIGTERM)
     deadline = time.monotonic() + 1
     while time.monotonic() < deadline:
@@ -1505,12 +1812,26 @@ def _terminate_process_group(process: subprocess.Popen[Any]) -> None:
             os.killpg(pid, 0)
         except ProcessLookupError:
             return
+        except PermissionError:
+            _terminate_direct_process(process)
+            return
         time.sleep(0.02)
-    with contextlib.suppress(ProcessLookupError):
+    with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(pid, signal.SIGKILL)
     if process.poll() is None:
         with contextlib.suppress(subprocess.TimeoutExpired):
             process.wait(timeout=2)
+
+
+def _terminate_direct_process(process: subprocess.Popen[Any]) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=2)
 
 
 def _write_private_json(path: Path, value: Any) -> None:
@@ -1537,7 +1858,10 @@ def _sanitize_text(text: str, roots: Iterable[Path]) -> str:
 
 
 def _safe_argv(argv: list[str], roots: Iterable[Path]) -> list[str]:
-    return [_sanitize_text(part, roots) for part in argv]
+    safe = [_sanitize_text(part, roots) for part in argv]
+    if argv and safe[0] == "<PRIVATE_PATH>":
+        safe[0] = f"<PRIVATE_PATH>/{Path(argv[0]).name}"
+    return safe
 
 
 def _max_status(current: str, candidate: str) -> str:
@@ -1549,8 +1873,10 @@ def run_real_hosts(binary: Path) -> dict[str, Any]:
 
     binary = binary.resolve()
     require(binary.is_file(), f"mem-mcp binary not found: {binary}")
-    manifests = {item["host_id"]: item for item in validate_fixtures()}
-    rows: list[dict[str, Any]] = []
+    manifests = {
+        item["host_id"]: item for item in _load_validated_manifests()
+    }
+    rows: dict[str, dict[str, Any]] = {}
     observed_at = (
         dt.datetime.now(dt.timezone.utc)
         .replace(microsecond=0)
@@ -1570,7 +1896,8 @@ def run_real_hosts(binary: Path) -> dict[str, Any]:
             row: dict[str, Any] = {
                 "host_id": host_id,
                 "status": "NOT RUN",
-                "version": None,
+                "expected_version": manifest["version"],
+                "observed_version": None,
                 "result": "NOT RUN",
                 "reason": "host executable is not installed",
                 "observed_at": observed_at,
@@ -1593,7 +1920,7 @@ def run_real_hosts(binary: Path) -> dict[str, Any]:
                 "commands": [],
             }
             if executable is None:
-                rows.append(row)
+                rows[host_id] = row
                 continue
             row["tested_operations"] = [
                 "version",
@@ -1641,14 +1968,16 @@ def run_real_hosts(binary: Path) -> dict[str, Any]:
                     binary,
                     requests_after,
                 )
+                item.attributed_requests = [
+                    {
+                        "operation": operation,
+                        "workspace_id": workspace_id,
+                    }
+                    for operation, workspace_id in requests_after
+                ]
                 evidence.append(item)
                 if item.outcome == "PASS" and item.validated:
                     status = _max_status(status, item.proves)
-                if command["name"] == "version" and item.outcome == "PASS":
-                    row["version"] = _sanitize_text(
-                        item.output.strip().splitlines()[0][:200],
-                        (isolation_root, binary.parent),
-                    )
             row["status"] = status
             row["result"] = {
                 "NOT RUN": "NOT RUN",
@@ -1671,16 +2000,29 @@ def run_real_hosts(binary: Path) -> dict[str, Any]:
                 }
                 for item in evidence
             ]
-            rows.append(row)
+            version_commands = [
+                command
+                for command in row["commands"]
+                if command["name"] == "version"
+                and command["outcome"] == "PASS"
+            ]
+            if version_commands:
+                row["observed_version"] = (
+                    version_commands[0]["output"].strip().splitlines()[0][:200]
+                )
+            rows[host_id] = row
 
-    return {
+    report = {
         "schema_version": 1,
         "generated_at": observed_at,
+        "protocol_version": PROTOCOL_VERSION,
         "platform": platform_row,
         "transport": "stdio",
         "isolation": "reported per host; no global isolation claim",
         "hosts": rows,
     }
+    _validate_real_host_report(report, manifests)
+    return report
 
 
 def diagnose_opencode(binary: Path) -> dict[str, Any]:
@@ -1690,7 +2032,9 @@ def diagnose_opencode(binary: Path) -> dict[str, Any]:
     require(binary.is_file(), f"mem-mcp binary not found: {binary}")
     executable = shutil.which("opencode")
     require(executable is not None, "opencode is not installed")
-    manifests = {item["host_id"]: item for item in validate_fixtures()}
+    manifests = {
+        item["host_id"]: item for item in _load_validated_manifests()
+    }
     with tempfile.TemporaryDirectory(
         prefix="mem-opencode-diagnosis-"
     ) as raw, FakeMemd() as fake:
