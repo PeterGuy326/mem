@@ -56,8 +56,16 @@ Web 浏览器验收及其通过标准统一见 [TESTING.md](TESTING.md)。
      ```
 
 2. **Ollama（仅文件向量/多模态链路需要）**：要验证文件语义检索时，需在
-   `http://localhost:11434` 运行并 pull：
-   - `nomic-embed-text`（768 维文本 embedding，对上 schema `embeddings_text vector(768)`）
+   `http://localhost:11434` 运行。不要静默 pull 默认模型；用本地模型目录检测
+   当前机器、查看明确的 runtime tag/digest/维度，再由用户选择：
+   ```bash
+   bin/mem model list
+   bin/mem model recommend --language zh
+   bin/mem model install <profile-id>
+   ```
+   `install` 只在用户显式选择后通过 Ollama HTTP API 下载，随后校验固定 manifest
+   digest 和 768 维 `/api/embed` probe；默认不会激活。完整目录和 integrity 更新
+   规则见 [LOCAL_EMBEDDING_MODELS.md](LOCAL_EMBEDDING_MODELS.md)。
    - 视觉模型（minicpm-v）**可选缺失**：影响的是 caption 文本，不影响图搜图本身。
      图片的视觉向量由 **CLIP**（`clip:ViT-B-32`，见下）产出，与 Ollama 无关。
    - **图搜图 = CLIP**：装了 `--extra clip` 后，图片入库时由 CLIP image-tower
@@ -88,6 +96,9 @@ bash scripts/seed_demo_data.sh
 export MEM_TOKEN=$(curl -s -X POST http://localhost:8787/v1/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"email":"demo@mem.local","password":"demo-password-change-me"}' | jq -r .token)
+
+# 激活已安装且通过 digest/768 维 probe 的 profile；memd 会再做一次权威 Worker probe
+bin/mem --server http://localhost:8787 model activate <profile-id>
 
 # 文本搜索（文档语义检索）
 bin/mem --server http://localhost:8787 search "a dog on a meadow" --format json
@@ -212,7 +223,8 @@ memd 不会递归删除所配置的临时目录。
 这是有意的 fail-closed 行为：先显式选择一个与当前向量列维度相符的模型，再重建：
 
 ```bash
-mem provider set embedding ollama:nomic-embed-text
+# 优先使用 catalog profile，让 CLI 在服务端写入前验证 artifact 和 768 维输出
+mem model activate <profile-id>
 mem provider reindex
 ```
 

@@ -215,9 +215,18 @@ BYOM provider 不收费。SaaS entitlement 存储/配置不可用时必须 fail 
 | F8.5 | 配置：`mem provider set <type> <vendor>:<model>` |
 | F8.6 | 自部署默认推荐而不强制某一开源向量模型；结构化/关键词记忆可完全不使用向量模型 |
 | F8.7 | 平台托管向量服务是可选会员权益，账单系统不进入 mem 核心；使用记录不得保存 query、内容、向量或密钥 |
+| F8.8 | 本地 embedding 目录必须版本化、厂商中立，并只把当前运行时和 768 维语料契约已验证的 profile 标为可安装 |
+| F8.9 | 模型下载必须由用户显式选择；pull 后校验固定 manifest digest，再用批量 `/api/embed` + `dimensions=768` probe |
+| F8.10 | 安装和激活是两个状态；只有本地校验通过且服务端 canonical provider probe 接受后才可激活 |
 
 这里的 Provider 只服务于文件理解与索引。上层 Agent 使用哪个回答模型不由 mem
 配置，也不会通过 mem Worker 代理调用。
+
+本地模型目录的 schema、设备兼容性、integrity pin、推荐输入和故障边界见
+[`docs/LOCAL_EMBEDDING_MODELS.md`](docs/LOCAL_EMBEDDING_MODELS.md)。跳过或安装
+失败不得影响结构化记忆 lexical lane、checkpoint/resume 或其他 model-independent
+operations。任意 `ollama:<model>` 自定义 provider 仍是高级路径，不能冒充目录中
+已验证的 profile。
 
 ### F9 · 任务交接与可移植性
 
@@ -578,6 +587,12 @@ mem provider set <type> <vendor>:<model>
 mem provider test <type>
 mem provider reindex                    # 显式重建 legacy/unknown 文本向量
 
+# 本地 embedding 模型（list/recommend 不下载）
+mem model list [--json]
+mem model recommend [--language <code>] [--json]
+mem model install [<profile-id>] [--activate] [--json]
+mem model activate <profile-id> [--json]
+
 # 系统
 mem status                                # 索引状态、配额、配置
 mem version
@@ -875,13 +890,17 @@ class VLMProvider(Protocol):
     def vqa(self, image: Image, q: str) -> str: ...
 ```
 
+Ollama text embedding adapter 使用一次批量 `POST /api/embed`，body 包含输入数组、
+`dimensions: 768` 和 `truncate: false`。响应向量数必须与输入数一致，且每条向量
+必须恰好 768 维；adapter 不在本地截断或填充向量来伪造兼容。
+
 ### 9.4 默认推荐栈（本地优先）
 
 下表全部是索引链路模型；不包含也不代表 Agent 的回答模型。
 
 | Provider | 默认 | 备选 |
 |----------|------|------|
-| Embedding (text) | `ollama:nomic-embed-text` | `openai:text-embedding-3-small` |
+| Embedding (text) | 当前兼容默认 `ollama:nomic-embed-text`；新安装应从版本化本地目录显式选择 | `openai:text-embedding-3-small` |
 | Embedding (visual) | 内置 OpenCLIP（`ViT-B-32:openai`，英文基线） | 通过固定中英文评测的 512 维多语言 OpenCLIP checkpoint（尚未切换） |
 | VLM | `ollama:minicpm-v` | `openai:gpt-4o-mini` / `anthropic:claude-haiku-4-5-20251001` |
 | ASR | 内置 `faster-whisper` | — |

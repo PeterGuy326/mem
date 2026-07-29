@@ -6,9 +6,11 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 
 	"github.com/spf13/cobra"
 )
@@ -20,7 +22,9 @@ var (
 
 func main() {
 	root := newRootCmd()
-	if err := root.Execute(); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	if err := root.ExecuteContext(ctx); err != nil {
 		var ce *cliError
 		if errors.As(err, &ce) {
 			fmt.Fprintln(os.Stderr, "error:", ce.msg)
@@ -74,6 +78,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newRelatedCmd())
 	root.AddCommand(newFaceCmd())
 	root.AddCommand(newProviderCmd())
+	root.AddCommand(newModelCmd())
 	root.AddCommand(newTimelineCmd())
 	root.AddCommand(newWorkspaceCmd())
 	root.AddCommand(newVersionCmd())
