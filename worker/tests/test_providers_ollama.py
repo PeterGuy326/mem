@@ -13,22 +13,22 @@ from typing import Any
 import pytest
 
 from mem_worker.providers import ProviderError, parse_spec
+from mem_worker.providers.base import Message
 from mem_worker.providers.ollama import (
     OllamaEmbeddingProvider,
     OllamaLLMProvider,
     OllamaVLMProvider,
 )
-from mem_worker.providers.base import Message
 from mem_worker.providers.registry import (
     get_embedding_provider,
     get_llm_provider,
     get_vlm_provider,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fake requests.Response / requests.post
 # ---------------------------------------------------------------------------
+
 
 class _FakeResp:
     def __init__(self, payload: Any, status: int = 200, lines: list[str] | None = None):
@@ -56,9 +56,7 @@ class _Capture:
         self._scripted.extend(responses)
 
     def __call__(self, url, json=None, timeout=None, stream=False):  # noqa: A002
-        self.calls.append(
-            {"url": url, "json": json, "timeout": timeout, "stream": stream}
-        )
+        self.calls.append({"url": url, "json": json, "timeout": timeout, "stream": stream})
         if not self._scripted:
             return _FakeResp({"error": "no scripted response"}, status=500)
         return self._scripted.pop(0)
@@ -74,6 +72,7 @@ def capture(monkeypatch):
 # ---------------------------------------------------------------------------
 # Spec parsing
 # ---------------------------------------------------------------------------
+
 
 def test_parse_spec_basic():
     assert parse_spec("ollama:nomic-embed-text") == ("ollama", "nomic-embed-text")
@@ -92,11 +91,12 @@ def test_parse_spec_rejects_bad(bad):
 # Registry routing
 # ---------------------------------------------------------------------------
 
+
 def test_registry_returns_ollama_classes():
     e = get_embedding_provider("ollama:nomic-embed-text")
     assert isinstance(e, OllamaEmbeddingProvider)
     assert e.model == "nomic-embed-text"
-    assert e.dim == 768                           # known model hint
+    assert e.dim == 768  # fixed mem corpus contract
     assert e.name == "ollama:nomic-embed-text"
 
     llm = get_llm_provider("ollama:qwen2.5:7b")
@@ -116,26 +116,73 @@ def test_registry_rejects_unknown_vendor():
 # Embedding
 # ---------------------------------------------------------------------------
 
+
 def test_embed_text_request_shape(capture, monkeypatch):
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama.test:11434")
-    capture.script(
-        _FakeResp({"embedding": [0.1, 0.2, 0.3]}),
-        _FakeResp({"embedding": [0.4, 0.5, 0.6]}),
-    )
+    first_vector = [0.0] * 768
+    second_vector = [0.0] * 768
+    first_vector[0] = 0.1
+    second_vector[0] = 0.4
+    capture.script(_FakeResp({"embeddings": [first_vector, second_vector]}))
     p = OllamaEmbeddingProvider(model="nomic-embed-text")
     vectors = p.embed_text(["hello", "world"])
 
-    assert vectors == [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
-    assert len(capture.calls) == 2
+    assert vectors == [first_vector, second_vector]
+    assert len(capture.calls) == 1
 
     first = capture.calls[0]
-    assert first["url"] == "http://ollama.test:11434/api/embeddings"
-    assert first["json"] == {"model": "nomic-embed-text", "prompt": "hello"}
-    second = capture.calls[1]
-    assert second["json"]["prompt"] == "world"
+    assert first["url"] == "http://ollama.test:11434/api/embed"
+    assert first["json"] == {
+        "model": "nomic-embed-text",
+        "input": ["hello", "world"],
+        "dimensions": 768,
+        "truncate": False,
+    }
+    assert p.dim == 768
 
-    # dim should be filled in from the first response
-    assert p.dim == 3
+
+def test_embed_text_empty_batch_avoids_http(capture):
+    p = OllamaEmbeddingProvider()
+    assert p.embed_text([]) == []
+    assert capture.calls == []
+
+
+def test_embed_text_rejects_wrong_batch_size(capture):
+    capture.script(_FakeResp({"embeddings": [[0.0] * 768]}))
+    p = OllamaEmbeddingProvider()
+    with pytest.raises(ProviderError, match="got 1 vectors for 2 inputs"):
+        p.embed_text(["one", "two"])
+
+
+def test_embed_text_rejects_wrong_dimension(capture):
+    capture.script(_FakeResp({"embeddings": [[0.1, 0.2]]}))
+    p = OllamaEmbeddingProvider()
+    with pytest.raises(ProviderError, match="got 2, want 768"):
+        p.embed_text(["one"])
+
+
+def test_embed_text_rejects_non_numeric_values(capture):
+    vector = [0.0] * 768
+    vector[100] = True
+    capture.script(_FakeResp({"embeddings": [vector]}))
+    p = OllamaEmbeddingProvider()
+    with pytest.raises(ProviderError, match="non-numeric"):
+        p.embed_text(["one"])
+
+
+def test_embed_text_rejects_non_finite_values(capture):
+    vector = [0.0] * 768
+    vector[100] = float("nan")
+    capture.script(_FakeResp({"embeddings": [vector]}))
+    p = OllamaEmbeddingProvider()
+    with pytest.raises(ProviderError, match="non-finite"):
+        p.embed_text(["one"])
+
+
+@pytest.mark.parametrize("dimensions", [0, -1, True, 768.0, "768"])
+def test_embed_text_rejects_invalid_dimension_configuration(dimensions):
+    with pytest.raises(ProviderError, match="dimensions must be positive"):
+        OllamaEmbeddingProvider(dimensions=dimensions)
 
 
 def test_embed_text_raises_on_http_error(capture):
@@ -154,6 +201,7 @@ def test_embed_image_not_supported():
 # ---------------------------------------------------------------------------
 # LLM
 # ---------------------------------------------------------------------------
+
 
 def test_llm_complete_request_shape(capture):
     capture.script(_FakeResp({"message": {"role": "assistant", "content": "ok"}}))
@@ -175,8 +223,8 @@ def test_llm_stream_yields_chunks(capture):
         json.dumps({"message": {"content": " "}}),
         json.dumps({"message": {"content": "world"}}),
         json.dumps({"done": True}),
-        "",                                  # blank line should be skipped
-        "not-json",                          # malformed line should be skipped
+        "",  # blank line should be skipped
+        "not-json",  # malformed line should be skipped
     ]
     capture.script(_FakeResp({}, lines=lines))
     p = OllamaLLMProvider()
@@ -189,6 +237,7 @@ def test_llm_stream_yields_chunks(capture):
 # ---------------------------------------------------------------------------
 # VLM
 # ---------------------------------------------------------------------------
+
 
 def test_vlm_caption_sends_base64_image(capture):
     capture.script(_FakeResp({"message": {"content": "a cat on grass"}}))

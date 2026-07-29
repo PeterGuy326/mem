@@ -13,6 +13,9 @@ The project is not yet publishing stable semantic-versioned releases.
   OpenCode, and Codex, with versioned config manifests, a model-free fake-memd
   lifecycle/failure contract, isolated real-host evidence, and explicit
   `REGISTERED`/`DISCOVERED`/`INVOKED`/`NOT RUN` grading.
+- A versioned, vendor-neutral local embedding catalog and `mem model
+  list|recommend|install|activate` flow with hardware/runtime checks, explicit
+  selection, pinned Ollama artifact integrity, and separate activation.
 - Versioned `mem.handoff` v1 checkpoints, optimistic head comparison,
   deterministic `resume`, and task/checkpoint list/get inspection across API,
   CLI and MCP.
@@ -53,6 +56,9 @@ The project is not yet publishing stable semantic-versioned releases.
 
 ### Changed
 
+- Ollama text embeddings now use one modern batched `/api/embed` request with
+  an explicit 768-dimensional contract and fail closed on batch or dimension
+  mismatches.
 - Checkpoint history lists now return bounded summaries; full handoff payloads
   and evidence references require an explicit checkpoint get or resume.
 - Retired the built-in ask/chat path. mem now returns evidence while the
