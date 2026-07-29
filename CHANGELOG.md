@@ -15,6 +15,9 @@ The project is not yet publishing stable semantic-versioned releases.
   plan/quota/error presentation.
 - Managed search/context idempotency support across CLI, MCP, and Web while
   preserving subscription-free private and local/BYOM providers.
+- A versioned, synthetic Chinese/English recall benchmark with a deterministic
+  lexical reference, provider-agnostic ranking import, checked-in baseline,
+  per-slice quality/latency metrics and a fail-closed forbidden-source gate.
 - A versioned, vendor-neutral local embedding catalog and `mem model
   list|recommend|install|activate` flow with hardware/runtime checks, explicit
   selection, pinned Ollama artifact integrity, and separate activation.

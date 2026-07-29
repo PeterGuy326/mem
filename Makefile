@@ -1,12 +1,14 @@
 # mem — Phase 1 MVP Makefile
 
 .PHONY: help up down logs reset proto server cli mcp worker web bootstrap \
-        test test-server test-worker test-web test-race test-env-up \
+        test test-server test-worker test-web test-recall recall-baseline \
+        test-race test-env-up \
         test-env-down test-integration test-integration-race test-acceptance \
         test-all fmt lint build build-memd build-mem build-mem-mcp \
         proto-go proto-python
 
 BIN_DIR ?= bin
+PYTHON ?= python3
 MEM_TEST_PG_PORT ?= 55432
 MEM_TEST_DB ?= postgres://mem:mem@127.0.0.1:$(MEM_TEST_PG_PORT)/mem_integration_test?sslmode=disable
 MEM_TEST_PROJECT ?= mem-test-$(shell pwd -P | cksum | awk '{print $$1}')
@@ -27,6 +29,8 @@ help:
 	@echo "  make web          - 启动 React 前端 (vite dev)"
 	@echo "  make bootstrap    - 安装锁定依赖并生成 Worker protobuf"
 	@echo "  make test         - Go/Worker/Web 无数据库回归"
+	@echo "  make test-recall  - 离线多语言召回基线、确定性与泄漏门禁"
+	@echo "  make recall-baseline - 重录 lexical-reference 信息性基线"
 	@echo "  make test-race    - 高风险 Go 路径 race 回归"
 	@echo "  make test-env-up  - 启动隔离 PostgreSQL 测试环境 (:$(MEM_TEST_PG_PORT))"
 	@echo "  make test-integration      - PostgreSQL migration + 集成回归"
@@ -101,6 +105,15 @@ test-worker:
 test-web:
 	./scripts/verify.sh web
 
+test-recall:
+	PYTHONDONTWRITEBYTECODE=1 \
+		$(PYTHON) -m unittest discover -s benchmarks/recall/tests -v
+	PYTHONDONTWRITEBYTECODE=1 $(PYTHON) -m benchmarks.recall verify
+
+recall-baseline:
+	PYTHONDONTWRITEBYTECODE=1 $(PYTHON) -m benchmarks.recall run \
+		--output benchmarks/recall/baselines/lexical-reference.v1.json
+
 test-race:
 	./scripts/verify.sh race
 
@@ -126,6 +139,7 @@ test-acceptance:
 	./scripts/acceptance_agent_memory.sh
 
 test-all:
+	$(MAKE) test-recall
 	MEM_TEST_DB='$(MEM_TEST_DB)' ./scripts/verify.sh all
 	./scripts/acceptance_agent_memory.sh
 

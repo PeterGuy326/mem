@@ -235,7 +235,41 @@ be described as validated. Model download failure, timeout or an unavailable
 checkpoint is `NOT VERIFIED`, not a pass. See
 [VISUAL_SEARCH_BASELINE.md](acceptance/VISUAL_SEARCH_BASELINE.md).
 
-## 7. Regression ledger
+## 7. Multilingual recall benchmark
+
+The repository includes a standalone Python 3.11+ benchmark for structured
+memory, text-file and image-caption retrieval. Its checked-in corpus is
+hand-authored synthetic Chinese/English data under CC0-1.0. It does not read a
+database, contact a provider, download a model, require a GPU or use a secret.
+
+Run its unit, determinism, baseline-comparison and forbidden-source checks:
+
+```bash
+make test-recall
+```
+
+Record a machine-readable lexical reference artifact and an informational
+comparison:
+
+```bash
+python3 -m benchmarks.recall run \
+  --output /tmp/mem-recall.json \
+  --compare benchmarks/recall/baselines/lexical-reference.v1.json \
+  --comparison-output /tmp/mem-recall-comparison.json
+```
+
+The output is prominently labeled `engine=lexical-reference` and
+`not production recall`. Its zero latency is a deterministic sentinel, not a
+performance claim. Opt-in vector or hybrid systems export rankings with an
+explicit provider, model, dimension, index/search configuration and coarse
+hardware summary; they are never invoked by the default suite. Any
+cross-workspace, path-filter or unknown-document result makes the run exit
+non-zero. Metric deltas are informational: this issue establishes no
+model-quality threshold. See
+[`benchmarks/recall/README.md`](../benchmarks/recall/README.md) for the input
+contract and exact denominators.
+
+## 8. Regression ledger
 
 Use this table in pull requests and add implementation-specific scenarios:
 
@@ -249,8 +283,9 @@ Use this table in pull requests and add implementation-specific scenarios:
 | V6 | DB concurrency paths are race-free | `make test-integration-race` | The same eleven tests pass under `-race` |
 | V7 | Real service boundaries agree | `make test-acceptance` | HTTP, CLI and MCP share one isolated service; memory citation/provenance, bounded checkpoint listing, full checkpoint get, lifecycle and forget redaction pass |
 | V8 | Multilingual visual quality meets the chosen checkpoint | Opt-in command in section 6 | All fixed ranking assertions pass |
+| V9 | Offline recall math, determinism and source boundaries hold | `make test-recall` | Unit checks pass; two lexical artifacts differ only by timestamp; malicious fixture is rejected |
 
-## 8. Known limitations
+## 9. Known limitations
 
 - GitHub CI covers hermetic checks, owned fresh-PostgreSQL
   migration/integration and process-level lifecycle acceptance. It does not
