@@ -79,8 +79,8 @@ const dict: Record<string, Partial<Record<Lang, string>>> = {
   'detail.noPendingSuggestions': { zh: '没有待审核建议', en: 'No suggestions awaiting review' },
   'detail.reviewedSuggestions': { zh: '审核记录', en: 'Review history' },
   'detail.reviewHistoryTruncated': {
-    zh: '较早的审核记录已从此响应中省略。',
-    en: 'Older review history is omitted from this response.',
+    zh: '部分待审核建议或审核记录已从此响应中省略。',
+    en: 'Some pending suggestions or review history are omitted from this response.',
   },
   'detail.annotation.accepted': { zh: '已接受', en: 'Accepted' },
   'detail.annotation.rejected': { zh: '已拒绝', en: 'Rejected' },

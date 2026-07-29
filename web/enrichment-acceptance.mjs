@@ -177,7 +177,9 @@ try {
   await page.getByText('91% confidence', { exact: true }).first().waitFor();
   await page.getByText('mobile · phone photo sync', { exact: true }).waitFor();
   await page
-    .getByText('Older review history is omitted from this response.', { exact: true })
+    .getByText('Some pending suggestions or review history are omitted from this response.', {
+      exact: true,
+    })
     .waitFor();
   const pendingOrder = await page
     .locator('[data-testid^="annotation-"]')
