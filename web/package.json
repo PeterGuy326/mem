@@ -11,6 +11,7 @@
     "lint": "eslint . --ext .ts,.tsx --max-warnings 0",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
     "test:memory": "node memory-acceptance.mjs",
+    "test:managed-embedding": "node managed-embedding-status-test.mjs",
     "test:transfer": "node transfer-acceptance.mjs",
     "typecheck": "tsc -b --noEmit"
   },

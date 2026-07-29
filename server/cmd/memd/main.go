@@ -20,6 +20,7 @@ import (
 	"github.com/PeterGuy326/mem/server/internal/config"
 	"github.com/PeterGuy326/mem/server/internal/contextpack"
 	"github.com/PeterGuy326/mem/server/internal/db"
+	"github.com/PeterGuy326/mem/server/internal/entitlement"
 	"github.com/PeterGuy326/mem/server/internal/face"
 	"github.com/PeterGuy326/mem/server/internal/file"
 	"github.com/PeterGuy326/mem/server/internal/folder"
@@ -95,6 +96,23 @@ func run() error {
 
 	authSvc := auth.New(database.Pool)
 	workspaceSvc := workspace.New(database.Pool)
+	entitlementSvc := entitlement.New(
+		database.Pool,
+		cfg.ManagedEmbeddingReservationTTL,
+	)
+	if cfg.DeploymentMode == "saas" {
+		if err := entitlementSvc.Ready(ctx); err != nil {
+			return fmt.Errorf("entitlement readiness: %w", err)
+		}
+		reconciled, err := entitlementSvc.ReconcileStale(ctx)
+		if err != nil {
+			return fmt.Errorf("reconcile managed embedding reservations: %w", err)
+		}
+		logger.Info("managed embedding entitlement ready",
+			"provider", cfg.ManagedEmbeddingProvider,
+			"reconciled_reservations", reconciled,
+		)
+	}
 	folderSvc := folder.New(database.Pool)
 	fileSvc := file.New(database.Pool, store, folderSvc)
 	memorySvc := memory.New(database.Pool)
@@ -127,7 +145,11 @@ func run() error {
 	relatorSvc := relator.New(database.Pool, logger)
 	faceSvc := face.New(database.Pool, logger)
 	idxSvc := indexer.New(database.Pool, workerCli, relatorSvc, faceSvc, logger)
-	searchSvc := search.New(database.Pool, workerCli)
+	searchSvc := search.New(
+		database.Pool,
+		workerCli,
+		cfg.ManagedEmbeddingProvider,
+	)
 
 	// Async indexing queue (Asynq + Redis). Falls back to inline goroutine if
 	// MEM_REDIS_URL is unset — dev affordance only; production must set it.
@@ -166,12 +188,23 @@ func run() error {
 			chan struct{},
 			cfg.WorkspaceTransferMaxConcurrent,
 		),
-		WorkspaceTransferTmpDir: workspaceTransferTmpDir,
-		DeploymentMode:          cfg.DeploymentMode,
-		RegistrationMode:        cfg.RegistrationMode,
-		SessionTTL:              cfg.SessionTTL,
-		CORSOrigins:             cfg.CORSOrigins,
-		Log:                     logger,
+		WorkspaceTransferTmpDir:  workspaceTransferTmpDir,
+		DeploymentMode:           cfg.DeploymentMode,
+		ManagedEmbeddingProvider: cfg.ManagedEmbeddingProvider,
+		Entitlements:             entitlementSvc,
+		RegistrationMode:         cfg.RegistrationMode,
+		SessionTTL:               cfg.SessionTTL,
+		CORSOrigins:              cfg.CORSOrigins,
+		Log:                      logger,
+	}
+
+	if cfg.DeploymentMode == "saas" {
+		go reconcileManagedEmbeddingReservations(
+			ctx,
+			entitlementSvc,
+			cfg.ManagedEmbeddingReservationTTL,
+			logger,
+		)
 	}
 
 	// Boot the queue consumer in-process. Promotion to a separate binary is a
@@ -226,6 +259,41 @@ func workspaceTransferBundleLimits() workspacebundle.Limits {
 	limits.MaxTotalMetadataSize = 128 << 20
 	limits.MaxRecordsPerIndex = 100_000
 	return limits
+}
+
+func reconcileManagedEmbeddingReservations(
+	ctx context.Context,
+	service *entitlement.Service,
+	reservationTTL time.Duration,
+	logger *slog.Logger,
+) {
+	interval := reservationTTL / 2
+	if interval < time.Second {
+		interval = time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			reconcileCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			count, err := service.ReconcileStale(reconcileCtx)
+			cancel()
+			if err != nil {
+				logger.Error("managed embedding reservation reconcile failed", "err", err)
+				continue
+			}
+			if count > 0 {
+				logger.Warn(
+					"managed embedding reservations marked indeterminate",
+					"count",
+					count,
+				)
+			}
+		}
+	}
 }
 
 func prepareWorkspaceTransferTmpDir(raw string) (string, error) {

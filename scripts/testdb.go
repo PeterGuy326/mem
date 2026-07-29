@@ -567,14 +567,15 @@ func assertMigrationState(ctx context.Context, state string) error {
 	defer conn.Close(ctx)
 
 	var (
-		rawKey            bool
-		hashedKey         bool
-		replayPrincipal   bool
-		oldFileIndex      bool
-		hashConstraint    bool
-		redactConstraint  bool
-		receiptConstraint bool
-		replayConstraint  bool
+		rawKey              bool
+		hashedKey           bool
+		replayPrincipal     bool
+		oldFileIndex        bool
+		hashConstraint      bool
+		redactConstraint    bool
+		receiptConstraint   bool
+		replayConstraint    bool
+		managedEntitlements bool
 	)
 	err = conn.QueryRow(ctx, `
 SELECT
@@ -612,6 +613,12 @@ SELECT
   EXISTS (
     SELECT 1 FROM pg_constraint
      WHERE conname = 'memory_events_replay_principal_sha256_check'
+  ),
+  (
+    to_regclass('public.workspace_entitlements') IS NOT NULL
+    AND to_regclass('public.managed_embedding_usage') IS NOT NULL
+    AND to_regclass('public.managed_embedding_usage_events') IS NOT NULL
+    AND to_regclass('public.managed_embedding_replay_results') IS NOT NULL
   )
 `).Scan(
 		&rawKey,
@@ -622,6 +629,7 @@ SELECT
 		&redactConstraint,
 		&receiptConstraint,
 		&replayConstraint,
+		&managedEntitlements,
 	)
 	if err != nil {
 		return fmt.Errorf("inspect migration state: %w", err)
@@ -637,7 +645,8 @@ SELECT
 			!hashConstraint &&
 			redactConstraint &&
 			!receiptConstraint &&
-			!replayConstraint
+			!replayConstraint &&
+			!managedEntitlements
 	case "up":
 		valid = !rawKey &&
 			hashedKey &&
@@ -646,11 +655,12 @@ SELECT
 			hashConstraint &&
 			redactConstraint &&
 			receiptConstraint &&
-			replayConstraint
+			replayConstraint &&
+			managedEntitlements
 	}
 	if !valid {
 		return fmt.Errorf(
-			"unexpected %s schema state: raw_key=%t hashed_key=%t replay_principal=%t old_file_index=%t hash_constraint=%t redact_constraint=%t receipt_constraint=%t replay_constraint=%t",
+			"unexpected %s schema state: raw_key=%t hashed_key=%t replay_principal=%t old_file_index=%t hash_constraint=%t redact_constraint=%t receipt_constraint=%t replay_constraint=%t managed_entitlements=%t",
 			state,
 			rawKey,
 			hashedKey,
@@ -660,6 +670,7 @@ SELECT
 			redactConstraint,
 			receiptConstraint,
 			replayConstraint,
+			managedEntitlements,
 		)
 	}
 	return nil

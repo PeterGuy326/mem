@@ -32,7 +32,9 @@ export function searchFiles(params: {
   until?: string;
   limit?: number;
 }): Promise<SearchResponse> {
-  return api.post<SearchResponse>('/search', params);
+  return api.post<SearchResponse>('/search', params, {
+    headers: { 'Idempotency-Key': `web-search-${crypto.randomUUID()}` },
+  });
 }
 
 // --- Faces ---

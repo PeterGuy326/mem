@@ -13,6 +13,8 @@ func TestLoadPolicyDefaultsAndSessionTTL(t *testing.T) {
 	t.Setenv("MEM_WORKSPACE_BUNDLE_MAX_BYTES", "")
 	t.Setenv("MEM_WORKSPACE_TRANSFER_MAX_CONCURRENT", "")
 	t.Setenv("MEM_WORKSPACE_TRANSFER_TMP_DIR", "")
+	t.Setenv("MEM_MANAGED_EMBEDDING_PROVIDER", "")
+	t.Setenv("MEM_MANAGED_EMBEDDING_RESERVATION_TTL", "")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -26,8 +28,26 @@ func TestLoadPolicyDefaultsAndSessionTTL(t *testing.T) {
 	if cfg.WorkspaceTransferTimeout != DefaultWorkspaceTransferTimeout ||
 		cfg.WorkspaceBundleMaxBytes != DefaultWorkspaceBundleMaxBytes ||
 		cfg.WorkspaceTransferMaxConcurrent != DefaultWorkspaceTransferMaxConcurrent ||
+		cfg.ManagedEmbeddingReservationTTL != DefaultManagedEmbeddingReservationTTL ||
 		cfg.WorkspaceTransferTmpDir != "" {
 		t.Fatalf("unexpected workspace transfer defaults: %#v", cfg)
+	}
+}
+
+func TestLoadSaaSRequiresExactManagedEmbeddingProvider(t *testing.T) {
+	t.Setenv("MEM_DEPLOYMENT_MODE", "saas")
+	t.Setenv("MEM_MANAGED_EMBEDDING_PROVIDER", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected missing managed embedding provider error")
+	}
+
+	t.Setenv("MEM_MANAGED_EMBEDDING_PROVIDER", "openai:text-embedding-3-small")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ManagedEmbeddingProvider != "openai:text-embedding-3-small" {
+		t.Fatalf("managed provider = %q", cfg.ManagedEmbeddingProvider)
 	}
 }
 
@@ -86,12 +106,16 @@ func TestLoadRejectsInvalidWorkspaceTransferResources(t *testing.T) {
 		{"MEM_WORKSPACE_TRANSFER_MAX_CONCURRENT", "nope"},
 		{"MEM_WORKSPACE_TRANSFER_MAX_CONCURRENT", "0"},
 		{"MEM_WORKSPACE_TRANSFER_MAX_CONCURRENT", "-1"},
+		{"MEM_MANAGED_EMBEDDING_RESERVATION_TTL", "not-a-duration"},
+		{"MEM_MANAGED_EMBEDDING_RESERVATION_TTL", "0s"},
+		{"MEM_MANAGED_EMBEDDING_RESERVATION_TTL", "-1s"},
 	}
 	for _, test := range tests {
 		t.Run(test.key+"="+test.value, func(t *testing.T) {
 			t.Setenv("MEM_WORKSPACE_TRANSFER_TIMEOUT", "")
 			t.Setenv("MEM_WORKSPACE_BUNDLE_MAX_BYTES", "")
 			t.Setenv("MEM_WORKSPACE_TRANSFER_MAX_CONCURRENT", "")
+			t.Setenv("MEM_MANAGED_EMBEDDING_RESERVATION_TTL", "")
 			t.Setenv(test.key, test.value)
 			if _, err := Load(); err == nil {
 				t.Fatalf("expected validation error for %s=%q", test.key, test.value)

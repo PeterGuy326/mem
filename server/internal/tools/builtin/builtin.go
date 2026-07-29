@@ -21,6 +21,7 @@ import (
 
 	"github.com/PeterGuy326/mem/server/internal/apiclient"
 	"github.com/PeterGuy326/mem/server/internal/tools"
+	"github.com/google/uuid"
 )
 
 // RegisterAll registers the full W1 tool set with reg, binding each tool's
@@ -445,6 +446,11 @@ func registerSearch(reg *tools.Registry, c *apiclient.Client) error {
 				"since": {Type: "string", Description: "YYYY-MM-DD lower bound on timeline_at"},
 				"until": {Type: "string", Description: "YYYY-MM-DD upper bound on timeline_at"},
 				"limit": {Type: "integer", Description: "Max results (default 10, max 100)", Default: 10},
+				"idempotency_key": {
+					Type: "string",
+					Description: "Stable key for safely replaying the same managed request; " +
+						"generated for one call when omitted",
+				},
 			},
 		},
 		Run: func(ctx context.Context, args map[string]any) (any, error) {
@@ -471,8 +477,19 @@ func registerSearch(reg *tools.Registry, c *apiclient.Client) error {
 			if v := args["limit"]; v != nil {
 				body["limit"] = v
 			}
+			headers, err := managedEmbeddingHeaders("search", args)
+			if err != nil {
+				return nil, err
+			}
 			var out map[string]any
-			if err := c.DoJSON(ctx, http.MethodPost, "/v1/search", body, &out); err != nil {
+			if err := c.DoJSONWithHeaders(
+				ctx,
+				http.MethodPost,
+				"/v1/search",
+				body,
+				&out,
+				headers,
+			); err != nil {
 				return nil, err
 			}
 			return out, nil
@@ -501,6 +518,11 @@ func registerContext(reg *tools.Registry, c *apiclient.Client) error {
 				"until":     {Type: "string", Description: "YYYY-MM-DD inclusive upper bound"},
 				"limit":     {Type: "integer", Description: "Max evidence items (default 8, max 50)", Default: 8},
 				"max_chars": {Type: "integer", Description: "Total context character budget (default 12000)", Default: 12000},
+				"idempotency_key": {
+					Type: "string",
+					Description: "Stable key for safely replaying the same managed request; " +
+						"generated for one call when omitted",
+				},
 			},
 		},
 		Run: func(ctx context.Context, args map[string]any) (any, error) {
@@ -519,13 +541,36 @@ func registerContext(reg *tools.Registry, c *apiclient.Client) error {
 					body[key] = v
 				}
 			}
+			headers, err := managedEmbeddingHeaders("context", args)
+			if err != nil {
+				return nil, err
+			}
 			var out map[string]any
-			if err := c.DoJSON(ctx, http.MethodPost, "/v1/context", body, &out); err != nil {
+			if err := c.DoJSONWithHeaders(
+				ctx,
+				http.MethodPost,
+				"/v1/context",
+				body,
+				&out,
+				headers,
+			); err != nil {
 				return nil, err
 			}
 			return out, nil
 		},
 	})
+}
+
+func managedEmbeddingHeaders(operation string, args map[string]any) (map[string]string, error) {
+	key, _ := args["idempotency_key"].(string)
+	key = strings.TrimSpace(key)
+	if len(key) > 200 {
+		return nil, fmt.Errorf("%s: idempotency_key must be at most 200 characters", operation)
+	}
+	if key == "" {
+		key = "mcp-" + operation + "-" + uuid.NewString()
+	}
+	return map[string]string{"Idempotency-Key": key}, nil
 }
 
 // --- related tool ---

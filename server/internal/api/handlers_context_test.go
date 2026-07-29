@@ -96,6 +96,34 @@ func TestHandleContextPassesWorkspaceAndMemoryFilters(t *testing.T) {
 	}
 }
 
+func TestHandleContextSaaSMemorySourceStaysModelIndependent(t *testing.T) {
+	stub := &contextMemoryStub{}
+	s := &Server{
+		Context:        contextpack.New(nil, stub),
+		DeploymentMode: "saas",
+		// No managed provider, entitlement store, Idempotency-Key or file
+		// searcher is needed for structured lexical memory.
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/context",
+		strings.NewReader(`{"query":"database decision","source":"memory"}`))
+	user := &auth.User{ID: uuid.New()}
+	token := &auth.Token{ID: uuid.New(), Paths: []string{"/Work"}}
+	workspaceID := uuid.New()
+	ctx := context.WithValue(req.Context(), ctxUser, user)
+	ctx = context.WithValue(ctx, ctxToken, token)
+	ctx = context.WithValue(ctx, ctxWorkspace, &workspace.Workspace{ID: workspaceID})
+	rec := httptest.NewRecorder()
+
+	s.handleContext(rec, req.WithContext(ctx))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"source_kind":"memory"`) {
+		t.Fatalf("response lacks lexical memory evidence: %s", rec.Body.String())
+	}
+}
+
 func TestHandleContextRejectsIncompatibleSourceFilter(t *testing.T) {
 	s := &Server{Context: contextpack.New(nil, &contextMemoryStub{})}
 	req := httptest.NewRequest(http.MethodPost, "/v1/context",

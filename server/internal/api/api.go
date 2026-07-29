@@ -31,6 +31,7 @@ import (
 
 	"github.com/PeterGuy326/mem/server/internal/auth"
 	"github.com/PeterGuy326/mem/server/internal/contextpack"
+	"github.com/PeterGuy326/mem/server/internal/entitlement"
 	"github.com/PeterGuy326/mem/server/internal/face"
 	"github.com/PeterGuy326/mem/server/internal/file"
 	"github.com/PeterGuy326/mem/server/internal/folder"
@@ -76,6 +77,34 @@ type WorkspaceTransferService interface {
 	) (*workspacetransfer.ImportResult, error)
 }
 
+// SearchService keeps the provider invocation behind a testable port. Replay
+// reconstructs a prior safe-reference result without another provider call.
+type SearchService interface {
+	Search(context.Context, search.Query) ([]search.Hit, error)
+	EmbeddingSpec(context.Context, uuid.UUID) (string, error)
+	Replay(
+		context.Context,
+		search.Query,
+		[]entitlement.ReplayReference,
+	) ([]search.Hit, error)
+}
+
+type EntitlementService interface {
+	Ready(context.Context) error
+	Summary(context.Context, uuid.UUID) (entitlement.Summary, error)
+	Reserve(
+		context.Context,
+		entitlement.ReserveCommand,
+	) (*entitlement.Reservation, error)
+	Finalize(
+		context.Context,
+		uuid.UUID,
+		[]entitlement.ReplayReference,
+	) (entitlement.Summary, error)
+	Release(context.Context, uuid.UUID) (entitlement.Summary, error)
+	MarkIndeterminate(context.Context, uuid.UUID) (entitlement.Summary, error)
+}
+
 // Server bundles the dependencies a handler needs.
 type Server struct {
 	Auth                     *auth.Service
@@ -83,7 +112,7 @@ type Server struct {
 	Folder                   *folder.Service
 	Indexer                  *indexer.Service // legacy inline path (only used if Queue is nil)
 	Queue                    *queue.Client    // preferred: async indexing via Asynq
-	Search                   *search.Service  // optional; nil disables /v1/search
+	Search                   SearchService    // optional; nil disables /v1/search
 	Context                  *contextpack.Service
 	Memory                   MemoryService
 	Handoff                  handoff.ServicePort
@@ -97,6 +126,8 @@ type Server struct {
 	WorkspaceTransferGate    chan struct{}
 	WorkspaceTransferTmpDir  string
 	DeploymentMode           string
+	ManagedEmbeddingProvider string
+	Entitlements             EntitlementService
 	RegistrationMode         string
 	SessionTTL               time.Duration
 	CORSOrigins              []string // allowed browser origins; empty disables CORS
@@ -118,6 +149,7 @@ func (s *Server) Router() http.Handler {
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
+	r.Get("/readyz", s.handleReadiness)
 	r.Get("/v1/version", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"version": Version})
 	})
@@ -134,6 +166,8 @@ func (s *Server) Router() http.Handler {
 		r.Get("/v1/capabilities", s.handleCapabilities)
 		r.Get("/v1/workspaces", s.handleListWorkspaces)
 		r.Get("/v1/workspaces/current", s.handleCurrentWorkspace)
+		r.With(s.requireScope(auth.ScopeRead)).
+			Get("/v1/entitlements/current", s.handleEntitlementSummary)
 		r.With(
 			s.requireScope(auth.ScopeRead),
 			s.requireScope(auth.ScopeAdmin),
@@ -1162,19 +1196,51 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		q.Until = &t
 	}
 
+	requestSearcher, managed, err := s.managedSearcher(
+		r,
+		"search.query",
+		req,
+		q,
+	)
+	if err != nil {
+		writeManagedEmbeddingError(w, err)
+		return
+	}
 	start := time.Now()
-	hits, err := s.Search.Search(r.Context(), q)
+	hits, err := requestSearcher.Search(r.Context(), q)
+	if managed != nil {
+		if summary, ok, replayed := managed.result(); ok {
+			setManagedUsageHeaders(w, summary, replayed)
+		}
+	}
 	if err != nil {
 		if s.Log != nil {
-			s.Log.Error("search.failed", "err", err)
+			if managed != nil {
+				// Managed-provider errors can contain upstream response text.
+				// Keep the server log as redacted as the public response.
+				s.Log.Error("search.managed_failed")
+			} else {
+				s.Log.Error("search.failed", "err", err)
+			}
+		}
+		if managed != nil {
+			writeManagedEmbeddingError(w, err)
+			return
 		}
 		writeError(w, http.StatusBadGateway, "search_unavailable", "memory search is temporarily unavailable")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"results": hits,
-		"_meta":   map[string]any{"latency_ms": time.Since(start).Milliseconds()},
-	})
+	meta := map[string]any{"latency_ms": time.Since(start).Milliseconds()}
+	if managed != nil {
+		if summary, ok, replayed := managed.result(); ok {
+			meta["managed_embedding"] = map[string]any{
+				"remaining": summary.Remaining,
+				"reset_at":  summary.ResetAt,
+				"replayed":  replayed,
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"results": hits, "_meta": meta})
 }
 
 // handleFileRelated → GET /v1/files/{id}/related?type=<t>&limit=N

@@ -51,15 +51,16 @@ type contextResponse struct {
 
 func newContextCmd() *cobra.Command {
 	var (
-		scope    string
-		source   string
-		typ      string
-		memKind  string
-		since    string
-		until    string
-		limit    int
-		maxChars int
-		format   string
+		scope          string
+		source         string
+		typ            string
+		memKind        string
+		since          string
+		until          string
+		limit          int
+		maxChars       int
+		format         string
+		idempotencyKey string
 	)
 	cmd := &cobra.Command{
 		Use:   "context <query>",
@@ -109,7 +110,17 @@ Examples:
 				body["max_chars"] = maxChars
 			}
 			var resp contextResponse
-			if err := newHTTPClient(cfg).doJSON("POST", "/v1/context", body, &resp); err != nil {
+			requestKey, err := managedRequestKey("context", idempotencyKey)
+			if err != nil {
+				return err
+			}
+			if err := newHTTPClient(cfg).doJSONWithHeaders(
+				"POST",
+				"/v1/context",
+				body,
+				&resp,
+				map[string]string{"Idempotency-Key": requestKey},
+			); err != nil {
 				return err
 			}
 			output := cmd.OutOrStdout()
@@ -193,5 +204,11 @@ Examples:
 	cmd.Flags().IntVar(&limit, "limit", 0, "max evidence items (default 8, max 50)")
 	cmd.Flags().IntVar(&maxChars, "max-chars", 0, "total context character budget (default 12000)")
 	cmd.Flags().StringVar(&format, "format", "text", "text|json")
+	cmd.Flags().StringVar(
+		&idempotencyKey,
+		"idempotency-key",
+		"",
+		"stable retry key for managed embedding usage (generated when omitted)",
+	)
 	return cmd
 }

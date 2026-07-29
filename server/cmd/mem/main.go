@@ -2,7 +2,7 @@
 //
 // Exit codes (SPEC §7.1):
 //
-//	0 ok · 2 not_found · 3 auth · 4 quota · 5 provider_error
+//	0 ok · 2 not_found · 3 auth · 4 plan/quota · 5 provider/timeout
 package main
 
 import (

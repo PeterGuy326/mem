@@ -33,12 +33,13 @@ type searchResponse struct {
 
 func newSearchCmd() *cobra.Command {
 	var (
-		typ    string
-		route  string
-		since  string
-		until  string
-		limit  int
-		format string
+		typ            string
+		route          string
+		since          string
+		until          string
+		limit          int
+		format         string
+		idempotencyKey string
 	)
 	cmd := &cobra.Command{
 		Use:   "search <query>",
@@ -77,7 +78,17 @@ func newSearchCmd() *cobra.Command {
 			}
 
 			var resp searchResponse
-			if err := c.doJSON("POST", "/v1/search", body, &resp); err != nil {
+			requestKey, err := managedRequestKey("search", idempotencyKey)
+			if err != nil {
+				return err
+			}
+			if err := c.doJSONWithHeaders(
+				"POST",
+				"/v1/search",
+				body,
+				&resp,
+				map[string]string{"Idempotency-Key": requestKey},
+			); err != nil {
 				return err
 			}
 
@@ -95,6 +106,12 @@ func newSearchCmd() *cobra.Command {
 	cmd.Flags().StringVar(&until, "until", "", "YYYY-MM-DD inclusive upper bound on timeline_at")
 	cmd.Flags().IntVar(&limit, "limit", 0, "max results (default 10, max 100)")
 	cmd.Flags().StringVar(&format, "format", "text", "text|json")
+	cmd.Flags().StringVar(
+		&idempotencyKey,
+		"idempotency-key",
+		"",
+		"stable retry key for managed embedding usage (generated when omitted)",
+	)
 	return cmd
 }
 
