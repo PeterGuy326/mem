@@ -1,0 +1,267 @@
+{
+  "generated_at": "2026-07-29T03:02:40Z",
+  "hosts": {
+    "claude-code": {
+      "auth_method": "MEM_TOKEN bearer via environment",
+      "commands": [
+        {
+          "argv": [
+            "<PRIVATE_PATH>/claude",
+            "--version"
+          ],
+          "attributed_requests": [],
+          "exit_code": -9,
+          "name": "version",
+          "outcome": "FAIL",
+          "output": "",
+          "proves": "NOT RUN",
+          "validated": false,
+          "validation_error": "command outcome was FAIL"
+        },
+        {
+          "argv": [
+            "<PRIVATE_PATH>/claude",
+            "mcp",
+            "list"
+          ],
+          "attributed_requests": [],
+          "exit_code": -9,
+          "name": "mcp-list",
+          "outcome": "FAIL",
+          "output": "",
+          "proves": "REGISTERED",
+          "validated": false,
+          "validation_error": "command outcome was FAIL"
+        }
+      ],
+      "evidence": {
+        "manifest": "../../scripts/agent_certification/manifests/claude-code.json",
+        "official_docs": "https://code.claude.com/docs/en/mcp",
+        "report_anchor": "#/hosts/claude-code"
+      },
+      "expected_version": "2.1.209",
+      "host_id": "claude-code",
+      "isolation": {
+        "scope": "project .mcp.json plus CLAUDE_CONFIG_DIR under one temporary root",
+        "status": "VERIFIED"
+      },
+      "observed_at": "2026-07-29T03:02:40Z",
+      "observed_version": null,
+      "platform": {
+        "arch": "arm64",
+        "os": "Darwin",
+        "release": "24.5.0"
+      },
+      "reason": "mcp-list did not complete successfully (exit -9)",
+      "result": "NOT RUN",
+      "status": "NOT RUN",
+      "tested_operations": [
+        "version",
+        "mcp-list"
+      ],
+      "transport": "stdio"
+    },
+    "codex": {
+      "auth_method": "MEM_TOKEN bearer via environment",
+      "commands": [
+        {
+          "argv": [
+            "<PRIVATE_PATH>/codex",
+            "--version"
+          ],
+          "attributed_requests": [],
+          "exit_code": 0,
+          "name": "version",
+          "outcome": "PASS",
+          "output": "codex-cli 0.145.0\n",
+          "proves": "NOT RUN",
+          "validated": true,
+          "validation_error": ""
+        }
+      ],
+      "evidence": {
+        "manifest": "../../scripts/agent_certification/manifests/codex.json",
+        "official_docs": "https://learn.chatgpt.com/docs/extend/mcp?surface=cli",
+        "report_anchor": "#/hosts/codex"
+      },
+      "expected_version": "0.145.0",
+      "host_id": "codex",
+      "isolation": {
+        "scope": "static config fixture only; runtime isolation is not verified",
+        "status": "NOT VERIFIED"
+      },
+      "observed_at": "2026-07-29T03:02:40Z",
+      "observed_version": "codex-cli 0.145.0",
+      "platform": {
+        "arch": "arm64",
+        "os": "Darwin",
+        "release": "24.5.0"
+      },
+      "reason": "no command advanced beyond NOT RUN",
+      "result": "NOT RUN",
+      "status": "NOT RUN",
+      "tested_operations": [
+        "version"
+      ],
+      "transport": "stdio"
+    },
+    "hermes": {
+      "auth_method": "MEM_TOKEN bearer via environment",
+      "commands": [],
+      "evidence": {
+        "manifest": "../../scripts/agent_certification/manifests/hermes.json",
+        "official_docs": "https://github.com/NousResearch/hermes-agent/blob/f228e145ba35cbbf785eded2021ae6682285b91b/website/docs/user-guide/features/mcp.md",
+        "report_anchor": "#/hosts/hermes"
+      },
+      "expected_version": null,
+      "host_id": "hermes",
+      "isolation": {
+        "scope": "HERMES_HOME under one temporary root when a future runtime probe is available",
+        "status": "NOT VERIFIED"
+      },
+      "observed_at": "2026-07-29T03:02:40Z",
+      "observed_version": null,
+      "platform": {
+        "arch": "arm64",
+        "os": "Darwin",
+        "release": "24.5.0"
+      },
+      "reason": "host executable is not installed",
+      "result": "NOT RUN",
+      "status": "NOT RUN",
+      "tested_operations": [],
+      "transport": "stdio"
+    },
+    "openclaw": {
+      "auth_method": "MEM_TOKEN bearer via environment",
+      "commands": [
+        {
+          "argv": [
+            "<PRIVATE_PATH>/openclaw",
+            "--version"
+          ],
+          "attributed_requests": [],
+          "exit_code": -9,
+          "name": "version",
+          "outcome": "FAIL",
+          "output": "",
+          "proves": "NOT RUN",
+          "validated": false,
+          "validation_error": "command outcome was FAIL"
+        },
+        {
+          "argv": [
+            "<PRIVATE_PATH>/openclaw",
+            "mcp",
+            "list",
+            "--json"
+          ],
+          "attributed_requests": [],
+          "exit_code": -9,
+          "name": "mcp-list",
+          "outcome": "FAIL",
+          "output": "",
+          "proves": "REGISTERED",
+          "validated": false,
+          "validation_error": "command outcome was FAIL"
+        }
+      ],
+      "evidence": {
+        "manifest": "../../scripts/agent_certification/manifests/openclaw.json",
+        "official_docs": "https://github.com/openclaw/openclaw/blob/v2026.3.28/docs/cli/mcp.md",
+        "report_anchor": "#/hosts/openclaw"
+      },
+      "expected_version": "2026.3.28",
+      "host_id": "openclaw",
+      "isolation": {
+        "scope": "OPENCLAW_CONFIG_PATH and OPENCLAW_STATE_DIR under one temporary root",
+        "status": "VERIFIED"
+      },
+      "observed_at": "2026-07-29T03:02:40Z",
+      "observed_version": null,
+      "platform": {
+        "arch": "arm64",
+        "os": "Darwin",
+        "release": "24.5.0"
+      },
+      "reason": "mcp-list did not complete successfully (exit -9)",
+      "result": "NOT RUN",
+      "status": "NOT RUN",
+      "tested_operations": [
+        "version",
+        "mcp-list"
+      ],
+      "transport": "stdio"
+    },
+    "opencode": {
+      "auth_method": "MEM_TOKEN bearer via environment",
+      "commands": [
+        {
+          "argv": [
+            "<PRIVATE_PATH>/opencode",
+            "--version"
+          ],
+          "attributed_requests": [],
+          "exit_code": 0,
+          "name": "version",
+          "outcome": "PASS",
+          "output": "1.17.9\n",
+          "proves": "NOT RUN",
+          "validated": true,
+          "validation_error": ""
+        },
+        {
+          "argv": [
+            "<PRIVATE_PATH>/opencode",
+            "--pure",
+            "mcp",
+            "list"
+          ],
+          "attributed_requests": [],
+          "exit_code": 0,
+          "name": "mcp-list",
+          "outcome": "PASS",
+          "output": "\u001b[0m\n\u250c  MCP Servers\n\u2502\n\u25cf  \u2713 mem \u001b[90mconnected\n\u2502      \u001b[90m<TEMP>/mem-mcp\n\u2502\n\u2514  1 server(s)\n\n",
+          "proves": "DISCOVERED",
+          "validated": true,
+          "validation_error": ""
+        }
+      ],
+      "evidence": {
+        "manifest": "../../scripts/agent_certification/manifests/opencode.json",
+        "official_docs": "https://opencode.ai/docs/mcp-servers/",
+        "report_anchor": "#/hosts/opencode"
+      },
+      "expected_version": "1.17.9",
+      "host_id": "opencode",
+      "isolation": {
+        "scope": "OPENCODE_CONFIG_CONTENT, OPENCODE_CONFIG_DIR, OPENCODE_DB and XDG roots under one temporary root",
+        "status": "VERIFIED"
+      },
+      "observed_at": "2026-07-29T03:02:40Z",
+      "observed_version": "1.17.9",
+      "platform": {
+        "arch": "arm64",
+        "os": "Darwin",
+        "release": "24.5.0"
+      },
+      "reason": "highest directly observed evidence level",
+      "result": "PARTIAL",
+      "status": "DISCOVERED",
+      "tested_operations": [
+        "version",
+        "mcp-list"
+      ],
+      "transport": "stdio"
+    }
+  },
+  "isolation": "reported per host; no global isolation claim",
+  "platform": {
+    "arch": "arm64",
+    "os": "Darwin",
+    "release": "24.5.0"
+  },
+  "protocol_version": "2024-11-05",
+  "schema_version": 1,
+  "transport": "stdio"
+}

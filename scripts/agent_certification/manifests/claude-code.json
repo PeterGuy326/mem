@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "host_id": "claude-code",
+  "display_name": "Claude Code",
+  "transport": "stdio",
+  "fixture": "fixtures/claude-code.json",
+  "scope": "project .mcp.json plus CLAUDE_CONFIG_DIR under one temporary root",
+  "command_shape": "mcpServers.mem.command string plus args array",
+  "environment_shape": "mcpServers.mem.env object with runtime ${VAR} expansion",
+  "version": "2.1.209",
+  "status": "NOT RUN",
+  "evidence": {
+    "official_docs": "https://code.claude.com/docs/en/mcp",
+    "source_revision": "documentation retrieved 2026-07-28",
+    "report": "docs/integrations/agent-host-certification.json#/hosts/claude-code"
+  },
+  "real_probe": {
+    "binary": "claude",
+    "version_args": [
+      "--version"
+    ],
+    "commands": [
+      {
+        "name": "mcp-list",
+        "args": [
+          "mcp",
+          "list"
+        ],
+        "proves": "REGISTERED",
+        "validator": "claude-registered"
+      }
+    ],
+    "isolation_env": [
+      "CLAUDE_CONFIG_DIR"
+    ],
+    "limitation": "mcp list proves registration; invocation requires a separately authorized Agent model session"
+  }
+}

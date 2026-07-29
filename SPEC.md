@@ -845,6 +845,25 @@ CLI 的 `--idempotency-key` 由适配器转换为 HTTP `Idempotency-Key` Header�
 - `_meta: { quota_remaining, latency_ms }` 与大结果 streaming 是后续能力，
   当前 `remember/context` 不伪造这些字段
 
+### 8.3 Agent host 认证约定
+
+当前 host transport 只认证 newline-delimited JSON-RPC 2.0 stdio 和 MCP
+`2024-11-05` baseline。OpenClaw、Hermes Agent、Claude Code、OpenCode 与
+Codex 必须复用同一个 `mem-mcp → memd` 适配链路；host 配置不能引入第二套
+memory 语义。
+
+认证分两层：无模型的 hermetic contract 必须完成
+`initialize → notifications/initialized → tools/list → tools/call`，并覆盖
+auth、remember/search/context、source identity、lifecycle/forget、active
+cross-workspace denial 和显式失败；真实 host 则按直接证据分别报告
+`REGISTERED`、`DISCOVERED`、`INVOKED` 或 `NOT RUN`。配置解析不等于发现，
+发现不等于调用；只有 `INVOKED` 计完整 PASS。版本化 manifest、脱敏配置和
+当前证据见 [`docs/integrations/agent-hosts.md`](docs/integrations/agent-hosts.md)。
+
+token 只能经 host 文档化的 environment/secret mechanism 注入，不能进入
+tracked config、argv、报告或日志。真实 host runner 不修改用户全局配置；
+没有可证明的 host-specific isolation 时必须 `NOT RUN`。
+
 ---
 
 ## 9. AI Pipeline 规范

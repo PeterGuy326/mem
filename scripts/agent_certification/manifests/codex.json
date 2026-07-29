@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "host_id": "codex",
+  "display_name": "Codex CLI",
+  "transport": "stdio",
+  "fixture": "fixtures/codex.toml",
+  "scope": "static config fixture only; runtime isolation is not verified",
+  "command_shape": "mcp_servers.mem.command string plus args array",
+  "environment_shape": "mcp_servers.mem.env_vars allow-list, or temporary per-invocation env overrides",
+  "version": "0.145.0",
+  "status": "NOT RUN",
+  "evidence": {
+    "official_docs": "https://learn.chatgpt.com/docs/extend/mcp?surface=cli",
+    "source_revision": "documentation retrieved 2026-07-28",
+    "report": "docs/integrations/agent-host-certification.json#/hosts/codex"
+  },
+  "real_probe": {
+    "binary": "codex",
+    "version_args": [
+      "--version"
+    ],
+    "commands": [],
+    "isolation_env": [],
+    "limitation": "Codex has no host-specific config-root environment variable; local -c overrides still merge with user config, so runtime probing is NOT RUN"
+  }
+}

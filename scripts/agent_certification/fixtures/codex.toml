@@ -1,0 +1,6 @@
+[mcp_servers.mem]
+command = "mem-mcp"
+args = []
+env_vars = ["MEM_SERVER", "MEM_TOKEN", "MEM_WORKSPACE"]
+startup_timeout_sec = 10
+tool_timeout_sec = 300

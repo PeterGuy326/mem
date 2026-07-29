@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "mem": {
+      "command": "${MEM_MCP_COMMAND}",
+      "args": [],
+      "env": {
+        "MEM_SERVER": "${MEM_SERVER}",
+        "MEM_TOKEN": "${MEM_TOKEN}",
+        "MEM_WORKSPACE": "${MEM_WORKSPACE}"
+      }
+    }
+  }
+}

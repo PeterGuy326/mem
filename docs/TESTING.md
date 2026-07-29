@@ -210,11 +210,60 @@ a failure.
 Checkpoint/resume is covered by a real Router + PostgreSQL integration test.
 Workspace transfer has PostgreSQL service integration plus independent
 handler/client contract tests; it is not represented as a single
-Router-to-PostgreSQL end-to-end test. A two-deployment bundle round trip and
-real Claude Code/Codex host-process smoke remain release-level manual
-acceptance.
+Router-to-PostgreSQL end-to-end test. A two-deployment bundle round trip
+remains release-level manual acceptance. Agent-host evidence is graded
+separately in the next section.
 
-## 6. Visual-search quality gate
+## 6. Agent-host MCP certification
+
+The host-neutral gate needs only Python's standard library and an explicit
+current `mem-mcp` binary:
+
+```bash
+MEM_MCP_CERT_BINARY='/absolute/path/to/mem-mcp' \
+  make test-agent-certification
+```
+
+It parses all five host manifests/config fixtures and drives a fake
+loopback-only memd through the real adapter handshake and safe tool calls. It
+also injects missing/invalid token, insufficient role, unavailable server,
+unknown tool, timeout, malformed response, partial context, stdout pollution,
+foreign response ID, and path-with-spaces cases. Timeout cleanup kills the
+whole POSIX process group and is regression-tested. No Agent answer model,
+desktop host, cloud service, API key, database, or global host config is
+required.
+
+CI builds the adapter into a runner-temporary path and sets
+`MEM_MCP_CERT_BINARY`; therefore the conditional current-adapter test must not
+skip there. On a managed macOS computer, do not execute a temporary Go binary:
+run this gate in the same local Linux/Docker boundary used by the safe
+acceptance workflow.
+
+Installed-host probes are opt-in:
+
+```bash
+report="$(mktemp)"
+python3 scripts/agent_certification/certify.py real-hosts \
+  --mcp-binary /absolute/path/to/mem-mcp >"$report" &&
+  python3 -m json.tool "$report" >/dev/null &&
+  mv "$report" docs/integrations/agent-host-certification.json
+```
+
+The runner configures documented host-specific roots, checks temporary config
+files for token material, retains bounded command output, sanitizes its report,
+and grades registration/discovery/invocation separately. Before returning, it
+validates the same canonical schema used for the checked file and recomputes
+each status/result solely from the complete sanitized command evidence. The
+checked JSON is therefore the command's verbatim output, not a manually
+transcribed summary. `VERIFIED` isolation means those host-specific roots were
+configured and generated temporary files were checked; it is not a
+syscall/filesystem-audit claim that a third-party binary never attempted
+another read. Codex and absent Hermes remain isolation `NOT VERIFIED` and
+runtime `NOT RUN`. See
+[Agent host certification](integrations/agent-hosts.md) and its
+[machine-readable report](integrations/agent-host-certification.json).
+
+## 7. Visual-search quality gate
 
 The default Worker regression proves that original image bytes reach the
 visual provider and that only 512-dimensional vectors enter the current
@@ -235,7 +284,7 @@ be described as validated. Model download failure, timeout or an unavailable
 checkpoint is `NOT VERIFIED`, not a pass. See
 [VISUAL_SEARCH_BASELINE.md](acceptance/VISUAL_SEARCH_BASELINE.md).
 
-## 7. Multilingual recall benchmark
+## 8. Multilingual recall benchmark
 
 The repository includes a standalone Python 3.11+ benchmark for structured
 memory, text-file and image-caption retrieval. Its checked-in corpus is
@@ -269,7 +318,7 @@ model-quality threshold. See
 [`benchmarks/recall/README.md`](../benchmarks/recall/README.md) for the input
 contract and exact denominators.
 
-## 8. Regression ledger
+## 9. Regression ledger
 
 Use this table in pull requests and add implementation-specific scenarios:
 
@@ -282,17 +331,20 @@ Use this table in pull requests and add implementation-specific scenarios:
 | V5 | Fresh schema, rollback and PostgreSQL semantics hold | `make test-integration` | Migration head and eleven named tests pass, none skipped |
 | V6 | DB concurrency paths are race-free | `make test-integration-race` | The same eleven tests pass under `-race` |
 | V7 | Real service boundaries agree | `make test-acceptance` | HTTP, CLI and MCP share one isolated service; memory citation/provenance, bounded checkpoint listing, full checkpoint get, lifecycle and forget redaction pass |
-| V8 | Multilingual visual quality meets the chosen checkpoint | Opt-in command in section 6 | All fixed ranking assertions pass |
-| V9 | Offline recall math, determinism and source boundaries hold | `make test-recall` | Unit checks pass; two lexical artifacts differ only by timestamp; malicious fixture is rejected |
+| V8 | Five config shapes and the real adapter preserve the host-neutral MCP contract | `MEM_MCP_CERT_BINARY=... make test-agent-certification` | All fixtures and current-adapter scenarios pass with no skip |
+| V9 | Multilingual visual quality meets the chosen checkpoint | Opt-in command in section 7 | All fixed ranking assertions pass |
+| V10 | Offline recall math, determinism and source boundaries hold | `make test-recall` | Unit checks pass; two lexical artifacts differ only by timestamp; malicious fixture is rejected |
 
-## 9. Known limitations
+## 10. Known limitations
 
 - GitHub CI covers hermetic checks, owned fresh-PostgreSQL
   migration/integration and process-level lifecycle acceptance. It does not
   run external cloud models.
-- The two-deployment bundle round trip and real Claude Code/Codex host-process
-  smoke remain release-level manual acceptance; checked-in unit/integration
-  tests cover the contracts but not those host processes.
+- The two-deployment bundle round trip remains release-level manual
+  acceptance. Installed Agent hosts are opt-in evidence: current results are
+  explicit `NOT RUN`, not inferred from the hermetic fixture harness.
+- POSIX host-runner process-group cleanup is automated. Windows process-tree
+  cleanup is `NOT VERIFIED`.
 - `web/acceptance.mjs` and `web/e2e-smoke.mjs` are legacy, environment-specific
   manual scripts. The standard portable Web gates are
   `npm run test:memory` and `npm run test:transfer`.

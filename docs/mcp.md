@@ -317,6 +317,13 @@ The binary is single-file with no runtime dependencies beyond a reachable
 
 ## Configuration
 
+Versioned configuration shapes for OpenClaw, Hermes Agent, Claude Code,
+OpenCode, and Codex—as well as the strict meaning of `REGISTERED`,
+`DISCOVERED`, `INVOKED`, and `NOT RUN`—are maintained in
+[Agent host certification](integrations/agent-hosts.md). Those fixtures keep
+tokens as runtime environment references and are parsed in CI. A successful
+config parse is not reported as a tool invocation.
+
 `mem-mcp` reads configuration in order of precedence: command-line flag →
 environment variable → built-in default.
 
@@ -437,7 +444,7 @@ Start Codex in the target project and ask:
 
 Codex's supported transports, CLI command and shared configuration behavior
 are documented in the
-[official Codex MCP guide](https://learn.chatgpt.com/codex/extend/mcp).
+[official Codex MCP guide](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
 
 Use a least-privilege workspace-bound token for each Agent host. The examples
 show literal placeholders for clarity; do not commit real tokens to

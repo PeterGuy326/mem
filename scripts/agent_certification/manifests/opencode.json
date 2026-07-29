@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "host_id": "opencode",
+  "display_name": "OpenCode",
+  "transport": "stdio",
+  "fixture": "fixtures/opencode.json",
+  "scope": "OPENCODE_CONFIG_CONTENT, OPENCODE_CONFIG_DIR, OPENCODE_DB and XDG roots under one temporary root",
+  "command_shape": "mcp.mem.command argv array",
+  "environment_shape": "mcp.mem.environment object with runtime {env:VAR} expansion",
+  "version": "1.17.9",
+  "status": "NOT RUN",
+  "evidence": {
+    "official_docs": "https://opencode.ai/docs/mcp-servers/",
+    "source_revision": "documentation retrieved 2026-07-28",
+    "report": "docs/integrations/agent-host-certification.json#/hosts/opencode"
+  },
+  "real_probe": {
+    "binary": "opencode",
+    "version_args": [
+      "--version"
+    ],
+    "commands": [
+      {
+        "name": "mcp-list",
+        "args": [
+          "--pure",
+          "mcp",
+          "list"
+        ],
+        "proves": "DISCOVERED",
+        "validator": "opencode-discovered"
+      }
+    ],
+    "isolation_env": [
+      "OPENCODE_CONFIG_CONTENT",
+      "OPENCODE_CONFIG_DIR",
+      "OPENCODE_DB",
+      "XDG_CONFIG_HOME",
+      "XDG_DATA_HOME",
+      "XDG_CACHE_HOME",
+      "XDG_STATE_HOME"
+    ],
+    "limitation": "mcp list starts the local server and lists its connection state but does not itself call a tool"
+  }
+}
