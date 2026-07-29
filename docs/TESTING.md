@@ -139,12 +139,12 @@ marker before it can drop anything. The control role therefore needs
 1. validates migrations on a fresh owned database and applies `0001` through
    the declared head;
 2. asserts the current privacy, enrichment, managed-entitlement and workspace
-   AI-profile schema; proves an already-migrated `15 → 16` database
-   canonicalizes bounded model text and then applies the workspace AI-profile
-   migration; performs explicit `17 → 15 → 17` and `17 → 11 → 17` rollback
-   round trips; asserts the intermediate schema states; and proves accepted
-   model tags are removed before provenance disappears rather than being copied
-   into `user_tags` on re-up;
+   AI-profile schema; proves the `15 → 17` migration path canonicalizes
+   bounded model text and adds workspace AI profiles; performs explicit
+   `17 → 15 → 17` and `17 → 11 → 17` rollback round trips; asserts the
+   intermediate schema states; and proves accepted model tags are removed
+   before provenance disappears rather than being copied into `user_tags` on
+   re-up;
 3. creates separate fresh databases for normal and race runs, then executes
    the real PostgreSQL memory, handoff, workspace-transfer, HTTP-router,
    folder/file path-locking, folder-lifecycle, relator, managed-entitlement,
