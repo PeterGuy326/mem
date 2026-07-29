@@ -64,8 +64,33 @@ so the stack coexists with other local Redis/MinIO instances):
 | `MEM_S3_REGION` | `us-east-1` | Region tag |
 | `MEM_S3_USE_SSL` | derived from endpoint scheme | force TLS |
 | `MEM_WORKER_GRPC` | `localhost:50051` | Worker dial target (`make worker` listen addr) |
+| `MEM_DEPLOYMENT_MODE` | `private` | `private` or `saas`; managed quality profiles are SaaS-only |
+| `MEM_AI_PROFILES` | `local-fast-v1` | Comma-separated server allowlist of workspace profile IDs; enable `idealab-quality-v1` explicitly |
+| `MEM_MANAGED_EMBEDDING_PROVIDER` | — | Required in SaaS; must be exactly `openai:text-embedding-3-large` when `idealab-quality-v1` is enabled |
 | `MEM_SESSION_TTL` | `24h` | Login session token TTL |
 | `MEM_LOG_LEVEL` | `info` | `debug|info|warn|error` |
+
+### Workspace AI profiles
+
+A workspace profile is a server-owned, fixed AI pipeline; the client selects a
+profile ID and cannot supply a provider URL, model name, prompt, or credential.
+The default local allowlist contains `local-fast-v1`, which uses
+`ollama:qwen3-embedding:0.6b` at 768 dimensions. Install that Ollama artifact
+explicitly before selection with `mem model install qwen3-embedding-0.6b-ollama`.
+That curated installer checks hardware/disk compatibility, the pinned artifact
+digest, and a 768-dimensional output. Selection
+performs a Worker-side 768-dimensional probe but never downloads a model or
+falls back to a global default. CLIP visual support is optional and separately
+provisioned; it is not part of the profile activation probe.
+
+`idealab-quality-v1` is SaaS-only. Its deployment must explicitly enable the
+profile with `MEM_AI_PROFILES=local-fast-v1,idealab-quality-v1`, use the exact
+managed embedding spec above, and configure the Worker with the Idealab
+OpenAI-compatible endpoint and a runtime-injected key. It is a pinned routing
+contract, not a benchmark claim. Profile changes require a fresh versioned
+index generation and rebuild; vectors from distinct providers are never mixed
+in place. See [managed profile configuration](../docs/MANAGED_EMBEDDINGS.md)
+and [local profile activation](../docs/LOCAL_EMBEDDING_MODELS.md).
 
 ## Bootstrap a dev user
 
@@ -112,6 +137,8 @@ All token-protected routes require `Authorization: Bearer <token>`.
 | `GET`    | `/v1/tasks/{task_key}/checkpoints` | read | list bounded checkpoint summaries newest first |
 | `GET`    | `/v1/tasks/{task_key}/checkpoints/{id}` | read | inspect one versioned handoff |
 | `POST`   | `/v1/tasks/{task_key}/resume` | read | restore the task head or selected checkpoint; `search` optionally enriches related context |
+| `GET`    | `/v1/workspaces/current/ai-profile` | read | selected snapshot and server-enabled profile catalog |
+| `PUT`    | `/v1/workspaces/current/ai-profile` | admin + provider-write workspace role + unrestricted paths | select one server-allowlisted `profile_id` |
 | `GET`    | `/v1/workspaces/current/export` | read + admin, unrestricted path, owner/admin role | build and download a validated `.membundle` v1 archive |
 | `POST`   | `/v1/workspaces/current/import?mode=fresh` | write + admin, unrestricted path, owner/admin role | validate and atomically restore into an empty workspace |
 | `POST`   | `/v1/files`                 | write | upload (multipart `file=`, optional form field `path=/Photos/2012`; or `?stream=1&name=...&path=...`) |
@@ -182,6 +209,9 @@ evidence returns `502/context_unavailable`.
 | `mem auth token create --name X --scope read,write` | Create token (one-time plaintext printed) |
 | `mem auth token list` | List tokens |
 | `mem auth token revoke <id>` | Revoke |
+| `mem profile list` | List the server-enabled workspace AI profile IDs |
+| `mem profile status` | Show the selected workspace AI profile snapshot |
+| `mem profile select local-fast-v1` | Select an allowlisted profile; the server probes its exact embedding contract |
 | `mem put <path>` | Upload a single file (auto MIME) |
 | `mem put <path> --to /Photos/2012` | Upload into a virtual folder (mkdir -p) |
 | `mem put <dir> --recursive [--to /Albums]` | Upload every file under dir, mirroring the on-disk tree into `--to` |

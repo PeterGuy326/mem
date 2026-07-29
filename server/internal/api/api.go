@@ -29,6 +29,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
+	"github.com/PeterGuy326/mem/server/internal/aiprofile"
 	"github.com/PeterGuy326/mem/server/internal/auth"
 	"github.com/PeterGuy326/mem/server/internal/contextpack"
 	"github.com/PeterGuy326/mem/server/internal/entitlement"
@@ -105,6 +106,15 @@ type EntitlementService interface {
 	MarkIndeterminate(context.Context, uuid.UUID) (entitlement.Summary, error)
 }
 
+// AIProfileService is the workspace-scoped, server-owned model-routing port.
+// It deliberately accepts profile IDs only: handler callers never supply a
+// provider base URL, model name, credential, or prompt.
+type AIProfileService interface {
+	List() []aiprofile.Definition
+	Get(context.Context, uuid.UUID) (*aiprofile.Selection, error)
+	Select(context.Context, uuid.UUID, uuid.UUID, string) (*aiprofile.Selection, error)
+}
+
 // Server bundles the dependencies a handler needs.
 type Server struct {
 	Auth                     *auth.Service
@@ -118,6 +128,7 @@ type Server struct {
 	Memory                   MemoryService
 	Handoff                  handoff.ServicePort
 	Provider                 *provider.Service // optional; nil disables /v1/providers
+	AIProfiles               AIProfileService  // optional; nil disables workspace profile API
 	Relator                  *relator.Service  // optional; nil falls back to stub response
 	Face                     *face.Service     // optional; nil disables /v1/faces
 	Workspace                *workspace.Service
@@ -167,6 +178,14 @@ func (s *Server) Router() http.Handler {
 		r.Get("/v1/capabilities", s.handleCapabilities)
 		r.Get("/v1/workspaces", s.handleListWorkspaces)
 		r.Get("/v1/workspaces/current", s.handleCurrentWorkspace)
+		r.With(s.requireScope(auth.ScopeRead)).Get(
+			"/v1/workspaces/current/ai-profile", s.handleGetAIProfile,
+		)
+		r.With(
+			s.requireScope(auth.ScopeAdmin),
+			s.requireWorkspaceProviderWrite,
+			s.requireUnrestrictedPaths,
+		).Put("/v1/workspaces/current/ai-profile", s.handleSelectAIProfile)
 		r.With(s.requireScope(auth.ScopeRead)).
 			Get("/v1/entitlements/current", s.handleEntitlementSummary)
 		r.With(

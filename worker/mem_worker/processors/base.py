@@ -222,6 +222,18 @@ class ProcessorError(RuntimeError):
     """Raised by Processors on unrecoverable failure for a single file."""
 
 
+def get_explicit_embedding_provider(spec: str, dimensions: int | None):
+    """Construct an embedding provider without consulting ``MEM_DEFAULT_*``.
+
+    The provider registry forwards an explicit output dimension to adapters
+    that support it. Other providers retain their own fixed output contract
+    and are checked by the calling processor before a vector is emitted.
+    """
+    from ..providers import get_embedding_provider
+
+    return get_embedding_provider(spec, dimensions=dimensions)
+
+
 @runtime_checkable
 class Processor(Protocol):
     """Per-mime processing interface."""

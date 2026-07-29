@@ -357,6 +357,47 @@ func TestManagedProviderTimeoutIsRedactedAndIndeterminate(t *testing.T) {
 	}
 }
 
+func TestManagedSearchFinalizeFailureIsImmediatelyIndeterminate(t *testing.T) {
+	searchFake := &managedSearchFake{hits: []search.Hit{{
+		EvidenceID: uuid.New().String(),
+		FileID:     uuid.New(),
+		Source:     search.RouteText,
+	}}}
+	usageFake := &managedEntitlementFake{
+		reservation: &entitlement.Reservation{ID: uuid.New(), Status: entitlement.StatusReserved},
+		finalizeErr: errors.New("finalize store unavailable"),
+		finalSummary: entitlement.Summary{
+			ResetAt: time.Now().UTC().Add(time.Hour),
+		},
+	}
+	executor := &managedSearchExecutor{
+		base:         searchFake,
+		entitlements: usageFake,
+		providerSpec: "openai:text-embedding-3-large",
+		command: entitlement.ReserveCommand{
+			WorkspaceID:        uuid.New(),
+			Operation:          "search.query",
+			ProviderSpec:       "openai:text-embedding-3-large",
+			Units:              1,
+			IdempotencyKey:     "finalize-failure",
+			RequestFingerprint: strings.Repeat("a", 64),
+		},
+	}
+
+	_, err := executor.Search(context.Background(), search.Query{UserID: uuid.New()})
+	if !errors.Is(err, errManagedUsageCommit) {
+		t.Fatalf("Search() error = %v, want usage commit error", err)
+	}
+	if usageFake.reserveCalls != 1 || usageFake.finalizeCalls != 1 || usageFake.indeterminateCalls != 1 {
+		t.Fatalf(
+			"reserve/finalize/indeterminate = %d/%d/%d, want 1/1/1",
+			usageFake.reserveCalls,
+			usageFake.finalizeCalls,
+			usageFake.indeterminateCalls,
+		)
+	}
+}
+
 func TestManagedErrorStatusDecisionTable(t *testing.T) {
 	reset := time.Now().UTC().Add(time.Hour)
 	tests := []struct {

@@ -420,6 +420,48 @@ func TestParseWorkerEnrichmentMarksInvalidAndDegradedMetadataPartial(t *testing.
 	}
 }
 
+func TestParseWorkerEnrichmentKeepsOnlyBoundedAIProfileProvenance(t *testing.T) {
+	valid := parseWorkerEnrichment(&workerpb.ProcessResponse{
+		Processor: "text",
+		Status:    workerpb.ProcessStatus_STATUS_OK,
+		MetadataJson: []byte(`{
+			"ai_profile":{
+				"contract":"mem.ai-profile/v1",
+				"id":"idealab-quality-v1",
+				"revision":"2026-07-29",
+				"pipeline_revision":"file-enrichment-v1"
+			},
+			"annotations":[]
+		}`),
+	})
+	if valid.Partial {
+		t.Fatalf("valid AI profile provenance marked partial: %#v", valid)
+	}
+	if !strings.Contains(string(valid.ProcessorMetadata), `"id":"idealab-quality-v1"`) ||
+		!strings.Contains(string(valid.ProcessorMetadata), `"pipeline_revision":"file-enrichment-v1"`) {
+		t.Fatalf("profile provenance was not retained: %s", valid.ProcessorMetadata)
+	}
+
+	invalid := parseWorkerEnrichment(&workerpb.ProcessResponse{
+		Processor: "text",
+		Status:    workerpb.ProcessStatus_STATUS_OK,
+		MetadataJson: []byte(`{
+			"ai_profile":{
+				"contract":"mem.ai-profile/v1",
+				"id":"idealab-quality-v1",
+				"revision":"2026-07-29",
+				"pipeline_revision":"file-enrichment-v1",
+				"api_key":"secret-value"
+			},
+			"annotations":[]
+		}`),
+	})
+	if !invalid.Partial || strings.Contains(string(invalid.ProcessorMetadata), "secret-value") ||
+		!strings.Contains(string(invalid.ProcessorMetadata), `"invalid_metadata_fields":["ai_profile"]`) {
+		t.Fatalf("unsafe profile provenance result = %s", invalid.ProcessorMetadata)
+	}
+}
+
 func TestParseWorkerEnrichmentSuppressesLegacyFieldsForMalformedEnvelope(t *testing.T) {
 	enrichment := parseWorkerEnrichment(&workerpb.ProcessResponse{
 		Summary:      "injected summary",

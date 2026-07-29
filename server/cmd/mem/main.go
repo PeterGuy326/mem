@@ -79,6 +79,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newRelatedCmd())
 	root.AddCommand(newFaceCmd())
 	root.AddCommand(newProviderCmd())
+	root.AddCommand(newProfileCmd())
 	root.AddCommand(newModelCmd())
 	root.AddCommand(newTimelineCmd())
 	root.AddCommand(newWorkspaceCmd())

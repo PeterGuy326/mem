@@ -42,22 +42,31 @@ Web 浏览器验收及其通过标准统一见 [TESTING.md](TESTING.md)。
      chmod +x .dev/bin/minio .dev/bin/mc
      ```
      > `mc` 是可选的：memd 启动时会自己 `MakeBucket` 建桶，没有 mc 也能跑通。
-   - worker Python 依赖（`--extra clip` 装 CLIP，启用真正的图搜图）：
+   - worker Python 依赖（`--extra clip` 为**可选**的图搜图能力安装 CLIP）：
      ```bash
      cd worker && uv sync --extra clip && cd ..
      ```
      > `dev_up.sh` 启动 worker 前也会自动跑一次 `uv sync --extra clip`，所以
      > 平时直接 `bash scripts/dev_up.sh` 即可，无需手动 sync。
-     > CLIP 走 CPU、首次会下载 ViT-B-32 权重（~600MB，缓存在 `~/.cache`），
-     > torch CPU wheel 也较大，第一次 sync 耐心等。
+     > CLIP 走 CPU，ViT-B-32 权重约 600MB。它必须在要启用图搜图的部署中单独
+     > 预置/缓存；`profile select local-fast-v1` 不会安装、下载或 probe CLIP，
+     > 它也不是本地文本 profile 激活的前置条件。
    - memd 二进制（`dev_up.sh` 会在缺失时自动 `go build`，也可手动）：
      ```bash
      make build-memd build-mem   # -> bin/memd, bin/mem
      ```
 
-2. **Ollama（仅文件向量/多模态链路需要）**：要验证文件语义检索时，需在
-   `http://localhost:11434` 运行。不要静默 pull 默认模型；用本地模型目录检测
-   当前机器、查看明确的 runtime tag/digest/维度，再由用户选择：
+2. **Ollama（`local-fast-v1` 的明确前置条件）**：要验证文件语义检索时，需在
+   `http://localhost:11434` 运行。工作区的本地快速档固定使用
+   `ollama:qwen3-embedding:0.6b`，并要求 Worker 取得**恰好 768 维**文本向量；
+   `mem profile select` 不会下载模型，也不会把缺失模型换成其他默认模型。先由操作者
+   明确安装并做本机兼容性、manifest digest 与 768 维校验：
+   ```bash
+   bin/mem model install qwen3-embedding-0.6b-ollama
+   ```
+   随后的工作区 profile 选择会经由 memd 对 Worker 做一次权威的 768 维 probe；probe
+   失败时选择不会写入。不要静默 pull 默认模型。若要使用旧的本地模型目录来评估或
+   安装其他**兼容/高级** embedding artifact，可显式执行：
    ```bash
    bin/mem model list
    bin/mem model recommend --language zh
@@ -69,13 +78,15 @@ Web 浏览器验收及其通过标准统一见 [TESTING.md](TESTING.md)。
    目录中的文本 embedding profile（包括适用时的 `nomic-embed-text`）必须通过
    768 维 probe，对上 schema `embeddings_text vector(768)`，不要绕过目录流程
    直接把未验证模型设为默认值。
-   - 文件富化模型另行显式安装：`ollama pull qwen2.5:7b`。它用于文本/PDF/音频
-     的待审核描述与标签，不属于 embedding profile，也不会由目录流程静默下载。
-     设置 `MEM_DEFAULT_LLM=""` 可关闭；模型缺失或不可用时索引降级为 `partial`，
-     但不阻塞文件上传。
+   - `local-fast-v1` 有意关闭 LLM、VLM、ASR 和 rerank；它不会继承
+     `MEM_DEFAULT_LLM`、`MEM_DEFAULT_VLM` 或任何全局云模型。这样本地档只走固定的
+     本地文本 embedding 与 CLIP 视觉 embedding；没有启用的富化阶段不会被某个默认
+     模型悄悄补上。旧的、未选择 workspace profile 的兼容路径仍可另行显式安装
+     `ollama pull qwen2.5:7b` 等模型。
    - 视觉模型（minicpm-v）**可选缺失**：影响的是 caption 文本，不影响图搜图本身。
      图片的视觉向量由 **CLIP**（`clip:ViT-B-32`，见下）产出，与 Ollama 无关。
-   - **图搜图 = CLIP**：装了 `--extra clip` 后，图片入库时由 CLIP image-tower
+   - **图搜图 = CLIP（可选，独立于 profile 激活）**：装了 `--extra clip` 且已预置
+     CLIP 权重后，图片入库时由 CLIP image-tower
      编码成 512 维视觉向量写进 `embeddings_visual`，搜索时 query 文本由 CLIP
      text-tower 编码到同一空间做 ANN——这才是"以文搜图"。若 CLIP 没装，图片
      仍会保留 caption / EXIF 等元数据，但不会伪造不兼容的视觉向量；
@@ -104,8 +115,14 @@ export MEM_TOKEN=$(curl -s -X POST http://localhost:8787/v1/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"email":"demo@mem.local","password":"demo-password-change-me"}' | jq -r .token)
 
-# 激活已安装且通过 digest/768 维 probe 的 profile；memd 会再做一次权威 Worker probe
-bin/mem --server http://localhost:8787 model activate <profile-id>
+# 工作区 profile 只允许选择服务端编译并启用的 ID；不会接收 URL、模型名或 key。
+# 本地部署默认只暴露 local-fast-v1。
+bin/mem --server http://localhost:8787 profile list
+bin/mem --server http://localhost:8787 profile status
+
+# 这会对 ollama:qwen3-embedding:0.6b 做 Worker 端 768 维 probe；
+# 不会下载 artifact，也不会回退到 MEM_DEFAULT_EMBEDDING。
+bin/mem --server http://localhost:8787 profile select local-fast-v1
 
 # 文本搜索（文档语义检索）
 bin/mem --server http://localhost:8787 search "a dog on a meadow" --format json
@@ -202,6 +219,37 @@ bash scripts/dev_down.sh
 # 或彻底清空数据： bash scripts/dev_down.sh --purge
 ```
 
+### 在本机验证 SaaS 的 Idealab 质量档
+
+`idealab-quality-v1` 只能在 `saas` 模式启用。它不是给 `local-fast-v1` 加一个
+全局 key 的开关：配置必须在启动 Worker 与 memd 前同时存在。`dev_up.sh` 会保留已在
+运行的进程，因此先停掉旧栈；把 Idealab 的 OpenAI-compatible endpoint 和 API key
+通过终端安全注入/密钥管理提供给 Worker，**不要**把实际 key 写进仓库或示例文件。
+
+```bash
+bash scripts/dev_down.sh
+
+export MEM_DEPLOYMENT_MODE=saas
+export MEM_AI_PROFILES=local-fast-v1,idealab-quality-v1
+export MEM_MANAGED_EMBEDDING_PROVIDER=openai:text-embedding-3-large
+export OPENAI_BASE_URL='https://<idealab-openai-compatible-endpoint>'
+# 在当前进程环境中安全注入 OPENAI_API_KEY；这里不展示真实值。
+
+bash scripts/dev_up.sh
+
+# 使用有权限的 workspace token 登录后：
+bin/mem --server http://localhost:8787 profile list
+bin/mem --server http://localhost:8787 profile select idealab-quality-v1
+```
+
+选择会先验证固定的 `openai:text-embedding-3-large` 768 维 contract。缺 key、endpoint
+不可用或维度不匹配都不会触发本地/其他云模型回退；受托管 entitlement 保护的语义请求
+仍需有可用 entitlement。索引或搜索只有已声明且成功的阶段才会产生输出；文件可带
+`partial` 状态，`context --source all` 可保留独立的结构化记忆 evidence 并附带警告。
+质量档的模型固定及其“不回退”是产品路由保证，不是对任何数据集效果的 benchmark
+承诺。更完整的托管配置和计费边界见
+[MANAGED_EMBEDDINGS.md](MANAGED_EMBEDDINGS.md)。
+
 ### Workspace 迁移资源保护
 
 导入和导出默认共用 8 GiB 的归档硬上限、30 分钟总超时，并且每个 memd
@@ -224,19 +272,17 @@ export MEM_WORKSPACE_TRANSFER_TMP_DIR="$PWD/.dev/workspace-transfer"
 检查导出归档大小，再发送任何响应内容。临时文件权限为 `0600`，请求结束后清理；
 memd 不会递归删除所配置的临时目录。
 
-### 从未记录 embedding provider 的旧库升级
+### 旧库与 profile 切换
 
 迁移会把旧文本向量标成 `legacy:unknown`，不会根据今天的配置猜测历史模型。
-这是有意的 fail-closed 行为：先显式选择一个与当前向量列维度相符的模型，再重建：
+这是有意的 fail-closed 行为：工作区只可在没有待处理/索引中文件、且现有语料已被
+证明与目标 profile 使用同一个 embedding provider 时选择 profile。`legacy:unknown`
+或混合 provider 的语料不会被 768 维这个共同尺寸“猜成兼容”。
 
-```bash
-# 优先使用 catalog profile，让 CLI 在服务端写入前验证 artifact 和 768 维输出
-mem model activate <profile-id>
-mem provider reindex
-```
-
-重建期间 text route 暂停返回不确定结果；所有文件完成后，查询和语料都会固定到
-同一个 provider。模型切换的最终形态仍是版本化 index generation + 原子激活。
+从 `local-fast-v1` 切到付费档（或反向切换）不是原地改一个 provider：必须创建新的
+index generation，使用新 profile 全量重建，并在新 generation 完整后原子激活。当前
+服务会拒绝直接覆盖不兼容的既有语料；不要用旧的 `mem provider reindex` 把一个已选择
+的 profile 改成任意模型。这样查询不会在同一向量空间中混入不同模型的结果。
 
 ## Web 前端接真后端
 

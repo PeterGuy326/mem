@@ -101,6 +101,7 @@ docker run --rm -p 127.0.0.1:50051:50051 \
 | `OLLAMA_TIMEOUT` | `120` | per-request timeout (seconds) |
 | `OPENAI_API_KEY` | — | OpenAI-compatible embedding/VLM providers |
 | `OPENAI_BASE_URL` | — | OpenAI-compatible gateway override |
+| `OPENAI_EMBEDDING_DIMENSIONS` | — | optional positive output dimension sent only to `/v1/embeddings`; the workspace quality profile supplies its own explicit `768` request |
 | `ANTHROPIC_API_KEY` | — | Anthropic VLM provider |
 | `MEM_DEFAULT_EMBEDDING` | `ollama:nomic-embed-text` | text embedding spec |
 | `MEM_DEFAULT_VISUAL_EMBEDDING` | `clip:ViT-B-32` | fixed visual search space |
@@ -120,6 +121,15 @@ The Ollama embedding adapter uses one batched `POST /api/embed` request with
 truncates or pads vectors to imitate schema compatibility. For curated local
 selection, artifact integrity checks, and explicit activation, see
 [LOCAL_EMBEDDING_MODELS.md](../docs/LOCAL_EMBEDDING_MODELS.md).
+
+For an OpenAI-compatible endpoint, leave `OPENAI_EMBEDDING_DIMENSIONS` unset
+unless the selected endpoint explicitly supports the `dimensions` field. When
+set, the Worker includes it in `POST /v1/embeddings` and rejects a response
+whose vectors are not exactly that size. A selected workspace profile does not
+use `MEM_DEFAULT_EMBEDDING`: it sends its fixed
+`openai:text-embedding-3-large` stage with `dimensions: 768` per request.
+This is an embedding-only setting: it does not alter LLM or VLM requests, and
+it does not pad or truncate vectors.
 
 ---
 

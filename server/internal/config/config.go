@@ -52,6 +52,10 @@ type Config struct {
 	// policy in private mode. There is intentionally no fallback provider.
 	ManagedEmbeddingProvider       string
 	ManagedEmbeddingReservationTTL time.Duration
+	// AIProfiles is the operator-enabled allowlist of fixed workspace AI
+	// profiles. It contains profile IDs only—never models, URLs, or secrets.
+	// Selection remains a workspace-scoped API action.
+	AIProfiles []string
 
 	// Portable workspace transfer resource controls.
 	WorkspaceTransferTimeout       time.Duration
@@ -159,11 +163,28 @@ func Load() (*Config, error) {
 	if cfg.DeploymentMode != "private" && cfg.DeploymentMode != "saas" {
 		return nil, fmt.Errorf("MEM_DEPLOYMENT_MODE must be private or saas, got %q", cfg.DeploymentMode)
 	}
+	profiles, err := parseAIProfiles(os.Getenv("MEM_AI_PROFILES"))
+	if err != nil {
+		return nil, err
+	}
+	cfg.AIProfiles = profiles
+	if containsProfile(cfg.AIProfiles, "idealab-quality-v1") && cfg.DeploymentMode != "saas" {
+		// This profile consumes a platform-managed Idealab credential and must
+		// therefore run behind the entitlement/usage boundary. Private installs
+		// keep the explicit local profile or their existing BYOM provider path.
+		return nil, errors.New("idealab-quality-v1 requires MEM_DEPLOYMENT_MODE=saas")
+	}
 	if cfg.DeploymentMode == "saas" {
 		provider, model, ok := strings.Cut(cfg.ManagedEmbeddingProvider, ":")
 		if !ok || strings.TrimSpace(provider) == "" || strings.TrimSpace(model) == "" {
 			return nil, errors.New(
 				"MEM_MANAGED_EMBEDDING_PROVIDER is required in saas mode and must be '<provider>:<model>'",
+			)
+		}
+		if containsProfile(cfg.AIProfiles, "idealab-quality-v1") &&
+			cfg.ManagedEmbeddingProvider != "openai:text-embedding-3-large" {
+			return nil, errors.New(
+				"MEM_MANAGED_EMBEDDING_PROVIDER must be openai:text-embedding-3-large when idealab-quality-v1 is enabled",
 			)
 		}
 	}
@@ -201,6 +222,40 @@ func Load() (*Config, error) {
 		}
 	}
 	return cfg, nil
+}
+
+func parseAIProfiles(raw string) ([]string, error) {
+	// Local-only remains the default: enabling a paid cloud profile is an
+	// operator decision, never an accidental consequence of a global key.
+	if strings.TrimSpace(raw) == "" {
+		return []string{"local-fast-v1"}, nil
+	}
+	profiles := make([]string, 0, 2)
+	seen := make(map[string]struct{})
+	for _, item := range strings.Split(raw, ",") {
+		id := strings.TrimSpace(item)
+		if id != "local-fast-v1" && id != "idealab-quality-v1" {
+			return nil, fmt.Errorf("MEM_AI_PROFILES contains unknown profile %q", id)
+		}
+		if _, duplicate := seen[id]; duplicate {
+			return nil, fmt.Errorf("MEM_AI_PROFILES contains duplicate profile %q", id)
+		}
+		seen[id] = struct{}{}
+		profiles = append(profiles, id)
+	}
+	if len(profiles) == 0 {
+		return nil, errors.New("MEM_AI_PROFILES must enable at least one profile")
+	}
+	return profiles, nil
+}
+
+func containsProfile(profiles []string, wanted string) bool {
+	for _, profile := range profiles {
+		if profile == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 func getenv(k, def string) string {

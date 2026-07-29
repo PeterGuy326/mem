@@ -10,6 +10,9 @@ from benchmarks.recall.dataset import Document, document_matches_filters, load_d
 from benchmarks.recall.errors import BenchmarkError
 
 
+RECALL_ROOT = Path(__file__).resolve().parents[1]
+
+
 class FilterSemanticsTest(unittest.TestCase):
     def setUp(self) -> None:
         self.document = Document(
@@ -140,6 +143,20 @@ class DatasetValidationTest(unittest.TestCase):
 
         with self.assertRaisesRegex(BenchmarkError, "absolute clean path"):
             load_dataset(self.root)
+
+
+class CheckedInProfileTextFixtureTest(unittest.TestCase):
+    def test_profile_text_fixture_is_file_only_and_loadable(self) -> None:
+        dataset = load_dataset(RECALL_ROOT / "data" / "profile-text-v1")
+
+        self.assertEqual(dataset.metadata["version"], "synthetic-profile-text-v1")
+        self.assertEqual(len(dataset.documents), 5)
+        self.assertEqual(len(dataset.queries), 4)
+        self.assertEqual({document.source_kind for document in dataset.documents}, {"text"})
+        self.assertEqual(
+            set(dataset.metadata["required_coverage"]["slices"]),
+            {"exact", "paraphrase", "filters", "hard-negative"},
+        )
 
 
 if __name__ == "__main__":

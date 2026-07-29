@@ -25,6 +25,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/PeterGuy326/mem/server/internal/aiprofile"
 	"github.com/PeterGuy326/mem/server/internal/entitlement"
 	"github.com/PeterGuy326/mem/server/internal/indexmeta"
 	"github.com/PeterGuy326/mem/server/internal/modeltext"
@@ -36,11 +37,46 @@ type textEmbedder interface {
 	EmbedTextWith(context.Context, string, string) ([]float32, error)
 }
 
+// profileTextEmbedder is intentionally separate from textEmbedder so existing
+// lightweight test doubles remain usable for legacy routes. The production
+// workerclient implements it and transmits the complete, explicit profile
+// contract rather than falling through to process-wide defaults.
+type profileTextEmbedder interface {
+	EmbedTextWithProfile(context.Context, string, workerclient.AIProfileOptions) ([]float32, error)
+}
+
+// aiProfileResolver is the narrow selection lookup search needs. Search owns
+// a resource owner ID, not an HTTP workspace object.
+type aiProfileResolver interface {
+	ResolveForOwner(context.Context, uuid.UUID) (*aiprofile.Selection, error)
+}
+
+type embeddingRoute struct {
+	textSpec   string
+	visualSpec string
+	profile    *workerclient.AIProfileOptions
+	dataEgress string
+}
+
+const (
+	aiProfileContract        = "mem.ai-profile/v1"
+	textEmbeddingSchemaDim   = 768
+	visualEmbeddingSchemaDim = 512
+)
+
 // Service is the search service.
 type Service struct {
 	pool                     *pgxpool.Pool
 	worker                   textEmbedder
 	defaultEmbeddingProvider string
+	profiles                 aiProfileResolver
+	requireProfile           bool
+	// requireManagedProfileReservation prevents in-process callers from
+	// bypassing the HTTP managed-search executor after a workspace chooses a
+	// paid profile. The executor adds a private context marker only after its
+	// entitlement reservation succeeds; this service then remains the final
+	// guard immediately before the Worker invocation.
+	requireManagedProfileReservation bool
 }
 
 // New constructs a search Service.
@@ -54,6 +90,52 @@ func New(
 		s.defaultEmbeddingProvider = strings.TrimSpace(defaultEmbeddingProvider[0])
 	}
 	return s
+}
+
+// SetAIProfiles makes an explicit workspace profile authoritative for search.
+// Hosted deployments set requireProfile to prevent an unselected workspace
+// from accidentally borrowing a process-wide managed embedding default.
+func (s *Service) SetAIProfiles(resolver aiProfileResolver, requireProfile bool) {
+	if s == nil {
+		return
+	}
+	s.profiles = resolver
+	s.requireProfile = requireProfile
+}
+
+// RequireManagedProfileReservation makes a managed workspace profile fail
+// closed unless the request was authorized by the server's reservation
+// executor. It has no effect on local profiles or visual-only CLIP queries.
+// memd enables this for SaaS after wiring the entitlement-backed executor.
+func (s *Service) RequireManagedProfileReservation(required bool) {
+	if s == nil {
+		return
+	}
+	s.requireManagedProfileReservation = required
+}
+
+// ErrManagedProfileReservationRequired is deliberately provider-neutral. A
+// caller that reaches this error has not contacted the Worker or an upstream
+// model; the HTTP layer maps it through the managed entitlement error path.
+var ErrManagedProfileReservationRequired = errors.New("managed workspace AI profile reservation required")
+
+type managedEmbeddingReservationContextKey struct{}
+
+type managedEmbeddingReservation struct {
+	providerSpec string
+}
+
+// WithManagedEmbeddingReservation marks a context after the server has
+// reserved a managed query embedding. It is an in-process capability, not a
+// client credential: only the HTTP entitlement executor should call it.
+func WithManagedEmbeddingReservation(ctx context.Context, providerSpec string) context.Context {
+	providerSpec = strings.TrimSpace(providerSpec)
+	if providerSpec == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, managedEmbeddingReservationContextKey{}, managedEmbeddingReservation{
+		providerSpec: providerSpec,
+	})
 }
 
 // ErrReplayReferenceUnavailable means an idempotent result can no longer be
@@ -154,7 +236,11 @@ func (s *Service) Search(ctx context.Context, q Query) ([]Hit, error) {
 // route. Hosted policy uses this server-side value; clients cannot self-report
 // whether a call is managed.
 func (s *Service) EmbeddingSpec(ctx context.Context, userID uuid.UUID) (string, error) {
-	return s.userEmbeddingSpec(ctx, userID)
+	route, err := s.embeddingRouteForUser(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	return route.textSpec, nil
 }
 
 // ReplayReferences converts search hits into the normalized, content-free
@@ -328,17 +414,31 @@ func appendTimeFilters(
 
 // searchText runs the original text-embedding ANN route.
 func (s *Service) searchText(ctx context.Context, q Query, text string) ([]Hit, error) {
-	embSpec := strings.TrimSpace(q.EmbeddingProvider)
-	if embSpec == "" {
-		var err error
-		embSpec, err = s.userEmbeddingSpec(ctx, q.UserID)
-		if err != nil {
-			return nil, fmt.Errorf("resolve text embedding space: %w", err)
-		}
+	route, err := s.embeddingRouteForUser(ctx, q.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve text embedding space: %w", err)
+	}
+	// Managed entitlement establishes this value before provider invocation.
+	// Treat it as an assertion over the server-resolved route, not an override
+	// that can strip a selected profile's explicit dimensions/stage settings.
+	if requested := strings.TrimSpace(q.EmbeddingProvider); requested != "" && requested != route.textSpec {
+		return nil, fmt.Errorf("requested embedding provider does not match the workspace AI profile")
+	}
+	if err := s.requireManagedReservation(ctx, route); err != nil {
+		return nil, err
 	}
 	embCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	vec, err := s.worker.EmbedTextWith(embCtx, text, embSpec)
+	var vec []float32
+	if route.profile != nil {
+		profileWorker, ok := s.worker.(profileTextEmbedder)
+		if !ok {
+			return nil, fmt.Errorf("profile search requires a profile-capable worker")
+		}
+		vec, err = profileWorker.EmbedTextWithProfile(embCtx, text, *route.profile)
+	} else {
+		vec, err = s.worker.EmbedTextWith(embCtx, text, route.textSpec)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("embed query (text): %w", err)
 	}
@@ -348,17 +448,44 @@ func (s *Service) searchText(ctx context.Context, q Query, text string) ([]Hit, 
 	return s.runTextANN(ctx, q, vec)
 }
 
+// requireManagedReservation is intentionally checked immediately before a
+// text Worker embedding. A profile's visual route uses fixed local CLIP, so
+// it has no managed-provider reservation requirement.
+func (s *Service) requireManagedReservation(ctx context.Context, route embeddingRoute) error {
+	if s == nil || !s.requireManagedProfileReservation || route.profile == nil ||
+		route.dataEgress != aiprofile.DataEgressManagedIdealab {
+		return nil
+	}
+	reservation, ok := ctx.Value(managedEmbeddingReservationContextKey{}).(managedEmbeddingReservation)
+	if !ok || reservation.providerSpec != route.textSpec {
+		return ErrManagedProfileReservationRequired
+	}
+	return nil
+}
+
 // searchVisual encodes the query via the CLIP text tower and ANN-matches it
 // against embeddings_visual (which holds CLIP image-tower vectors).
 func (s *Service) searchVisual(ctx context.Context, q Query, text string) ([]Hit, error) {
-	// Visual embedding provider: SPEC §9.4 default is "clip:ViT-B-32".
-	// We force CLIP for queries here — using e.g. nomic-embed-text for a
-	// "visual" search would land in a different latent space than the
-	// indexed images, producing meaningless results.
-	const clipSpec = "clip:ViT-B-32"
+	route, err := s.embeddingRouteForUser(ctx, q.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve visual embedding space: %w", err)
+	}
+	visualSpec := route.visualSpec
+	if visualSpec == "" {
+		// Visual embedding provider: SPEC §9.4 default is "clip:ViT-B-32".
+		// We force CLIP for legacy queries here — using e.g.
+		// nomic-embed-text would land in a different latent space than the
+		// indexed images, producing meaningless results.
+		visualSpec = "clip:ViT-B-32"
+	}
 	embCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	vec, err := s.worker.EmbedTextWith(embCtx, text, clipSpec)
+	// The Worker profile contract currently fixes its text stage at 768
+	// dimensions, while CLIP's text tower is a separate 512-d visual space.
+	// Passing this server-selected explicit spec is still fail-closed: it does
+	// not consult a MEM_DEFAULT_* value and it is validated against the active
+	// profile's visual stage above.
+	vec, err := s.worker.EmbedTextWith(embCtx, text, visualSpec)
 	if err != nil {
 		return nil, fmt.Errorf("embed query (visual/clip): %w", err)
 	}
@@ -652,9 +779,38 @@ func sortHitsByScoreDesc(hits []Hit) {
 	})
 }
 
-// userEmbeddingSpec resolves one explicit vector space. Existing corpus
+// embeddingRouteForUser resolves an exact, server-owned vector-space route.
+// An active profile blocks all legacy settings and global default fallback.
+func (s *Service) embeddingRouteForUser(ctx context.Context, userID uuid.UUID) (embeddingRoute, error) {
+	if s.profiles != nil {
+		selection, err := s.profiles.ResolveForOwner(ctx, userID)
+		if err == nil {
+			route, routeErr := searchRouteFromAIProfile(selection)
+			if routeErr != nil {
+				return embeddingRoute{}, routeErr
+			}
+			if err := s.requireProfileCorpusCompatibility(ctx, userID, route.textSpec); err != nil {
+				return embeddingRoute{}, err
+			}
+			return route, nil
+		}
+		if !errors.Is(err, aiprofile.ErrNotFound) {
+			return embeddingRoute{}, fmt.Errorf("resolve workspace AI profile: %w", err)
+		}
+	}
+	if s.requireProfile {
+		return embeddingRoute{}, fmt.Errorf("workspace AI profile is required before searching")
+	}
+	spec, err := s.legacyEmbeddingSpec(ctx, userID)
+	if err != nil {
+		return embeddingRoute{}, err
+	}
+	return embeddingRoute{textSpec: spec, visualSpec: "clip:ViT-B-32"}, nil
+}
+
+// legacyEmbeddingSpec resolves one explicit vector space. Existing corpus
 // metadata takes precedence over mutable worker environment defaults.
-func (s *Service) userEmbeddingSpec(ctx context.Context, userID uuid.UUID) (string, error) {
+func (s *Service) legacyEmbeddingSpec(ctx context.Context, userID uuid.UUID) (string, error) {
 	var spec string
 	err := s.pool.QueryRow(ctx,
 		`SELECT spec FROM provider_settings WHERE user_id = $1 AND kind = 'embedding'`,
@@ -680,6 +836,65 @@ func (s *Service) userEmbeddingSpec(ctx context.Context, userID uuid.UUID) (stri
 		return spec, nil
 	}
 	return s.defaultEmbeddingProvider, nil
+}
+
+// searchRouteFromAIProfile produces an embedding-only form of the selected
+// profile for a query. A search query needs neither generation nor captioning;
+// disabling those stages is deliberate so a long query cannot consume a
+// profile's LLM/VLM/ASR defaults by accident.
+func searchRouteFromAIProfile(selection *aiprofile.Selection) (embeddingRoute, error) {
+	if err := aiprofile.ValidateSelection(selection); err != nil {
+		return embeddingRoute{}, fmt.Errorf("invalid workspace AI profile selection: %w", err)
+	}
+	if !selection.Embedding.Enabled || selection.Embedding.Provider == "" ||
+		selection.Embedding.Dimensions != textEmbeddingSchemaDim {
+		return embeddingRoute{}, fmt.Errorf("workspace AI profile has an invalid text embedding stage")
+	}
+	if !selection.VisualEmbedding.Enabled || selection.VisualEmbedding.Provider == "" ||
+		selection.VisualEmbedding.Dimensions != visualEmbeddingSchemaDim {
+		return embeddingRoute{}, fmt.Errorf("workspace AI profile has an invalid visual embedding stage")
+	}
+	profile := &workerclient.AIProfileOptions{
+		Contract:         aiProfileContract,
+		ID:               selection.ProfileID,
+		Revision:         selection.ProfileRevision,
+		PipelineRevision: selection.PipelineRevision,
+		Embedding: workerclient.ProviderStage{
+			Enabled: true, Provider: selection.Embedding.Provider, Dimensions: selection.Embedding.Dimensions,
+		},
+		VisualEmbedding: workerclient.ProviderStage{
+			Enabled: true, Provider: selection.VisualEmbedding.Provider, Dimensions: selection.VisualEmbedding.Dimensions,
+		},
+		LLM:    workerclient.ProviderStage{Enabled: false},
+		VLM:    workerclient.ProviderStage{Enabled: false},
+		ASR:    workerclient.ProviderStage{Enabled: false},
+		Rerank: workerclient.ProviderStage{Enabled: false},
+	}
+	return embeddingRoute{
+		textSpec:   selection.Embedding.Provider,
+		visualSpec: selection.VisualEmbedding.Provider,
+		profile:    profile,
+		dataEgress: selection.DataEgress,
+	}, nil
+}
+
+// requireProfileCorpusCompatibility defends the read path against a direct
+// database mutation or a concurrent writer that would otherwise make a query
+// compare a new profile vector to an old corpus. Normal profile selection
+// already prevents this before it can be persisted.
+func (s *Service) requireProfileCorpusCompatibility(
+	ctx context.Context,
+	userID uuid.UUID,
+	provider string,
+) error {
+	corpusProvider, hasCorpus, err := indexmeta.TextProvider(ctx, s.pool, userID)
+	if err != nil {
+		return fmt.Errorf("workspace AI profile corpus identity: %w", err)
+	}
+	if hasCorpus && corpusProvider != provider {
+		return fmt.Errorf("workspace AI profile embedding provider %q differs from corpus provider %q", provider, corpusProvider)
+	}
+	return nil
 }
 
 // vectorLiteral matches indexer.vectorLiteral — kept private here to avoid an

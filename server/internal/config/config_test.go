@@ -1,6 +1,7 @@
 package config
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
@@ -22,6 +23,9 @@ func TestLoadPolicyDefaultsAndSessionTTL(t *testing.T) {
 	if cfg.DeploymentMode != "private" || cfg.RegistrationMode != "open" {
 		t.Fatalf("unexpected defaults: %#v", cfg)
 	}
+	if !reflect.DeepEqual(cfg.AIProfiles, []string{"local-fast-v1"}) {
+		t.Fatalf("AIProfiles = %#v", cfg.AIProfiles)
+	}
 	if cfg.SessionTTL != 90*time.Minute {
 		t.Fatalf("session TTL = %s", cfg.SessionTTL)
 	}
@@ -31,6 +35,48 @@ func TestLoadPolicyDefaultsAndSessionTTL(t *testing.T) {
 		cfg.ManagedEmbeddingReservationTTL != DefaultManagedEmbeddingReservationTTL ||
 		cfg.WorkspaceTransferTmpDir != "" {
 		t.Fatalf("unexpected workspace transfer defaults: %#v", cfg)
+	}
+}
+
+func TestLoadAIProfilesAreAnOperatorAllowlist(t *testing.T) {
+	t.Setenv("MEM_DEPLOYMENT_MODE", "saas")
+	t.Setenv("MEM_MANAGED_EMBEDDING_PROVIDER", "openai:text-embedding-3-large")
+	t.Setenv("MEM_AI_PROFILES", " local-fast-v1, idealab-quality-v1 ")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"local-fast-v1", "idealab-quality-v1"}
+	if !reflect.DeepEqual(cfg.AIProfiles, want) {
+		t.Fatalf("AIProfiles = %#v, want %#v", cfg.AIProfiles, want)
+	}
+
+	for _, raw := range []string{"unknown-v1", "local-fast-v1,local-fast-v1", ","} {
+		t.Setenv("MEM_AI_PROFILES", raw)
+		if _, err := Load(); err == nil {
+			t.Fatalf("MEM_AI_PROFILES=%q unexpectedly loaded", raw)
+		}
+	}
+}
+
+func TestLoadPrivateRejectsManagedQualityProfile(t *testing.T) {
+	t.Setenv("MEM_DEPLOYMENT_MODE", "private")
+	t.Setenv("MEM_AI_PROFILES", "idealab-quality-v1")
+	if _, err := Load(); err == nil {
+		t.Fatal("private deployment accepted a platform-managed quality profile")
+	}
+}
+
+func TestLoadSaaSIdealabQualityRequiresExactManagedEmbeddingSpec(t *testing.T) {
+	t.Setenv("MEM_DEPLOYMENT_MODE", "saas")
+	t.Setenv("MEM_AI_PROFILES", "local-fast-v1,idealab-quality-v1")
+	t.Setenv("MEM_MANAGED_EMBEDDING_PROVIDER", "openai:text-embedding-3-small")
+	if _, err := Load(); err == nil {
+		t.Fatal("quality profile accepted a different managed embedding spec")
+	}
+	t.Setenv("MEM_MANAGED_EMBEDDING_PROVIDER", "openai:text-embedding-3-large")
+	if _, err := Load(); err != nil {
+		t.Fatalf("quality profile with exact embedding spec: %v", err)
 	}
 }
 

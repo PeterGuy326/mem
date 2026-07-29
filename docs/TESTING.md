@@ -323,6 +323,12 @@ model-quality threshold. See
 [`benchmarks/recall/README.md`](../benchmarks/recall/README.md) for the input
 contract and exact denominators.
 
+For the opt-in, profile-specific comparison of local and managed text
+embeddings, use [AI profile evaluation](AI_PROFILE_EVALUATION.md). It supplies
+a separate file-only synthetic fixture, requires isolated workspaces/index
+generations, and explains why its external-ranking adapter is not a cloud-model
+CI gate.
+
 ## 9. Regression ledger
 
 Use this table in pull requests and add implementation-specific scenarios:

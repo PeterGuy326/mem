@@ -1,0 +1,23 @@
+{
+  "schema_version": "mem.recall-dataset.v1",
+  "version": "synthetic-profile-text-v1",
+  "title": "mem synthetic text-only AI profile benchmark",
+  "provenance": "hand-authored synthetic data",
+  "license": "CC0-1.0",
+  "required_coverage": {
+    "languages": [
+      "en",
+      "zh"
+    ],
+    "slices": [
+      "exact",
+      "filters",
+      "hard-negative",
+      "paraphrase"
+    ],
+    "source_kinds": [
+      "text"
+    ]
+  },
+  "notes": "A file-only fixture for comparing isolated text-embedding workspace profiles. The workspace label and mem:// citations are stable logical fixture identities, not live workspace UUIDs or live file IDs."
+}

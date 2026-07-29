@@ -11,7 +11,66 @@ requires an explicit catalog profile. In an interactive terminal, omitting the
 profile shows a numbered compatible list and a `Skip` option. In a script or
 Agent host, the profile ID is mandatory.
 
-## Choose, install, and activate
+## Recommended workspace profile: `local-fast-v1`
+
+For a new local workspace, select the server-owned `local-fast-v1` pipeline
+rather than setting an arbitrary embedding provider. It fixes text embedding to
+`ollama:qwen3-embedding:0.6b` with an output dimension of 768 and fixes visual
+embedding to `clip:ViT-B-32` (512 dimensions). Its LLM, VLM, ASR, and rerank
+stages are intentionally disabled. A disabled stage does not inherit a
+`MEM_DEFAULT_*` value.
+
+CLIP visual search is optional and provisioned separately. It is not part of
+the local text-profile activation probe: preinstall/cache the CLIP runtime and
+weights before intentionally enabling image indexing, or accept that visual
+embeddings will be unavailable/degraded. `mem profile select local-fast-v1`
+does not download or verify CLIP.
+
+The profile selector never downloads an Ollama artifact. Use the curated
+installer before starting memd and its Worker; it checks the local hardware
+and disk budget, pulls only the catalog-pinned artifact, verifies its manifest
+digest, and proves a 768-dimensional output:
+
+```bash
+# This is the explicit download and integrity-verification step.
+# `mem profile select` never downloads a model.
+mem model install qwen3-embedding-0.6b-ollama
+
+bash scripts/dev_up.sh
+```
+
+After logging in (or exporting a valid `MEM_TOKEN`), inspect and select the
+allowlisted workspace profile:
+
+```bash
+mem profile list
+mem profile status
+mem profile select local-fast-v1
+```
+
+Selection asks memd to make a Worker-side probe of
+`ollama:qwen3-embedding:0.6b` with the requested 768 output dimensions. It
+accepts only an exactly 768-dimensional result. A missing model, unavailable
+Ollama endpoint, or wrong dimension fails the selection without changing the
+active profile; it never silently substitutes `MEM_DEFAULT_EMBEDDING` or a
+cloud provider.
+
+A profile locks the model choices for every declared stage. It is not a
+benchmark claim: `local-fast-v1` is a local/privacy-and-latency deployment
+choice, not a promise about universal retrieval quality. On media that would
+need a disabled stage, mem may retain the outputs of the enabled stages and
+report partial processing; it does not send that media to an undeclared model.
+
+Switching to or from this profile requires a fresh, versioned index generation
+and a complete rebuild before activation. Vectors from different embedding
+providers must never be mixed merely because both are 768-dimensional.
+
+## Legacy catalog path (private deployments without an active workspace profile)
+
+The curated model catalog remains useful for reviewing a pinned local artifact
+or operating the older per-provider path. It does not select or modify a
+workspace AI profile. Once a workspace profile is active, legacy provider and
+model-activation commands cannot override it.
 
 Start Ollama, then inspect the current machine:
 
@@ -43,8 +102,8 @@ The command performs these steps in order:
    `truncate: false`;
 5. require one 768-dimensional vector, then stop in `verified` state.
 
-Installation does not change memd's provider setting. Activation is a separate
-explicit operation:
+Installation does not change memd's provider setting. In the legacy path,
+activation is a separate explicit operation:
 
 ```bash
 mem model activate qwen3-embedding-0.6b-ollama
@@ -56,12 +115,12 @@ or, when the combined intent is explicit:
 mem model install qwen3-embedding-0.6b-ollama --activate
 ```
 
-Activation requires a logged-in mem CLI. The CLI rechecks the local pinned
-artifact and output dimension, then delegates activation to the canonical
-`PUT /v1/providers/embedding` server route. memd performs its own Worker probe
-before persisting the provider. This second probe is authoritative and also
-prevents a local CLI from activating a model that the server-side Worker
-cannot reach.
+Legacy activation requires a logged-in mem CLI and a workspace with no active
+AI profile. The CLI rechecks the local pinned artifact and output dimension,
+then delegates activation to the canonical `PUT /v1/providers/embedding`
+server route. memd performs its own Worker probe before persisting the
+provider. This second probe is authoritative and also prevents a local CLI
+from activating a model that the server-side Worker cannot reach.
 
 Set a non-default Ollama endpoint with `OLLAMA_BASE_URL` or
 `--ollama-url`. The CLI and the mem Worker must ultimately address the same
@@ -103,7 +162,10 @@ The seed catalog currently contains:
 | `bge-m3-567m-ollama` | `bge-m3:567m` | fixed 1024 | visible but unavailable for the current corpus |
 
 An arbitrary `mem provider set embedding ollama:<model>` remains an advanced
-provider path. It is not a verified catalog profile.
+provider path for a private deployment without an active workspace profile. It
+is not a verified catalog profile and cannot override `local-fast-v1` (or any
+other selected workspace profile). In SaaS mode, cloud provider specs must be
+made available through an allowlisted workspace profile rather than this path.
 
 ## Reproducing or updating artifact metadata
 

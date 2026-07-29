@@ -40,13 +40,23 @@ def parse_spec(spec: str) -> tuple[str, str]:
     return vendor, model
 
 
-def get_embedding_provider(spec: str) -> EmbeddingProvider:
-    """Construct an :class:`EmbeddingProvider` for ``spec``."""
+def get_embedding_provider(
+    spec: str,
+    *,
+    dimensions: int | None = None,
+) -> EmbeddingProvider:
+    """Construct an :class:`EmbeddingProvider` for ``spec``.
+
+    ``dimensions`` is an explicit per-call output contract for providers that
+    support it. ``None`` preserves each provider's existing default behavior.
+    """
     vendor, model = parse_spec(spec)
     if vendor == "ollama":
-        return ollama_mod.OllamaEmbeddingProvider(model=model)
+        if dimensions is None:
+            return ollama_mod.OllamaEmbeddingProvider(model=model)
+        return ollama_mod.OllamaEmbeddingProvider(model=model, dimensions=dimensions)
     if vendor == "openai":
-        return openai_mod.OpenAIEmbeddingProvider(model=model)
+        return openai_mod.OpenAIEmbeddingProvider(model=model, dimensions=dimensions)
     if vendor == "clip":
         # CLIP spec is "clip:<model>[:<pretrained>]". Pretrained defaults to
         # OpenAI's checkpoint, which matches SPEC §9.4.
