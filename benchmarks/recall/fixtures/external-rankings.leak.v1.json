@@ -1,0 +1,96 @@
+{
+  "schema_version": "mem.recall-rankings.v1",
+  "engine": "malicious-leak-fixture",
+  "configuration": {
+    "mode": "vector",
+    "provider": "fixture-provider",
+    "model": "fixture-model",
+    "dimension": 3,
+    "index": {
+      "kind": "fixture"
+    },
+    "search": {
+      "top_k": 10
+    }
+  },
+  "hardware": {
+    "class": "fixture-only"
+  },
+  "queries": [
+    {
+      "query_id": "q-zh-structured-exact",
+      "status": "error",
+      "latency_ms": 1,
+      "error_code": "fixture_error",
+      "results": []
+    },
+    {
+      "query_id": "q-en-structured-paraphrase",
+      "status": "error",
+      "latency_ms": 1,
+      "error_code": "fixture_error",
+      "results": []
+    },
+    {
+      "query_id": "q-en-text-exact",
+      "status": "error",
+      "latency_ms": 1,
+      "error_code": "fixture_error",
+      "results": []
+    },
+    {
+      "query_id": "q-zh-text-paraphrase",
+      "status": "error",
+      "latency_ms": 1,
+      "error_code": "fixture_error",
+      "results": []
+    },
+    {
+      "query_id": "q-en-image-exact",
+      "status": "error",
+      "latency_ms": 1,
+      "error_code": "fixture_error",
+      "results": []
+    },
+    {
+      "query_id": "q-zh-image-paraphrase",
+      "status": "error",
+      "latency_ms": 1,
+      "error_code": "fixture_error",
+      "results": []
+    },
+    {
+      "query_id": "q-en-workspace-filter",
+      "status": "ok",
+      "latency_ms": 1,
+      "results": [
+        {
+          "doc_id": "file-en-budget-beta",
+          "citation": "mem://files/file-en-budget-beta",
+          "score": 1
+        }
+      ]
+    },
+    {
+      "query_id": "q-zh-path-filter",
+      "status": "error",
+      "latency_ms": 1,
+      "error_code": "fixture_error",
+      "results": []
+    },
+    {
+      "query_id": "q-en-hard-negative",
+      "status": "error",
+      "latency_ms": 1,
+      "error_code": "fixture_error",
+      "results": []
+    },
+    {
+      "query_id": "q-zh-hard-negative",
+      "status": "error",
+      "latency_ms": 1,
+      "error_code": "fixture_error",
+      "results": []
+    }
+  ]
+}

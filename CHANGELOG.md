@@ -13,6 +13,15 @@ The project is not yet publishing stable semantic-versioned releases.
   OpenCode, and Codex, with versioned config manifests, a model-free fake-memd
   lifecycle/failure contract, isolated real-host evidence, and explicit
   `REGISTERED`/`DISCOVERED`/`INVOKED`/`NOT RUN` grading.
+- Payment-provider-neutral workspace entitlements for optional managed
+  embeddings, with atomic quota reservation, safe idempotent replay,
+  indeterminate-outcome reconciliation, a read-only status API, and Web
+  plan/quota/error presentation.
+- Managed search/context idempotency support across CLI, MCP, and Web while
+  preserving subscription-free private and local/BYOM providers.
+- A versioned, synthetic Chinese/English recall benchmark with a deterministic
+  lexical reference, provider-agnostic ranking import, checked-in baseline,
+  per-slice quality/latency metrics and a fail-closed forbidden-source gate.
 - A versioned, vendor-neutral local embedding catalog and `mem model
   list|recommend|install|activate` flow with hardware/runtime checks, explicit
   selection, pinned Ollama artifact integrity, and separate activation.
@@ -85,6 +94,12 @@ The project is not yet publishing stable semantic-versioned releases.
 
 ### Security
 
+- Authorize account, workspace membership, scope, and path before entitlement
+  lookup or provider invocation; persist only bounded identifiers, accounting
+  state, timestamps, and hashes in the managed-embedding usage ledger.
+- Fail closed for SaaS entitlement readiness and prevent provider fallback,
+  duplicate charging, or raw upstream error leakage after timeout and
+  indeterminate outcomes.
 - Exclude credentials, tokens, provider secrets, runtime state and derived
   indexes from workspace bundles; carry only hashed memory idempotency keys.
 - Bound transfer time, archive bytes, expanded metadata/records and concurrent

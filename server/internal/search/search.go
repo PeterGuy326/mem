@@ -25,20 +25,40 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/PeterGuy326/mem/server/internal/entitlement"
 	"github.com/PeterGuy326/mem/server/internal/indexmeta"
 	"github.com/PeterGuy326/mem/server/internal/workerclient"
 )
 
+type textEmbedder interface {
+	Enabled() bool
+	EmbedTextWith(context.Context, string, string) ([]float32, error)
+}
+
 // Service is the search service.
 type Service struct {
-	pool   *pgxpool.Pool
-	worker *workerclient.Client
+	pool                     *pgxpool.Pool
+	worker                   textEmbedder
+	defaultEmbeddingProvider string
 }
 
 // New constructs a search Service.
-func New(pool *pgxpool.Pool, worker *workerclient.Client) *Service {
-	return &Service{pool: pool, worker: worker}
+func New(
+	pool *pgxpool.Pool,
+	worker *workerclient.Client,
+	defaultEmbeddingProvider ...string,
+) *Service {
+	s := &Service{pool: pool, worker: worker}
+	if len(defaultEmbeddingProvider) > 0 {
+		s.defaultEmbeddingProvider = strings.TrimSpace(defaultEmbeddingProvider[0])
+	}
+	return s
 }
+
+// ErrReplayReferenceUnavailable means an idempotent result can no longer be
+// reconstructed under the caller's current workspace/path authorization. It
+// is intentionally indistinguishable between deletion and lost access.
+var ErrReplayReferenceUnavailable = errors.New("managed embedding replay reference unavailable")
 
 // Route picks which embedding space to search against.
 //
@@ -73,6 +93,10 @@ type Query struct {
 	UserID uuid.UUID
 	Text   string
 	Route  string // "" defaults to RouteAuto
+	// EmbeddingProvider pins a server-resolved text provider for this request.
+	// Hosted entitlement classification and provider invocation must use the
+	// same exact spec, even if settings change concurrently.
+	EmbeddingProvider string
 	// RequireText makes auto retrieval fail closed when its primary text route
 	// fails. Agent context packs enable this so a provider/index fault cannot
 	// be misreported as "no memory". The visual route remains optional because
@@ -125,11 +149,191 @@ func (s *Service) Search(ctx context.Context, q Query) ([]Hit, error) {
 	}
 }
 
+// EmbeddingSpec resolves the exact provider that Search will use for the text
+// route. Hosted policy uses this server-side value; clients cannot self-report
+// whether a call is managed.
+func (s *Service) EmbeddingSpec(ctx context.Context, userID uuid.UUID) (string, error) {
+	return s.userEmbeddingSpec(ctx, userID)
+}
+
+// ReplayReferences converts search hits into the normalized, content-free
+// identifiers persisted by the entitlement service.
+func ReplayReferences(hits []Hit) ([]entitlement.ReplayReference, error) {
+	refs := make([]entitlement.ReplayReference, 0, len(hits))
+	for _, hit := range hits {
+		var evidenceID uuid.UUID
+		var err error
+		switch hit.Source {
+		case RouteText:
+			evidenceID, err = uuid.Parse(hit.EvidenceID)
+		case RouteVisual:
+			evidenceID = hit.FileID
+		default:
+			err = fmt.Errorf("unsupported replay source %q", hit.Source)
+		}
+		if err != nil || evidenceID == uuid.Nil || hit.FileID == uuid.Nil {
+			return nil, fmt.Errorf("build replay reference: %w", ErrReplayReferenceUnavailable)
+		}
+		refs = append(refs, entitlement.ReplayReference{
+			Source:     hit.Source,
+			EvidenceID: evidenceID,
+			FileID:     hit.FileID,
+			Score:      hit.Score,
+		})
+	}
+	return refs, nil
+}
+
+// Replay reconstructs a successful search from safe identifiers without
+// invoking an embedding provider. Missing/deleted/out-of-scope references use
+// one stable error and never fall back to a fresh provider call.
+func (s *Service) Replay(
+	ctx context.Context,
+	q Query,
+	refs []entitlement.ReplayReference,
+) ([]Hit, error) {
+	if q.UserID == uuid.Nil {
+		return nil, fmt.Errorf("user_id required")
+	}
+	if q.SnippetChars <= 0 {
+		q.SnippetChars = 240
+	}
+	if q.SnippetChars > 16_000 {
+		q.SnippetChars = 16_000
+	}
+	out := make([]Hit, 0, len(refs))
+	for _, ref := range refs {
+		var (
+			hit Hit
+			err error
+		)
+		switch ref.Source {
+		case RouteText:
+			hit, err = s.rehydrateText(ctx, q, ref)
+		case RouteVisual:
+			hit, err = s.rehydrateVisual(ctx, q, ref)
+		default:
+			err = ErrReplayReferenceUnavailable
+		}
+		if err != nil {
+			return nil, ErrReplayReferenceUnavailable
+		}
+		out = append(out, hit)
+	}
+	return out, nil
+}
+
+func (s *Service) rehydrateText(
+	ctx context.Context,
+	q Query,
+	ref entitlement.ReplayReference,
+) (Hit, error) {
+	args := []any{ref.EvidenceID, q.UserID}
+	where := []string{"e.id = $1", "f.user_id = $2"}
+	args, where = appendPathFilters(args, where, q.PathPrefix, q.AllowedPaths)
+	args, where = appendMIMEFilter(args, where, q.Type)
+	args, where = appendTimeFilters(args, where, q.Since, q.Until)
+	sql := fmt.Sprintf(`
+		SELECT e.id::text, f.id, f.name, f.path, f.mime, f.sha256,
+		       e.chunk_index, e.chunk_text, f.summary, f.timeline_at, f.created_at
+		  FROM embeddings_text e
+		  JOIN files f ON f.id = e.file_id
+		 WHERE %s
+	`, strings.Join(where, " AND "))
+	var hit Hit
+	err := s.pool.QueryRow(ctx, sql, args...).Scan(
+		&hit.EvidenceID,
+		&hit.FileID,
+		&hit.Name,
+		&hit.Path,
+		&hit.MIME,
+		&hit.ContentSHA256,
+		&hit.ChunkIndex,
+		&hit.Snippet,
+		&hit.Summary,
+		&hit.TimelineAt,
+		&hit.CreatedAt,
+	)
+	if err != nil || hit.FileID != ref.FileID {
+		return Hit{}, ErrReplayReferenceUnavailable
+	}
+	hit.Score = ref.Score
+	hit.Source = RouteText
+	hit.Snippet = truncateRunes(hit.Snippet, q.SnippetChars)
+	return hit, nil
+}
+
+func (s *Service) rehydrateVisual(
+	ctx context.Context,
+	q Query,
+	ref entitlement.ReplayReference,
+) (Hit, error) {
+	args := []any{ref.FileID, q.UserID}
+	where := []string{"f.id = $1", "f.user_id = $2"}
+	args, where = appendPathFilters(args, where, q.PathPrefix, q.AllowedPaths)
+	args, where = appendMIMEFilter(args, where, q.Type)
+	args, where = appendTimeFilters(args, where, q.Since, q.Until)
+	sql := fmt.Sprintf(`
+		SELECT 'visual:' || f.id::text, f.id, f.name, f.path, f.mime, f.sha256,
+		       -1, COALESCE(f.caption, ''), f.summary, f.timeline_at, f.created_at
+		  FROM embeddings_visual e
+		  JOIN files f ON f.id = e.file_id
+		 WHERE %s
+	`, strings.Join(where, " AND "))
+	var hit Hit
+	err := s.pool.QueryRow(ctx, sql, args...).Scan(
+		&hit.EvidenceID,
+		&hit.FileID,
+		&hit.Name,
+		&hit.Path,
+		&hit.MIME,
+		&hit.ContentSHA256,
+		&hit.ChunkIndex,
+		&hit.Snippet,
+		&hit.Summary,
+		&hit.TimelineAt,
+		&hit.CreatedAt,
+	)
+	if err != nil || ref.EvidenceID != ref.FileID {
+		return Hit{}, ErrReplayReferenceUnavailable
+	}
+	hit.Score = ref.Score
+	hit.Source = RouteVisual
+	hit.Snippet = truncateRunes(hit.Snippet, q.SnippetChars)
+	return hit, nil
+}
+
+func appendTimeFilters(
+	args []any,
+	where []string,
+	since, until *time.Time,
+) ([]any, []string) {
+	if since != nil {
+		args = append(args, *since)
+		where = append(
+			where,
+			fmt.Sprintf("COALESCE(f.timeline_at, f.created_at) >= $%d", len(args)),
+		)
+	}
+	if until != nil {
+		args = append(args, *until)
+		where = append(
+			where,
+			fmt.Sprintf("COALESCE(f.timeline_at, f.created_at) <= $%d", len(args)),
+		)
+	}
+	return args, where
+}
+
 // searchText runs the original text-embedding ANN route.
 func (s *Service) searchText(ctx context.Context, q Query, text string) ([]Hit, error) {
-	embSpec, err := s.userEmbeddingSpec(ctx, q.UserID)
-	if err != nil {
-		return nil, fmt.Errorf("resolve text embedding space: %w", err)
+	embSpec := strings.TrimSpace(q.EmbeddingProvider)
+	if embSpec == "" {
+		var err error
+		embSpec, err = s.userEmbeddingSpec(ctx, q.UserID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve text embedding space: %w", err)
+		}
 	}
 	embCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -448,7 +652,10 @@ func (s *Service) userEmbeddingSpec(ctx context.Context, userID uuid.UUID) (stri
 		}
 		return corpusProvider, nil
 	}
-	return spec, nil
+	if spec != "" {
+		return spec, nil
+	}
+	return s.defaultEmbeddingProvider, nil
 }
 
 // vectorLiteral matches indexer.vectorLiteral — kept private here to avoid an

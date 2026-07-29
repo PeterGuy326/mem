@@ -215,10 +215,21 @@ optional scope and context budget:
   "scope": "/Contracts",
   "source": "all",
   "memory_kind": "decision",
+  "idempotency_key": "contract-review-context-v1",
   "limit": 8,
   "max_chars": 12000
 }
 ```
+
+In SaaS, `mem_search` and the file lane of `mem_context` may use the optional
+platform-managed embedding service. Both tools accept `idempotency_key`; the
+adapter sends it only as the HTTP `Idempotency-Key` header. If omitted, the
+adapter creates a key for that one tool call. An Agent that might repeat the
+same logical request should supply and retain a stable key so a committed
+result can replay without another provider invocation or charge. A `504`
+means the provider outcome is uncertain: do not automatically retry, and do
+not invent a new key. `mem_context` with `source=memory` stays lexical and
+model-independent.
 
 Its target output is structured for an Agent to consume:
 

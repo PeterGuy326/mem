@@ -208,6 +208,8 @@ mem workspace export --output agent-workspace.membundle
 
 当前文本向量会记录实际 provider；无法证明来源的旧向量保持
 `legacy:unknown`，需通过 `mem provider reindex` 显式重建，绝不猜测模型身份。
+结构化记忆的关键词/词法闭环不要求向量模型；自部署可选择本地或 BYOM
+embedding，平台托管 embedding 则使用独立的 workspace 权益和额度。
 
 项目暂不扩张为聊天前端、Agent runtime、通用工作流平台或连接器大集合。
 
@@ -220,6 +222,7 @@ mem workspace export --output agent-workspace.membundle
 - Agent 记忆产品方向：[docs/AGENT_MEMORY_DIRECTION.md](docs/AGENT_MEMORY_DIRECTION.md)
 - 结构化记忆记录决策：[docs/adr/0001-agent-memory-records.md](docs/adr/0001-agent-memory-records.md)
 - MCP 接入与工具约定：[docs/mcp.md](docs/mcp.md)
+- 托管向量权益、幂等计费与隐私边界：[docs/MANAGED_EMBEDDINGS.md](docs/MANAGED_EMBEDDINGS.md)
 - 北极星可重复验收：[docs/acceptance/NORTH_STAR.md](docs/acceptance/NORTH_STAR.md)
 - Workspace bundle 决策：[docs/adr/0004-workspace-bundle.md](docs/adr/0004-workspace-bundle.md)
 - 本地运行与验证：[docs/RUN_LOCAL.md](docs/RUN_LOCAL.md)

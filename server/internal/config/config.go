@@ -17,6 +17,7 @@ const (
 	DefaultWorkspaceTransferTimeout             = 30 * time.Minute
 	DefaultWorkspaceBundleMaxBytes        int64 = 8 << 30
 	DefaultWorkspaceTransferMaxConcurrent       = 2
+	DefaultManagedEmbeddingReservationTTL       = 2 * time.Minute
 )
 
 // Config is the resolved memd runtime configuration.
@@ -46,6 +47,11 @@ type Config struct {
 	RegistrationMode string // open|first_user|disabled
 	SessionTTL       time.Duration
 	CORSOrigins      []string // allowed browser origins; empty disables CORS (same-origin only)
+	// ManagedEmbeddingProvider is the exact Worker provider spec funded by the
+	// hosted plan. It is required in saas mode and ignored for commercial
+	// policy in private mode. There is intentionally no fallback provider.
+	ManagedEmbeddingProvider       string
+	ManagedEmbeddingReservationTTL time.Duration
 
 	// Portable workspace transfer resource controls.
 	WorkspaceTransferTimeout       time.Duration
@@ -82,7 +88,10 @@ func Load() (*Config, error) {
 		WorkerGRPC:       getenv("MEM_WORKER_GRPC", "localhost:50051"),
 		DeploymentMode:   getenv("MEM_DEPLOYMENT_MODE", "private"),
 		RegistrationMode: getenv("MEM_REGISTRATION_MODE", "open"),
-		LogLevel:         getenv("MEM_LOG_LEVEL", "info"),
+		ManagedEmbeddingProvider: strings.TrimSpace(
+			os.Getenv("MEM_MANAGED_EMBEDDING_PROVIDER"),
+		),
+		LogLevel: getenv("MEM_LOG_LEVEL", "info"),
 	}
 
 	if v := os.Getenv("MEM_S3_USE_SSL"); v != "" {
@@ -103,6 +112,15 @@ func Load() (*Config, error) {
 		cfg.SessionTTL = d
 	} else {
 		cfg.SessionTTL = 24 * time.Hour
+	}
+	if v := os.Getenv("MEM_MANAGED_EMBEDDING_RESERVATION_TTL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Errorf("MEM_MANAGED_EMBEDDING_RESERVATION_TTL: %w", err)
+		}
+		cfg.ManagedEmbeddingReservationTTL = d
+	} else {
+		cfg.ManagedEmbeddingReservationTTL = DefaultManagedEmbeddingReservationTTL
 	}
 	if v := os.Getenv("MEM_WORKSPACE_TRANSFER_TIMEOUT"); v != "" {
 		d, err := time.ParseDuration(v)
@@ -141,11 +159,22 @@ func Load() (*Config, error) {
 	if cfg.DeploymentMode != "private" && cfg.DeploymentMode != "saas" {
 		return nil, fmt.Errorf("MEM_DEPLOYMENT_MODE must be private or saas, got %q", cfg.DeploymentMode)
 	}
+	if cfg.DeploymentMode == "saas" {
+		provider, model, ok := strings.Cut(cfg.ManagedEmbeddingProvider, ":")
+		if !ok || strings.TrimSpace(provider) == "" || strings.TrimSpace(model) == "" {
+			return nil, errors.New(
+				"MEM_MANAGED_EMBEDDING_PROVIDER is required in saas mode and must be '<provider>:<model>'",
+			)
+		}
+	}
 	if cfg.RegistrationMode != "open" && cfg.RegistrationMode != "first_user" && cfg.RegistrationMode != "disabled" {
 		return nil, fmt.Errorf("MEM_REGISTRATION_MODE must be open, first_user, or disabled, got %q", cfg.RegistrationMode)
 	}
 	if cfg.SessionTTL <= 0 {
 		return nil, errors.New("MEM_SESSION_TTL must be positive")
+	}
+	if cfg.ManagedEmbeddingReservationTTL <= 0 {
+		return nil, errors.New("MEM_MANAGED_EMBEDDING_RESERVATION_TTL must be positive")
 	}
 	if cfg.WorkspaceTransferTimeout <= 0 {
 		return nil, errors.New("MEM_WORKSPACE_TRANSFER_TIMEOUT must be positive")

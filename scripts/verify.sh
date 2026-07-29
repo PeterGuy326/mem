@@ -4,7 +4,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-unit}"
-EXPECTED_MIGRATION_HEAD=13
+EXPECTED_MIGRATION_HEAD=14
 MIGRATION_ROLLBACK_TARGET=11
 CONTROL_TEST_DB=""
 OWNED_TEST_DATABASE=""
@@ -101,6 +101,8 @@ run_web() {
   )
   log "Web memory acceptance"
   (cd "${REPO_ROOT}/web" && npm run test:memory)
+  log "Web managed-embedding status mapping"
+  (cd "${REPO_ROOT}/web" && npm run test:managed-embedding)
   log "Web workspace-transfer acceptance"
   (cd "${REPO_ROOT}/web" && npm run test:transfer)
 }
@@ -167,7 +169,7 @@ assert_migration_version() {
 
 run_migration_round_trip() {
   require_command go
-  log "Migration validation and 0012/0013 rollback round trip"
+  log "Migration validation and 0012/0013/0014 rollback round trip"
   (
     cd "${REPO_ROOT}/server"
     go run github.com/pressly/goose/v3/cmd/goose@v3.22.1 \
@@ -217,6 +219,9 @@ run_postgres_tests() {
     TestWorkspacePathLockingIntegration
     TestFilePathLockingIntegration
     TestRecomputePerson
+    TestManagedEmbeddingEntitlementPostgres
+    TestManagedSearchReplayPostgres
+    TestManagedEmbeddingHTTPAuthorizationPostgres
   )
 
   integration_log="$(mktemp "${TMPDIR:-/tmp}/mem-integration.XXXXXX")"
@@ -227,14 +232,16 @@ run_postgres_tests() {
     MEM_TEST_DB="$MEM_TEST_DB" go test \
       ${race_flag:+"$race_flag"} \
       -v -count=1 -p 1 -timeout 20m \
-      -run '^(TestMemoryPostgres|TestHandoffPostgres|TestWorkspaceTransferPostgres|TestHandoffCrossAgentHTTPIntegration|TestMemoryPathLifecycleIntegration|TestWorkspacePathLockingIntegration|TestFilePathLockingIntegration|TestRecomputePerson)$' \
+      -run '^(TestMemoryPostgres|TestHandoffPostgres|TestWorkspaceTransferPostgres|TestHandoffCrossAgentHTTPIntegration|TestMemoryPathLifecycleIntegration|TestWorkspacePathLockingIntegration|TestFilePathLockingIntegration|TestRecomputePerson|TestManagedEmbeddingEntitlementPostgres|TestManagedSearchReplayPostgres|TestManagedEmbeddingHTTPAuthorizationPostgres)$' \
       ./internal/memory \
       ./internal/handoff \
       ./internal/workspacetransfer \
       ./internal/api \
       ./internal/folder \
       ./internal/file \
-      ./internal/relator
+      ./internal/relator \
+      ./internal/entitlement \
+      ./internal/search
   ) 2>&1 | tee "$integration_log"
   local test_status="${PIPESTATUS[0]}"
   set -e
