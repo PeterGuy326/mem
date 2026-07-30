@@ -34,12 +34,12 @@ const TYPE_OPTIONS: { value: SearchTypeFilter; labelKey: string }[] = [
   { value: 'audio', labelKey: 'search.typeAudio' },
 ];
 
-const SAMPLE_QUERIES = [
-  '草地上的金毛',
-  '2012 年和小明在云南拍的照片',
-  '去年关于 RAG 的笔记',
-  '租房合同',
-  '妈妈的合影',
+const SAMPLE_QUERY_KEYS = [
+  'search.sample.dog',
+  'search.sample.trip',
+  'search.sample.rag',
+  'search.sample.lease',
+  'search.sample.mother',
 ];
 
 function parseTypeFilter(value: string | null): SearchTypeFilter {
@@ -158,16 +158,19 @@ export function SearchPage() {
             )}
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs text-fg-subtle mr-1">{t('search.try')}</span>
-              {SAMPLE_QUERIES.map((s) => (
-                <button
-                  key={s}
-                  onClick={() => setQ(s)}
-                  className="rounded-full border border-border bg-bg-subtle hover:bg-bg-inset hover:border-border-strong
+              {SAMPLE_QUERY_KEYS.map((key) => {
+                const sample = t(key);
+                return (
+                  <button
+                    key={key}
+                    onClick={() => setQ(sample)}
+                    className="rounded-full border border-border bg-bg-subtle hover:bg-bg-inset hover:border-border-strong
                              px-3 py-1 text-xs text-fg-muted hover:text-fg transition-colors"
-                >
-                  {s}
-                </button>
-              ))}
+                  >
+                    {sample}
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}

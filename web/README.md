@@ -27,11 +27,13 @@ npm run dev          # /v1/* 通过 Vite proxy 转到 http://localhost:8787
 npm run build        # 产出 dist/
 npm run lint         # ESLint 严格 0 警告
 npm run typecheck    # tsc --noEmit
+npm run test:i18n    # 词典/硬编码审计 + 中英文运行时切换验收
+npm run test:enrichment # 验证文件增强与人工审核流程
 npm run test:memory  # 自启 Vite + MSW，验证 Memory 生命周期与权限态
 npm run test:transfer # 自启 Vite + MSW，验证 workspace transfer
 ```
 
-首次运行浏览器回归前执行 `npx playwright install chromium`。这两个标准验收脚本
+首次运行浏览器回归前执行 `npx playwright install chromium`。这些标准验收脚本
 不需要 memd、Worker 或 PostgreSQL；完整测试环境、预期结果和清理方法见
 [`docs/TESTING.md`](../docs/TESTING.md)。
 
@@ -69,6 +71,8 @@ web/
 - **组件**：Tailwind + Radix UI 原语（Dialog / Dropdown / Tooltip）+ `lucide-react` 图标。
   **拒绝** Antd / MUI。
 - **状态色**：`success` 绿、`warn` 琥珀、`danger` 红 — 仅用于 chip / badge / 危险按钮。
+- **语言**：账户菜单可即时切换简体中文 / English，显式偏好保存在当前浏览器的
+  `mem.lang`；产品文案全部来自双语词典，文件名、记忆正文、Provider/协议标识保持原样。
 - **暗色变量**已写齐；`light` 模式 W2 解锁（CSS 变量已就位）。
 
 ---
@@ -127,7 +131,6 @@ API endpoints 默认全部走 mock，与后端 W3/W4 输出一一对应：
 
 - [ ] 移动端响应式（W1 桌面优先）
 - [ ] 主题切换（结构就位 W2 上）
-- [ ] i18n（先中文）
 - [ ] Phase 2 路由：`/timeline` `/faces` `/tags`（已占位）
 - [ ] 真接后端（W4 移除 mock）
 

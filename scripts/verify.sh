@@ -103,6 +103,8 @@ run_web() {
     npm run lint
     npm run build
   )
+  log "Web localization audit and acceptance"
+  (cd "${REPO_ROOT}/web" && npm run test:i18n)
   log "Web file-enrichment acceptance"
   (cd "${REPO_ROOT}/web" && npm run test:enrichment)
   log "Web memory acceptance"

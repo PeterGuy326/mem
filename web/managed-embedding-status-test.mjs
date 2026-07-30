@@ -26,5 +26,11 @@ assert.doesNotMatch(timeout.message, /new (request|key)/i);
 const unknown = managedEmbeddingErrorPresentation({ status: 418, hint: 'safe hint' });
 assert.equal(unknown.kind, 'unknown');
 assert.equal(unknown.message, 'safe hint');
+assert.equal(unknown.hint, 'safe hint');
+
+const unknownWithoutHint = managedEmbeddingErrorPresentation({ status: 500 });
+assert.equal(unknownWithoutHint.kind, 'unknown');
+assert.equal(unknownWithoutHint.hint, undefined);
+assert.equal(unknownWithoutHint.message, 'Try again or use a local/BYOM provider.');
 
 console.log('PASS: managed embedding status mapping (401/403/402/429/502/504)');

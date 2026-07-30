@@ -15,6 +15,7 @@ export interface ManagedEmbeddingErrorPresentation {
     | 'unknown';
   title: string;
   message: string;
+  hint?: string;
   action:
     | 'sign_in'
     | 'switch_workspace'

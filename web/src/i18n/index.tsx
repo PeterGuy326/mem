@@ -6,9 +6,8 @@
  *   <span>{t('nav.drive')}</span>
  *   t('detail.relatedCount', { n: 5 })   // "5 related" / "5 个相关"
  *
- * Add a language by extending `dict` with a new column. Missing keys fall back
- * to English, then to the key itself, so a half-translated string is visible
- * rather than blank.
+ * Add a language by extending `dict` with a new column. The localization audit
+ * requires every key to contain a non-empty value for every supported language.
  */
 import * as React from 'react';
 
@@ -19,7 +18,22 @@ export const LANGS: { code: Lang; label: string }[] = [
 ];
 
 // Flat key → per-language string. `{n}` placeholders are interpolated.
-const dict: Record<string, Partial<Record<Lang, string>>> = {
+const dict = {
+  // ---- app metadata / fatal fallback ----
+  'app.title': { zh: 'mem · Agent 原生 AI 网盘', en: 'mem · Agent-native AI drive' },
+  'app.description': {
+    zh: '开源、自托管、AI 原生的个人网盘。',
+    en: 'An open-source, self-hosted, AI-native personal drive.',
+  },
+  'errorBoundary.title': { zh: '出错了', en: 'Something went wrong' },
+  'errorBoundary.description': {
+    zh: '页面遇到了意外错误。刷新通常能恢复；如果反复出现，请把下面的信息发给我们。',
+    en: 'The page hit an unexpected error. A reload usually fixes it; if it keeps happening, send us the details below.',
+  },
+  'errorBoundary.reload': { zh: '刷新', en: 'Reload' },
+  'errorBoundary.drive': { zh: '回到网盘', en: 'Back to drive' },
+  'errorBoundary.details': { zh: '错误详情', en: 'Error details' },
+
   // ---- nav / chrome ----
   'nav.drive': { zh: '网盘', en: 'Drive' },
   'nav.memories': { zh: '记忆', en: 'Memory' },
@@ -32,6 +46,131 @@ const dict: Record<string, Partial<Record<Lang, string>>> = {
   'nav.notSignedIn': { zh: '未登录', en: 'Not signed in' },
   'nav.language': { zh: '语言', en: 'Language' },
   'nav.account': { zh: '账户菜单', en: 'Account menu' },
+
+  // ---- index providers ----
+  'providers.title': { zh: '索引模型', en: 'Index models' },
+  'providers.advanced': { zh: '高级设置', en: 'Advanced' },
+  'providers.refresh': { zh: '刷新', en: 'Refresh' },
+  'providers.description': {
+    zh: '控制把文件转换为可检索文本、图片和媒体索引的模型。文本向量只能在语料库为空时切换；在版本化索引代际可用前，视觉向量固定使用 CLIP。',
+    en: 'Control the models that turn files into searchable text, image, and media indexes. Text-vector changes are allowed only before a corpus exists; visual vectors stay fixed to CLIP until versioned index generations are available.',
+  },
+  'providers.kind.embedding.label': { zh: '文本检索', en: 'Text retrieval' },
+  'providers.kind.embedding.description': {
+    zh: '把文档分块转换为向量，用于语义检索。',
+    en: 'Turns document chunks into vectors for semantic search.',
+  },
+  'providers.kind.vlm.label': { zh: '图片理解', en: 'Image understanding' },
+  'providers.kind.vlm.description': {
+    zh: '在索引阶段生成可检索的图片描述和视觉元数据。',
+    en: 'Produces searchable captions and visual metadata during indexing.',
+  },
+  'providers.kind.asr.label': { zh: '音频转写', en: 'Audio transcription' },
+  'providers.kind.asr.description': {
+    zh: '在音频建立索引前转写其中的语音。',
+    en: 'Transcribes speech before audio is indexed.',
+  },
+  'providers.kind.ocr.label': { zh: '文字识别', en: 'Text recognition' },
+  'providers.kind.ocr.description': {
+    zh: '从扫描件和图片型文档中提取文字。',
+    en: 'Extracts text from scans and image-based documents.',
+  },
+  'providers.private.title': {
+    zh: '自托管 Provider 始终免订阅',
+    en: 'Self-hosted providers stay subscription-free',
+  },
+  'providers.private.description': {
+    zh: '本地和 BYOM Embedding Provider 由当前工作区控制，不受商业套餐限制。',
+    en: 'Local and BYOM embedding providers are controlled by this workspace. No commercial plan gate is applied.',
+  },
+  'providers.managed.title': { zh: '托管 Embedding · {plan}', en: 'Managed embeddings · {plan}' },
+  'providers.managed.remaining': { zh: '剩余 {n}', en: '{n} remaining' },
+  'providers.managed.upgradeRequired': {
+    zh: '需要有效的工作区会员资格。本地和 BYOM Provider 仍可使用。',
+    en: 'An active workspace membership is required. Local/BYOM providers remain available.',
+  },
+  'providers.managed.quotaResets': {
+    zh: '配额重置时间：{time}',
+    en: 'Quota resets {time}.',
+  },
+  'providers.managed.unavailable': {
+    zh: '托管 Embedding 状态不可用。',
+    en: 'Managed embedding status is unavailable.',
+  },
+  'providers.managed.unavailableDetail': {
+    zh: '托管 Embedding 状态不可用：{error} 下方的本地和 BYOM Provider 设置仍可使用。',
+    en: 'Managed embedding status unavailable: {error} Local/BYOM provider settings remain available below.',
+  },
+  'providers.current': { zh: '当前：', en: 'Current:' },
+  'providers.default': { zh: '默认', en: 'Default' },
+  'providers.test': { zh: '测试', en: 'Test' },
+  'providers.save': { zh: '保存', en: 'Save' },
+  'providers.saving': { zh: '保存中…', en: 'Saving…' },
+  'providers.saved': { zh: '已保存 {kind} = {spec}', en: 'Saved {kind} = {spec}' },
+  'providers.schemaCompatible': {
+    zh: 'Schema 兼容：{previous} → {next}',
+    en: 'Schema compatible: {previous} → {next}',
+  },
+  'providers.none': { zh: '无', en: 'none' },
+  'providers.reindexQueued': {
+    zh: '已将 {n} 个文件加入重建索引队列',
+    en: 'Reindex queued for {n} file(s)',
+  },
+  'providers.rebuildRequired': {
+    zh: '需要完整重建：运行 `mem provider reindex`',
+    en: 'Full rebuild required: run `mem provider reindex`',
+  },
+  'providers.testResult': { zh: '测试 {kind}：{result}', en: 'Test {kind}: {result}' },
+  'providers.error.session_expired.title': { zh: '需要登录', en: 'Sign in required' },
+  'providers.error.session_expired.message': {
+    zh: '当前会话已失效，请重新登录后继续。',
+    en: 'Your session is no longer valid. Sign in again to continue.',
+  },
+  'providers.error.workspace_forbidden.title': {
+    zh: '需要工作区访问权限',
+    en: 'Workspace access required',
+  },
+  'providers.error.workspace_forbidden.message': {
+    zh: '此账户或 Agent 令牌无法使用所选工作区。',
+    en: 'This account or Agent token cannot use the selected workspace.',
+  },
+  'providers.error.plan_required.title': { zh: '需要会员资格', en: 'Membership required' },
+  'providers.error.plan_required.message': {
+    zh: '托管 Embedding 包含在有效的工作区会员资格中。',
+    en: 'Managed embeddings are included with an active workspace membership.',
+  },
+  'providers.error.quota_exhausted.title': {
+    zh: 'Embedding 配额已用尽',
+    en: 'Embedding quota reached',
+  },
+  'providers.error.quota_exhausted.message': {
+    zh: '工作区配额已用尽，请在显示的重置时间后重试。',
+    en: 'The workspace quota is exhausted. Retry after the displayed reset time.',
+  },
+  'providers.error.provider_unavailable.title': {
+    zh: 'Embedding 服务不可用',
+    en: 'Embedding service unavailable',
+  },
+  'providers.error.provider_unavailable.message': {
+    zh: '托管 Provider 已安全失败，没有自动回退到其他 Provider。',
+    en: 'The managed provider failed safely. No automatic provider fallback was used.',
+  },
+  'providers.error.provider_timeout.title': {
+    zh: 'Embedding 请求超时',
+    en: 'Embedding request timed out',
+  },
+  'providers.error.provider_timeout.message': {
+    zh: '请勿自动重试。再次操作前，请检查用量或请求状态，或联系管理员。',
+    en: 'Do not retry automatically. Check the usage or request status, or contact an administrator before taking further action.',
+  },
+  'providers.error.unknown.title': {
+    zh: '无法加载 Embedding 状态',
+    en: 'Could not load embedding status',
+  },
+  'providers.error.unknown.message': {
+    zh: '请重试，或使用本地 / BYOM Provider。',
+    en: 'Try again or use a local/BYOM provider.',
+  },
 
   // ---- common actions ----
   'common.back': { zh: '返回', en: 'Back' },
@@ -128,6 +267,14 @@ const dict: Record<string, Partial<Record<Lang, string>>> = {
   },
   'search.recent': { zh: '最近搜索:', en: 'Recent:' },
   'search.try': { zh: '试试搜:', en: 'Try:' },
+  'search.sample.dog': { zh: '草地上的金毛', en: 'golden retriever on grass' },
+  'search.sample.trip': {
+    zh: '2012 年和小明在云南拍的照片',
+    en: 'photos with Xiaoming in Yunnan in 2012',
+  },
+  'search.sample.rag': { zh: '去年关于 RAG 的笔记', en: 'RAG notes from last year' },
+  'search.sample.lease': { zh: '租房合同', en: 'rental agreement' },
+  'search.sample.mother': { zh: '妈妈的合影', en: 'photos with Mom' },
   'search.filter': { zh: '过滤', en: 'Filter' },
   'search.typeAny': { zh: '全部', en: 'All' },
   'search.typeImage': { zh: '图片', en: 'Images' },
@@ -800,34 +947,49 @@ const dict: Record<string, Partial<Record<Lang, string>>> = {
   'resume.copied': { zh: '已复制恢复包 JSON', en: 'Resume JSON copied' },
   'resume.copyFailed': { zh: '复制恢复包失败', en: 'Could not copy resume JSON' },
 
+  // ---- content preview ----
+  'markdown.openSource': { zh: '跳转到来源', en: 'Open source' },
+
   // ---- 404 ----
   'notFound.title': { zh: '404 · 这里什么也没有', en: '404 · Nothing here' },
   'notFound.desc': {
     zh: '可能链接过期了，或者你需要先登录。',
     en: 'The link may have expired, or you need to sign in first.',
   },
-};
+} satisfies Record<string, Record<Lang, string>>;
 
 function lookup(key: string, lang: Lang): string {
-  const entry = dict[key];
+  const entry = (dict as Record<string, Record<Lang, string>>)[key];
   if (!entry) return key;
-  return entry[lang] ?? entry.en ?? key;
+  return entry[lang];
 }
 
 // Module-level mirror of the active language, kept in sync by I18nProvider.
 // Lets non-React code (formatters, pure helpers) translate via tt() without a
 // hook. React components should still use useT() so they re-render on change.
-let currentLang: Lang = 'en';
+const STORAGE_KEY = 'mem.lang';
+let currentLang: Lang = detectInitial();
 export function getLang(): Lang {
   return currentLang;
 }
+export function getLocale(lang: Lang = currentLang): 'zh-CN' | 'en-US' {
+  return lang === 'zh' ? 'zh-CN' : 'en-US';
+}
 export function tt(key: string, vars?: Record<string, string | number>): string {
-  return interpolate(lookup(key, currentLang), vars);
+  return interpolate(lookup(key, currentLang), vars, currentLang);
 }
 
-function interpolate(s: string, vars?: Record<string, string | number>): string {
+function interpolate(
+  s: string,
+  vars: Record<string, string | number> | undefined,
+  lang: Lang,
+): string {
   if (!vars) return s;
-  return s.replace(/\{(\w+)\}/g, (_, k) => String(vars[k] ?? `{${k}}`));
+  return s.replace(/\{(\w+)\}/g, (_, k) => {
+    const value = vars[k];
+    if (typeof value === 'number') return new Intl.NumberFormat(getLocale(lang)).format(value);
+    return String(value ?? `{${k}}`);
+  });
 }
 
 interface I18nCtx {
@@ -837,7 +999,6 @@ interface I18nCtx {
 }
 
 const Ctx = React.createContext<I18nCtx | null>(null);
-const STORAGE_KEY = 'mem.lang';
 
 function detectInitial(): Lang {
   try {
@@ -850,28 +1011,47 @@ function detectInitial(): Lang {
   return nav.startsWith('zh') ? 'zh' : 'en';
 }
 
+function applyDocumentLanguage(lang: Lang): void {
+  if (typeof document === 'undefined') return;
+  document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+  document.title = interpolate(lookup('app.title', lang), undefined, lang);
+  document
+    .querySelector('meta[name="description"]')
+    ?.setAttribute('content', interpolate(lookup('app.description', lang), undefined, lang));
+}
+
 export function I18nProvider({ children }: { children: React.ReactNode }) {
-  const [lang, setLangState] = React.useState<Lang>(() => {
-    const l = detectInitial();
-    currentLang = l;
-    return l;
-  });
+  const [lang, setLangState] = React.useState<Lang>(currentLang);
   const setLang = React.useCallback((l: Lang) => {
     currentLang = l;
+    applyDocumentLanguage(l);
     setLangState(l);
     try {
       localStorage.setItem(STORAGE_KEY, l);
     } catch {
       /* ignore */
     }
-    if (typeof document !== 'undefined') document.documentElement.lang = l;
   }, []);
+
   React.useEffect(() => {
-    if (typeof document !== 'undefined') document.documentElement.lang = lang;
+    applyDocumentLanguage(lang);
   }, [lang]);
 
+  React.useEffect(() => {
+    const syncLanguage = (event: StorageEvent) => {
+      if (event.key !== STORAGE_KEY) return;
+      const nextLang: Lang = event.newValue === 'zh' ? 'zh' : 'en';
+      currentLang = nextLang;
+      applyDocumentLanguage(nextLang);
+      setLangState(nextLang);
+    };
+    window.addEventListener('storage', syncLanguage);
+    return () => window.removeEventListener('storage', syncLanguage);
+  }, []);
+
   const t = React.useCallback(
-    (key: string, vars?: Record<string, string | number>) => interpolate(lookup(key, lang), vars),
+    (key: string, vars?: Record<string, string | number>) =>
+      interpolate(lookup(key, lang), vars, lang),
     [lang],
   );
 

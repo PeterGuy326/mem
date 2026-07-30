@@ -139,18 +139,18 @@ export function TopBar({ children }: { children?: React.ReactNode }) {
                 </DropdownMenu.Label>
                 <div className="flex gap-1 px-1.5 pb-1">
                   {LANGS.map((l) => (
-                    <button
+                    <DropdownMenu.Item
                       key={l.code}
-                      onClick={() => setLang(l.code)}
+                      onSelect={() => setLang(l.code)}
                       className={cn(
-                        'flex-1 rounded px-2 h-7 text-xs transition-colors',
+                        'grid h-7 flex-1 cursor-pointer place-items-center rounded px-2 text-xs outline-none transition-colors',
                         lang === l.code
                           ? 'bg-bg-inset text-fg'
                           : 'text-fg-muted hover:text-fg hover:bg-bg-inset/60',
                       )}
                     >
                       {l.label}
-                    </button>
+                    </DropdownMenu.Item>
                   ))}
                 </div>
                 <DropdownMenu.Separator className="my-1 h-px bg-border" />

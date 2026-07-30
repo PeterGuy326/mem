@@ -6,6 +6,7 @@
  * it stays intentionally small to avoid pulling in react-markdown.
  */
 import * as React from 'react';
+import { tt } from '@/i18n';
 
 /** Inline: **bold**, *italic* / _italic_, `code`, and [N] citations. */
 function renderInline(
@@ -50,7 +51,7 @@ function renderInline(
             type="button"
             onClick={() => onCitation(n)}
             className="mx-0.5 rounded bg-accent/15 px-1 font-medium text-accent hover:bg-accent/25 transition-colors"
-            title="跳转到来源 / open source"
+            title={tt('markdown.openSource')}
           >
             {tok}
           </button>

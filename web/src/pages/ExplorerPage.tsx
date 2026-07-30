@@ -708,7 +708,8 @@ function EmptyFolder({
 }) {
   const { t } = useT();
   const crumbs = buildCrumbs(path);
-  const inside = crumbs[crumbs.length - 1]?.name ?? tt('drive.root');
+  const leaf = crumbs[crumbs.length - 1];
+  const inside = leaf?.path === ROOT_PATH ? t('drive.root') : (leaf?.name ?? t('drive.root'));
   return (
     <div className="flex flex-col items-center justify-center text-center py-24 px-6 text-fg-muted">
       <FolderOpen className="h-12 w-12 text-fg-subtle mb-4" strokeWidth={1.3} />

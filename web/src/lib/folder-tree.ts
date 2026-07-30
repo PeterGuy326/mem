@@ -6,7 +6,7 @@
  * can list a single folder's immediate children (sub-folders + direct files).
  *
  * Conventions:
- * - Root path = "/" with name "我的网盘".
+ * - Root path = "/"; its display name is supplied by the i18n layer.
  * - Paths are POSIX-style, always start with "/", folders have no trailing slash.
  * - A folder "exists" iff at least one file lives under it.
  *   (We don't (yet) have a server-side folders table — mock-only "ghost folders"
@@ -24,7 +24,7 @@ export interface FolderNode {
 }
 
 export const ROOT_PATH = '/';
-export const ROOT_NAME = '我的网盘';
+export const ROOT_NAME = '';
 
 /** Normalize `/a/b/` → `/a/b`, `` → `/`. */
 export function normalizePath(p: string): string {

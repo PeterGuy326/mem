@@ -1526,6 +1526,52 @@ export const handlers = [
     return HttpResponse.json(resumed);
   }),
 
+  // ----- Index providers / optional managed entitlement -----
+  http.get(`${BASE}/providers`, async () => {
+    await jitter(60, 120);
+    return HttpResponse.json({
+      kinds: ['embedding', 'vlm', 'asr', 'ocr'],
+      settings: [
+        {
+          kind: 'embedding',
+          spec: 'ollama:nomic-embed-text',
+          source: 'workspace',
+          dim: 768,
+        },
+        {
+          kind: 'vlm',
+          spec: 'ollama:minicpm-v',
+          source: 'workspace',
+        },
+      ],
+    });
+  }),
+  http.get(`${BASE}/entitlements/current`, async ({ request }) => {
+    await jitter(60, 120);
+    if (mockToken(request) === 'mock-managed-embedding-500') {
+      return HttpResponse.json({ error: 'managed_embedding_unavailable' }, { status: 500 });
+    }
+    return HttpResponse.json({
+      deployment_mode: 'saas',
+      commercial_gate: true,
+      upgrade_required: false,
+      plan: 'pro',
+      status: 'active',
+      managed_embedding: {
+        workspace_id: MOCK_WORKSPACE.id,
+        plan: 'pro',
+        status: 'active',
+        qualifying: true,
+        managed_embedding_unit_limit: 10_000,
+        managed_embedding_units_reserved: 125,
+        managed_embedding_units_consumed: 2_400,
+        managed_embedding_units_remaining: 7_475,
+        period_start: '2026-07-01T00:00:00Z',
+        reset_at: '2026-08-01T00:00:00Z',
+      },
+    });
+  }),
+
   // ----- Entities / faces -----
   http.get(`${BASE}/faces`, async () => {
     await jitter(60, 140);

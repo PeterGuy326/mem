@@ -7,6 +7,7 @@ import * as React from 'react';
 import { Logo } from '@/components/layout/Logo';
 import { Button } from '@/components/ui/Button';
 import { RotateCw, Home } from 'lucide-react';
+import { tt } from '@/i18n';
 
 interface Props {
   children: React.ReactNode;
@@ -37,16 +38,14 @@ export class ErrorBoundary extends React.Component<Props, State> {
           <div className="mb-5 rounded-lg border border-border bg-bg-panel px-4 py-3 shadow-soft">
             <Logo />
           </div>
-          <h1 className="text-lg font-semibold">出错了 · Something went wrong</h1>
+          <h1 className="text-lg font-semibold">{tt('errorBoundary.title')}</h1>
           <p className="mt-2 text-sm leading-relaxed text-fg-muted">
-            页面遇到了一个意外错误。刷新通常能恢复；如果反复出现，把下面的信息发给我们。
-            <br />
-            The page hit an unexpected error. A reload usually fixes it.
+            {tt('errorBoundary.description')}
           </p>
 
           <div className="mt-6 flex items-center gap-2">
             <Button onClick={() => window.location.reload()}>
-              <RotateCw className="h-4 w-4" /> 刷新 / Reload
+              <RotateCw className="h-4 w-4" /> {tt('errorBoundary.reload')}
             </Button>
             <Button
               variant="secondary"
@@ -54,13 +53,13 @@ export class ErrorBoundary extends React.Component<Props, State> {
                 window.location.href = '/drive';
               }}
             >
-              <Home className="h-4 w-4" /> 回到网盘 / Drive
+              <Home className="h-4 w-4" /> {tt('errorBoundary.drive')}
             </Button>
           </div>
 
           <details className="mt-6 w-full text-left">
             <summary className="cursor-pointer text-2xs uppercase tracking-wider text-fg-subtle hover:text-fg">
-              错误详情 / Details
+              {tt('errorBoundary.details')}
             </summary>
             <pre className="mt-2 max-h-40 overflow-auto rounded-md border border-border bg-bg-inset p-3 text-2xs text-fg-muted">
               {error.message}

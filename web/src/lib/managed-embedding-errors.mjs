@@ -55,16 +55,19 @@ export function managedEmbeddingErrorPresentation(error) {
         action: 'review_request',
         retryable: false,
       };
-    default:
+    default: {
+      const hint =
+        typeof error?.hint === 'string' && error.hint.length > 0
+          ? error.hint
+          : undefined;
       return {
         kind: 'unknown',
         title: 'Could not load embedding status',
-        message:
-          typeof error?.hint === 'string' && error.hint.length > 0
-            ? error.hint
-            : 'Try again or use a local/BYOM provider.',
+        message: hint ?? 'Try again or use a local/BYOM provider.',
+        hint,
         action: 'retry',
         retryable: true,
       };
+    }
   }
 }

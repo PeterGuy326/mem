@@ -1,8 +1,12 @@
-import { tt } from '@/i18n';
+import { getLocale, tt } from '@/i18n';
 /** Format helpers for display only — no domain logic here. */
 
+export function formatNumber(value: number, options?: Intl.NumberFormatOptions): string {
+  return new Intl.NumberFormat(getLocale(), options).format(value);
+}
+
 export function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024) return `${formatNumber(bytes)} B`;
   const units = ['KB', 'MB', 'GB', 'TB'];
   let i = -1;
   let n = bytes;
@@ -10,21 +14,28 @@ export function formatBytes(bytes: number): string {
     n /= 1024;
     i += 1;
   } while (n >= 1024 && i < units.length - 1);
-  return `${n.toFixed(n < 10 ? 1 : 0)} ${units[i]}`;
+  return `${formatNumber(n, {
+    minimumFractionDigits: n < 10 ? 1 : 0,
+    maximumFractionDigits: n < 10 ? 1 : 0,
+  })} ${units[i]}`;
 }
 
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return '—';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' });
+  return d.toLocaleDateString(getLocale(), {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
 }
 
 export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return '—';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleString('zh-CN', {
+  return d.toLocaleString(getLocale(), {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
