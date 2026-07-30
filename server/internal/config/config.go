@@ -5,9 +5,11 @@
 package config
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -17,8 +19,14 @@ const (
 	DefaultWorkspaceTransferTimeout             = 30 * time.Minute
 	DefaultWorkspaceBundleMaxBytes        int64 = 8 << 30
 	DefaultWorkspaceTransferMaxConcurrent       = 2
-	DefaultManagedEmbeddingReservationTTL       = 2 * time.Minute
+	DefaultManagedEmbeddingReservationTTL       = 10 * time.Minute
+	// Indexing permits one Worker RPC to run for five minutes. Reservations
+	// must outlive that window so the reconciler cannot reclaim active paid
+	// stages; the extra minute is a bounded settlement margin.
+	MinimumManagedEmbeddingReservationTTL = 6 * time.Minute
 )
+
+var workerAuthKeyIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 // Config is the resolved memd runtime configuration.
 type Config struct {
@@ -40,18 +48,25 @@ type Config struct {
 	S3Region    string
 
 	// Worker gRPC (Phase 1 W2+)
-	WorkerGRPC string
+	WorkerGRPC      string
+	WorkerAuthKeyID string
+	WorkerAuthKey   []byte
 
 	// Deployment / Auth
 	DeploymentMode   string // private|saas
 	RegistrationMode string // open|first_user|disabled
 	SessionTTL       time.Duration
 	CORSOrigins      []string // allowed browser origins; empty disables CORS (same-origin only)
-	// ManagedEmbeddingProvider is the exact Worker provider spec funded by the
-	// hosted plan. It is required in saas mode and ignored for commercial
-	// policy in private mode. There is intentionally no fallback provider.
+	// ManagedEmbeddingProvider is the operator-selected primary exact Worker
+	// provider spec. ManagedEmbeddingProviders is the complete exact allow-set
+	// derived from that primary and the enabled immutable profile generations.
+	// Keeping both fields lets one process serve persisted V1 workspaces while
+	// advertising V2 for new selections; there is intentionally no arbitrary
+	// provider or prefix fallback.
 	ManagedEmbeddingProvider       string
+	ManagedEmbeddingProviders      []string
 	ManagedEmbeddingReservationTTL time.Duration
+	LegacyOpenAIManagedBinding     bool
 	// AIProfiles is the operator-enabled allowlist of fixed workspace AI
 	// profiles. It contains profile IDs only—never models, URLs, or secrets.
 	// Selection remains a workspace-scoped API action.
@@ -89,13 +104,29 @@ func Load() (*Config, error) {
 		S3AccessKey:      getenv("MEM_S3_ACCESS_KEY", "mem"),
 		S3SecretKey:      getenv("MEM_S3_SECRET_KEY", "mem-minio-password"),
 		S3Region:         getenv("MEM_S3_REGION", "us-east-1"),
-		WorkerGRPC:       getenv("MEM_WORKER_GRPC", "localhost:50051"),
+		WorkerGRPC:       getenvAllowEmpty("MEM_WORKER_GRPC", "localhost:50051"),
 		DeploymentMode:   getenv("MEM_DEPLOYMENT_MODE", "private"),
 		RegistrationMode: getenv("MEM_REGISTRATION_MODE", "open"),
 		ManagedEmbeddingProvider: strings.TrimSpace(
 			os.Getenv("MEM_MANAGED_EMBEDDING_PROVIDER"),
 		),
 		LogLevel: getenv("MEM_LOG_LEVEL", "info"),
+	}
+
+	workerAuthKeyID := os.Getenv("MEM_WORKER_AUTH_KEY_ID")
+	workerAuthKeyB64 := os.Getenv("MEM_WORKER_AUTH_KEY_B64")
+	if workerAuthKeyID != "" || workerAuthKeyB64 != "" {
+		if !workerAuthKeyIDPattern.MatchString(workerAuthKeyID) ||
+			workerAuthKeyB64 == "" ||
+			strings.TrimSpace(workerAuthKeyB64) != workerAuthKeyB64 {
+			return nil, errors.New("MEM_WORKER_AUTH_KEY_ID and MEM_WORKER_AUTH_KEY_B64 must configure a valid Worker authentication key")
+		}
+		decoded, err := base64.StdEncoding.Strict().DecodeString(workerAuthKeyB64)
+		if err != nil || len(decoded) != 32 {
+			return nil, errors.New("MEM_WORKER_AUTH_KEY_B64 must encode exactly 32 bytes")
+		}
+		cfg.WorkerAuthKeyID = workerAuthKeyID
+		cfg.WorkerAuthKey = decoded
 	}
 
 	if v := os.Getenv("MEM_S3_USE_SSL"); v != "" {
@@ -106,6 +137,13 @@ func Load() (*Config, error) {
 		cfg.S3UseSSL = b
 	} else {
 		cfg.S3UseSSL = strings.HasPrefix(cfg.S3Endpoint, "https://")
+	}
+	if v := os.Getenv("MEM_OPENAI_MANAGED_BINDING"); v != "" {
+		enabled, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("MEM_OPENAI_MANAGED_BINDING: %w", err)
+		}
+		cfg.LegacyOpenAIManagedBinding = enabled
 	}
 
 	if v := os.Getenv("MEM_SESSION_TTL"); v != "" {
@@ -163,16 +201,26 @@ func Load() (*Config, error) {
 	if cfg.DeploymentMode != "private" && cfg.DeploymentMode != "saas" {
 		return nil, fmt.Errorf("MEM_DEPLOYMENT_MODE must be private or saas, got %q", cfg.DeploymentMode)
 	}
+	if cfg.DeploymentMode == "saas" {
+		if strings.TrimSpace(cfg.WorkerGRPC) == "" {
+			return nil, errors.New("MEM_WORKER_GRPC is required in saas mode")
+		}
+		if cfg.WorkerAuthKeyID == "" || len(cfg.WorkerAuthKey) != 32 {
+			return nil, errors.New("Worker request authentication is required in saas mode")
+		}
+	}
 	profiles, err := parseAIProfiles(os.Getenv("MEM_AI_PROFILES"))
 	if err != nil {
 		return nil, err
 	}
 	cfg.AIProfiles = profiles
-	if containsProfile(cfg.AIProfiles, "idealab-quality-v1") && cfg.DeploymentMode != "saas" {
+	legacyQuality := containsProfile(cfg.AIProfiles, "idealab-quality-v1")
+	currentQuality := containsProfile(cfg.AIProfiles, "idealab-quality-v2")
+	if (legacyQuality || currentQuality) && cfg.DeploymentMode != "saas" {
 		// This profile consumes a platform-managed Idealab credential and must
 		// therefore run behind the entitlement/usage boundary. Private installs
 		// keep the explicit local profile or their existing BYOM provider path.
-		return nil, errors.New("idealab-quality-v1 requires MEM_DEPLOYMENT_MODE=saas")
+		return nil, errors.New("Idealab quality profiles require MEM_DEPLOYMENT_MODE=saas")
 	}
 	if cfg.DeploymentMode == "saas" {
 		provider, model, ok := strings.Cut(cfg.ManagedEmbeddingProvider, ":")
@@ -181,10 +229,43 @@ func Load() (*Config, error) {
 				"MEM_MANAGED_EMBEDDING_PROVIDER is required in saas mode and must be '<provider>:<model>'",
 			)
 		}
-		if containsProfile(cfg.AIProfiles, "idealab-quality-v1") &&
+		if cfg.ManagedEmbeddingProvider != "openai:text-embedding-3-large" &&
+			cfg.ManagedEmbeddingProvider != "idealab:text-embedding-3-large" {
+			return nil, errors.New(
+				"MEM_MANAGED_EMBEDDING_PROVIDER must be an exact compiled managed embedding provider",
+			)
+		}
+		if legacyQuality && !currentQuality &&
 			cfg.ManagedEmbeddingProvider != "openai:text-embedding-3-large" {
 			return nil, errors.New(
 				"MEM_MANAGED_EMBEDDING_PROVIDER must be openai:text-embedding-3-large when idealab-quality-v1 is enabled",
+			)
+		}
+		if legacyQuality && !cfg.LegacyOpenAIManagedBinding {
+			return nil, errors.New(
+				"MEM_OPENAI_MANAGED_BINDING=true is required for idealab-quality-v1 compatibility",
+			)
+		}
+		if currentQuality && !legacyQuality &&
+			cfg.ManagedEmbeddingProvider != "idealab:text-embedding-3-large" {
+			return nil, errors.New(
+				"MEM_MANAGED_EMBEDDING_PROVIDER must be idealab:text-embedding-3-large when idealab-quality-v2 is enabled",
+			)
+		}
+		cfg.ManagedEmbeddingProviders = append(
+			cfg.ManagedEmbeddingProviders,
+			cfg.ManagedEmbeddingProvider,
+		)
+		if legacyQuality {
+			cfg.ManagedEmbeddingProviders = appendUnique(
+				cfg.ManagedEmbeddingProviders,
+				"openai:text-embedding-3-large",
+			)
+		}
+		if currentQuality {
+			cfg.ManagedEmbeddingProviders = appendUnique(
+				cfg.ManagedEmbeddingProviders,
+				"idealab:text-embedding-3-large",
 			)
 		}
 	}
@@ -196,6 +277,13 @@ func Load() (*Config, error) {
 	}
 	if cfg.ManagedEmbeddingReservationTTL <= 0 {
 		return nil, errors.New("MEM_MANAGED_EMBEDDING_RESERVATION_TTL must be positive")
+	}
+	if cfg.DeploymentMode == "saas" &&
+		cfg.ManagedEmbeddingReservationTTL < MinimumManagedEmbeddingReservationTTL {
+		return nil, fmt.Errorf(
+			"MEM_MANAGED_EMBEDDING_RESERVATION_TTL must be at least %s",
+			MinimumManagedEmbeddingReservationTTL,
+		)
 	}
 	if cfg.WorkspaceTransferTimeout <= 0 {
 		return nil, errors.New("MEM_WORKSPACE_TRANSFER_TIMEOUT must be positive")
@@ -228,13 +316,16 @@ func parseAIProfiles(raw string) ([]string, error) {
 	// Local-only remains the default: enabling a paid cloud profile is an
 	// operator decision, never an accidental consequence of a global key.
 	if strings.TrimSpace(raw) == "" {
-		return []string{"local-fast-v1"}, nil
+		// Keep the already-published V1 available for persisted selections,
+		// while presenting V2 as the current no-implicit-download choice.
+		return []string{"local-fast-v1", "local-fast-v2"}, nil
 	}
-	profiles := make([]string, 0, 2)
+	profiles := make([]string, 0, 4)
 	seen := make(map[string]struct{})
 	for _, item := range strings.Split(raw, ",") {
 		id := strings.TrimSpace(item)
-		if id != "local-fast-v1" && id != "idealab-quality-v1" {
+		if id != "local-fast-v1" && id != "idealab-quality-v1" &&
+			id != "local-fast-v2" && id != "idealab-quality-v2" {
 			return nil, fmt.Errorf("MEM_AI_PROFILES contains unknown profile %q", id)
 		}
 		if _, duplicate := seen[id]; duplicate {
@@ -258,9 +349,25 @@ func containsProfile(profiles []string, wanted string) bool {
 	return false
 }
 
+func appendUnique(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
 func getenv(k, def string) string {
 	if v := os.Getenv(k); v != "" {
 		return v
+	}
+	return def
+}
+
+func getenvAllowEmpty(k, def string) string {
+	if value, ok := os.LookupEnv(k); ok {
+		return value
 	}
 	return def
 }

@@ -129,7 +129,8 @@ forget 需要 `delete` 及允许删除的 workspace 角色。写入时关联
 ## 为什么是 Agent-Native
 
 ```bash
-# 人或脚本检索候选资产（默认 CLIP 当前以英文作为已验收基线）
+# 未选择 workspace profile 的旧兼容路径可检索候选资产
+# （该路径的默认 CLIP 当前只以英文作为已验收基线）
 mem search "a golden retriever standing on green grass" --format json
 
 # Agent 宿主启动独立的 stdio MCP 适配器

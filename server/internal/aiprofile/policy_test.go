@@ -24,6 +24,12 @@ func TestValidateLegacyProviderMutation(t *testing.T) {
 			spec: "openai:enterprise-embedding-2026-06-08",
 		},
 		{
+			name: "private blocks the platform Idealab namespace",
+			mode: DeploymentPrivate,
+			spec: "idealab:text-embedding-3-large",
+			want: ErrManagedProviderRequiresProfile,
+		},
+		{
 			name:   "private profile blocks a legacy mutation",
 			mode:   DeploymentPrivate,
 			active: active,
@@ -77,6 +83,8 @@ func TestValidateLegacyProviderMutation(t *testing.T) {
 
 func TestIsManagedCatalogProviderIsExact(t *testing.T) {
 	for _, spec := range []string{
+		"idealab:text-embedding-3-large",
+		"idealab:qwen3.7-max-2026-06-08",
 		"openai:text-embedding-3-large",
 		"openai:qwen3.7-max-2026-06-08",
 	} {

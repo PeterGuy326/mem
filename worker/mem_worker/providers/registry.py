@@ -14,6 +14,7 @@ Adding a new vendor:
 from __future__ import annotations
 
 from . import anthropic as anthropic_mod
+from . import idealab as idealab_mod
 from . import ollama as ollama_mod
 from . import openai as openai_mod
 from .base import ASRProvider, EmbeddingProvider, LLMProvider, ProviderError, VLMProvider
@@ -29,9 +30,7 @@ def parse_spec(spec: str) -> tuple[str, str]:
         ProviderError: if the spec is missing the vendor prefix.
     """
     if ":" not in spec:
-        raise ProviderError(
-            f"invalid provider spec {spec!r}; expected '<vendor>:<model>'"
-        )
+        raise ProviderError(f"invalid provider spec {spec!r}; expected '<vendor>:<model>'")
     vendor, _, model = spec.partition(":")
     vendor = vendor.strip().lower()
     model = model.strip()
@@ -57,6 +56,8 @@ def get_embedding_provider(
         return ollama_mod.OllamaEmbeddingProvider(model=model, dimensions=dimensions)
     if vendor == "openai":
         return openai_mod.OpenAIEmbeddingProvider(model=model, dimensions=dimensions)
+    if vendor == "idealab":
+        return idealab_mod.IdealabEmbeddingProvider(model=model, dimensions=dimensions)
     if vendor == "clip":
         # CLIP spec is "clip:<model>[:<pretrained>]". Pretrained defaults to
         # OpenAI's checkpoint, which matches SPEC §9.4.
@@ -77,6 +78,8 @@ def get_llm_provider(spec: str) -> LLMProvider:
         return ollama_mod.OllamaLLMProvider(model=model)
     if vendor == "openai":
         return openai_mod.OpenAILLMProvider(model=model)
+    if vendor == "idealab":
+        return idealab_mod.IdealabLLMProvider(model=model)
     if vendor == "anthropic":
         return anthropic_mod.AnthropicLLMProvider(model=model)
     raise ProviderError(f"no LLMProvider for vendor {vendor!r}")
@@ -89,6 +92,8 @@ def get_vlm_provider(spec: str) -> VLMProvider:
         return ollama_mod.OllamaVLMProvider(model=model)
     if vendor == "openai":
         return openai_mod.OpenAIVLMProvider(model=model)
+    if vendor == "idealab":
+        return idealab_mod.IdealabVLMProvider(model=model)
     if vendor == "anthropic":
         return anthropic_mod.AnthropicVLMProvider(model=model)
     raise ProviderError(f"no VLMProvider for vendor {vendor!r}")

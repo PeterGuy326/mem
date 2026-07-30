@@ -1,10 +1,22 @@
 package config
 
 import (
+	"encoding/base64"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
+
+func setSaaSWorkerAuth(t *testing.T) {
+	t.Helper()
+	t.Setenv("MEM_WORKER_GRPC", "worker.internal:50051")
+	t.Setenv("MEM_WORKER_AUTH_KEY_ID", "memd-primary")
+	t.Setenv(
+		"MEM_WORKER_AUTH_KEY_B64",
+		base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32))),
+	)
+}
 
 func TestLoadPolicyDefaultsAndSessionTTL(t *testing.T) {
 	t.Setenv("MEM_DEPLOYMENT_MODE", "")
@@ -23,7 +35,7 @@ func TestLoadPolicyDefaultsAndSessionTTL(t *testing.T) {
 	if cfg.DeploymentMode != "private" || cfg.RegistrationMode != "open" {
 		t.Fatalf("unexpected defaults: %#v", cfg)
 	}
-	if !reflect.DeepEqual(cfg.AIProfiles, []string{"local-fast-v1"}) {
+	if !reflect.DeepEqual(cfg.AIProfiles, []string{"local-fast-v1", "local-fast-v2"}) {
 		t.Fatalf("AIProfiles = %#v", cfg.AIProfiles)
 	}
 	if cfg.SessionTTL != 90*time.Minute {
@@ -40,13 +52,14 @@ func TestLoadPolicyDefaultsAndSessionTTL(t *testing.T) {
 
 func TestLoadAIProfilesAreAnOperatorAllowlist(t *testing.T) {
 	t.Setenv("MEM_DEPLOYMENT_MODE", "saas")
-	t.Setenv("MEM_MANAGED_EMBEDDING_PROVIDER", "openai:text-embedding-3-large")
-	t.Setenv("MEM_AI_PROFILES", " local-fast-v1, idealab-quality-v1 ")
+	setSaaSWorkerAuth(t)
+	t.Setenv("MEM_MANAGED_EMBEDDING_PROVIDER", "idealab:text-embedding-3-large")
+	t.Setenv("MEM_AI_PROFILES", " local-fast-v2, idealab-quality-v2 ")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"local-fast-v1", "idealab-quality-v1"}
+	want := []string{"local-fast-v2", "idealab-quality-v2"}
 	if !reflect.DeepEqual(cfg.AIProfiles, want) {
 		t.Fatalf("AIProfiles = %#v, want %#v", cfg.AIProfiles, want)
 	}
@@ -59,41 +72,127 @@ func TestLoadAIProfilesAreAnOperatorAllowlist(t *testing.T) {
 	}
 }
 
-func TestLoadPrivateRejectsManagedQualityProfile(t *testing.T) {
-	t.Setenv("MEM_DEPLOYMENT_MODE", "private")
-	t.Setenv("MEM_AI_PROFILES", "idealab-quality-v1")
-	if _, err := Load(); err == nil {
-		t.Fatal("private deployment accepted a platform-managed quality profile")
+func TestLoadPrivateRejectsManagedQualityProfiles(t *testing.T) {
+	for _, profileID := range []string{"idealab-quality-v1", "idealab-quality-v2"} {
+		t.Run(profileID, func(t *testing.T) {
+			t.Setenv("MEM_DEPLOYMENT_MODE", "private")
+			t.Setenv("MEM_AI_PROFILES", profileID)
+			if _, err := Load(); err == nil {
+				t.Fatal("private deployment accepted a platform-managed quality profile")
+			}
+		})
 	}
 }
 
 func TestLoadSaaSIdealabQualityRequiresExactManagedEmbeddingSpec(t *testing.T) {
-	t.Setenv("MEM_DEPLOYMENT_MODE", "saas")
-	t.Setenv("MEM_AI_PROFILES", "local-fast-v1,idealab-quality-v1")
-	t.Setenv("MEM_MANAGED_EMBEDDING_PROVIDER", "openai:text-embedding-3-small")
-	if _, err := Load(); err == nil {
-		t.Fatal("quality profile accepted a different managed embedding spec")
+	tests := []struct {
+		name     string
+		profile  string
+		exact    string
+		mismatch string
+	}{
+		{
+			name:     "legacy V1 compatibility",
+			profile:  "idealab-quality-v1",
+			exact:    "openai:text-embedding-3-large",
+			mismatch: "idealab:text-embedding-3-large",
+		},
+		{
+			name:     "current V2",
+			profile:  "idealab-quality-v2",
+			exact:    "idealab:text-embedding-3-large",
+			mismatch: "openai:text-embedding-3-large",
+		},
 	}
-	t.Setenv("MEM_MANAGED_EMBEDDING_PROVIDER", "openai:text-embedding-3-large")
-	if _, err := Load(); err != nil {
-		t.Fatalf("quality profile with exact embedding spec: %v", err)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("MEM_DEPLOYMENT_MODE", "saas")
+			setSaaSWorkerAuth(t)
+			t.Setenv("MEM_AI_PROFILES", "local-fast-v2,"+test.profile)
+			if test.profile == "idealab-quality-v1" {
+				t.Setenv("MEM_OPENAI_MANAGED_BINDING", "true")
+			} else {
+				t.Setenv("MEM_OPENAI_MANAGED_BINDING", "")
+			}
+			t.Setenv("MEM_MANAGED_EMBEDDING_PROVIDER", test.mismatch)
+			if _, err := Load(); err == nil {
+				t.Fatal("quality profile accepted a different managed embedding spec")
+			}
+			t.Setenv("MEM_MANAGED_EMBEDDING_PROVIDER", test.exact)
+			if _, err := Load(); err != nil {
+				t.Fatalf("quality profile with exact embedding spec: %v", err)
+			}
+		})
 	}
 }
 
-func TestLoadSaaSRequiresExactManagedEmbeddingProvider(t *testing.T) {
+func TestLoadLegacyManagedProfileRequiresExplicitBindingClassification(t *testing.T) {
 	t.Setenv("MEM_DEPLOYMENT_MODE", "saas")
+	setSaaSWorkerAuth(t)
+	t.Setenv("MEM_AI_PROFILES", "idealab-quality-v1")
+	t.Setenv("MEM_MANAGED_EMBEDDING_PROVIDER", "openai:text-embedding-3-large")
+	t.Setenv("MEM_OPENAI_MANAGED_BINDING", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("legacy V1 loaded without an explicit managed OpenAI binding")
+	}
+	t.Setenv("MEM_OPENAI_MANAGED_BINDING", "true")
+	if _, err := Load(); err != nil {
+		t.Fatalf("legacy V1 with explicit managed binding: %v", err)
+	}
+}
+
+func TestLoadSupportsBothManagedProfileGenerationsDuringMigration(t *testing.T) {
+	t.Setenv("MEM_DEPLOYMENT_MODE", "saas")
+	setSaaSWorkerAuth(t)
+	t.Setenv(
+		"MEM_AI_PROFILES",
+		"local-fast-v1,local-fast-v2,idealab-quality-v1,idealab-quality-v2",
+	)
+	t.Setenv("MEM_MANAGED_EMBEDDING_PROVIDER", "idealab:text-embedding-3-large")
+	t.Setenv("MEM_OPENAI_MANAGED_BINDING", "true")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"idealab:text-embedding-3-large",
+		"openai:text-embedding-3-large",
+	}
+	if !reflect.DeepEqual(cfg.ManagedEmbeddingProviders, want) {
+		t.Fatalf(
+			"ManagedEmbeddingProviders = %#v, want %#v",
+			cfg.ManagedEmbeddingProviders,
+			want,
+		)
+	}
+}
+
+func TestLoadSaaSRequiresACompiledManagedEmbeddingProvider(t *testing.T) {
+	t.Setenv("MEM_DEPLOYMENT_MODE", "saas")
+	setSaaSWorkerAuth(t)
 	t.Setenv("MEM_MANAGED_EMBEDDING_PROVIDER", "")
 	if _, err := Load(); err == nil {
 		t.Fatal("expected missing managed embedding provider error")
 	}
 
 	t.Setenv("MEM_MANAGED_EMBEDDING_PROVIDER", "openai:text-embedding-3-small")
+	if _, err := Load(); err == nil {
+		t.Fatal("SaaS accepted an arbitrary managed provider outside the catalog")
+	}
+
+	t.Setenv("MEM_MANAGED_EMBEDDING_PROVIDER", "idealab:text-embedding-3-large")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ManagedEmbeddingProvider != "openai:text-embedding-3-small" {
+	if cfg.ManagedEmbeddingProvider != "idealab:text-embedding-3-large" {
 		t.Fatalf("managed provider = %q", cfg.ManagedEmbeddingProvider)
+	}
+	if !reflect.DeepEqual(
+		cfg.ManagedEmbeddingProviders,
+		[]string{"idealab:text-embedding-3-large"},
+	) {
+		t.Fatalf("managed providers = %#v", cfg.ManagedEmbeddingProviders)
 	}
 }
 
@@ -168,6 +267,56 @@ func TestLoadRejectsInvalidWorkspaceTransferResources(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLoadManagedReservationMinimumAppliesOnlyToSaaS(t *testing.T) {
+	t.Setenv("MEM_MANAGED_EMBEDDING_RESERVATION_TTL", "5m")
+	t.Setenv("MEM_DEPLOYMENT_MODE", "private")
+	if _, err := Load(); err != nil {
+		t.Fatalf("private deployment rejected a positive legacy TTL: %v", err)
+	}
+
+	t.Setenv("MEM_DEPLOYMENT_MODE", "saas")
+	setSaaSWorkerAuth(t)
+	t.Setenv("MEM_MANAGED_EMBEDDING_PROVIDER", "idealab:text-embedding-3-large")
+	if _, err := Load(); err == nil {
+		t.Fatal("SaaS deployment accepted a reservation TTL below the Worker timeout")
+	}
+}
+
+func TestLoadWorkerAuthenticationContract(t *testing.T) {
+	t.Run("saas requires Worker address and authentication", func(t *testing.T) {
+		t.Setenv("MEM_DEPLOYMENT_MODE", "saas")
+		t.Setenv("MEM_MANAGED_EMBEDDING_PROVIDER", "idealab:text-embedding-3-large")
+		t.Setenv("MEM_WORKER_GRPC", "")
+		t.Setenv("MEM_WORKER_AUTH_KEY_ID", "")
+		t.Setenv("MEM_WORKER_AUTH_KEY_B64", "")
+		if _, err := Load(); err == nil {
+			t.Fatal("SaaS loaded without a Worker trust boundary")
+		}
+	})
+
+	t.Run("invalid key material is rejected without echoing it", func(t *testing.T) {
+		secret := "not-valid-base64-secret"
+		t.Setenv("MEM_WORKER_AUTH_KEY_ID", "memd-primary")
+		t.Setenv("MEM_WORKER_AUTH_KEY_B64", secret)
+		_, err := Load()
+		if err == nil {
+			t.Fatal("invalid Worker authentication key loaded")
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("configuration error leaked key material: %v", err)
+		}
+	})
+
+	t.Run("private mode remains compatible without authentication", func(t *testing.T) {
+		t.Setenv("MEM_DEPLOYMENT_MODE", "private")
+		t.Setenv("MEM_WORKER_AUTH_KEY_ID", "")
+		t.Setenv("MEM_WORKER_AUTH_KEY_B64", "")
+		if _, err := Load(); err != nil {
+			t.Fatalf("private configuration unexpectedly requires Worker auth: %v", err)
+		}
+	})
 }
 
 func TestLoadCORSOrigins(t *testing.T) {

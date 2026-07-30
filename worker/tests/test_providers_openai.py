@@ -7,6 +7,8 @@ service or require credentials.
 from __future__ import annotations
 
 import base64
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 import pytest
@@ -69,12 +71,83 @@ def test_embedding_contract_is_unchanged(monkeypatch):
     monkeypatch.setattr(provider, "_post", post)
 
     assert provider.embed_text(["evidence"]) == [[0.1, 0.2, 0.3]]
+    assert provider._allow_redirects is True
     assert post.calls == [
         (
             "/v1/embeddings",
             {"model": "text-embedding-3-small", "input": ["evidence"]},
         )
     ]
+
+
+def test_managed_openai_binding_does_not_redirect_source_body(env):
+    env(
+        MEM_DEPLOYMENT_MODE="private",
+        MEM_WORKER_AUTH_MODE="required",
+        MEM_WORKER_AUTH_KEY_ID="memd-primary",
+        MEM_WORKER_AUTH_KEY_B64=base64.b64encode(bytes(range(32))).decode("ascii"),
+        MEM_WORKER_AUTH_REPLAY_REDIS_URL="redis://localhost:6379/7",
+        MEM_OPENAI_MANAGED_BINDING="true",
+        OPENAI_API_KEY="legacy-platform-key",
+        OPENAI_BASE_URL="https://legacy-idealab.invalid/compatible",
+    )
+
+    redirected_bodies: list[bytes] = []
+
+    class RedirectTarget(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            redirected_bodies.append(self.rfile.read(length))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"data":[{"embedding":[0.0]}]}')
+
+        def log_message(self, _format, *_args):
+            return
+
+    target = ThreadingHTTPServer(("127.0.0.1", 0), RedirectTarget)
+    target_thread = threading.Thread(target=target.serve_forever, daemon=True)
+    target_thread.start()
+
+    target_url = f"http://127.0.0.1:{target.server_port}/captured"
+
+    class RedirectSource(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(length)
+            self.send_response(307)
+            self.send_header("Location", target_url)
+            self.end_headers()
+
+        def log_message(self, _format, *_args):
+            return
+
+    source = ThreadingHTTPServer(("127.0.0.1", 0), RedirectSource)
+    source_thread = threading.Thread(target=source.serve_forever, daemon=True)
+    source_thread.start()
+
+    try:
+        provider = OpenAIEmbeddingProvider(
+            model="text-embedding-3-large",
+            dimensions=768,
+        )
+        # Keep the settings path production-shaped, then replace only the
+        # transport origin with hermetic local servers for this redirect test.
+        provider._base_url = f"http://127.0.0.1:{source.server_port}"
+
+        with pytest.raises(ProviderError, match="HTTP 307"):
+            provider.embed_text(["source must stay on the configured origin"])
+
+        assert provider._allow_redirects is False
+        assert redirected_bodies == []
+    finally:
+        source.shutdown()
+        source.server_close()
+        source_thread.join(timeout=2)
+        target.shutdown()
+        target.server_close()
+        target_thread.join(timeout=2)
 
 
 def test_embedding_uses_configured_output_dimensions(monkeypatch, env):

@@ -7,11 +7,15 @@ not a passing quality result.
 
 The two decisions are different:
 
-- `idealab-quality-v1` is justified only when it wins on the agreed retrieval
+- `idealab-quality-v2` is justified only when it wins on the agreed retrieval
   and enrichment use cases for the paid audience, with no safety regression.
-- `local-fast-v1` is justified when its fixed local model is fast enough and
+- `local-fast-v2` is justified when its fixed local model is fast enough and
   useful enough on the small-corpus use case. It is not expected to have the
   same large-corpus or generative-enrichment behavior as the quality profile.
+
+Deprecated V1 snapshots are compatibility routes, not evaluation candidates;
+they cannot be newly selected. Run both V2 candidates in separate empty
+workspaces so no historical vector or pipeline output enters the comparison.
 
 Do not claim a result until the input corpus, profile snapshot, runtime
 versions, hardware/network class, quota snapshots, and generated artifacts are
@@ -31,8 +35,9 @@ It does not measure the following:
 - structured memories, which use the independent model-free lexical path;
 - image retrieval, because a caption string is not a source image and visual
   models need a separately reviewed image fixture;
-- Qwen3.7 text/VLM enrichment quality, which needs its own human-scored
-  annotation/caption acceptance set; or
+- Qwen3.7 text-enrichment quality, which needs its own human-scored annotation
+  set (VLM/caption evaluation is outside this profile revision because its
+  visual and VLM stages are disabled); or
 - a production workload, a currency cost, or a universal quality threshold.
 
 The larger [`data/v1`](../benchmarks/recall/data/v1) fixture intentionally
@@ -58,7 +63,7 @@ sentinel and is not a profile performance result.
 
 Use a disposable empty workspace (and, preferably, a disposable service
 instance) for each candidate. Select the profile **before** any upload. Never
-switch a populated workspace from `local-fast-v1` to `idealab-quality-v1`, or
+switch a populated workspace from `local-fast-v2` to `idealab-quality-v2`, or
 the other direction: their text vectors are different spaces even though both
 are 768-dimensional. A complete new index generation is required for a later
 switch.
@@ -112,7 +117,7 @@ export MEM_EVAL_DIR=/tmp/mem-profile-local-fast
 mkdir -p "$MEM_EVAL_DIR"
 
 bin/mem --server "$MEM_SERVER" --workspace "$MEM_WORKSPACE" \
-  profile select local-fast-v1 --format json \
+  profile select local-fast-v2 --format json \
   >"$MEM_EVAL_DIR/profile.json"
 
 bin/mem --server "$MEM_SERVER" --workspace "$MEM_WORKSPACE" \
@@ -135,7 +140,7 @@ jq -e 'length == 5 and all(.[]; .index_status == "done")' \
 ```
 
 Repeat in a different empty workspace with
-`profile select idealab-quality-v1`. The managed profile must already have its
+`profile select idealab-quality-v2`. The managed profile must already have its
 SaaS configuration, entitlement, and injected Idealab credential; see
 [MANAGED_EMBEDDINGS.md](MANAGED_EMBEDDINGS.md). Its selection preflight is a
 separate managed action, so take the normal search/index cost baseline only
@@ -161,6 +166,13 @@ evaluation controller must call `POST /v1/search` with `scope` set to
 `/profile-eval/finance/`, the same `route` and `limit`, and an idempotency key.
 It should measure client end-to-end elapsed time with a monotonic clock, and
 record one `ok`, `partial`, or `error` row for every query.
+
+That live controller and its real-model artifacts are not checked in by this
+change. Until a reviewed controller produces retained artifacts for both
+isolated candidates, the live quality acceptance criterion remains
+**NOT VERIFIED**. The offline fixture/evaluator passing is only evidence that
+the scoring contract works; it is not evidence about either profile's recall,
+latency, enrichment quality, or provider cost.
 
 Convert the raw responses to a
 [`mem.recall-rankings.v1`](../benchmarks/recall/fixtures/external-rankings.example.v1.json)
@@ -226,6 +238,17 @@ managed unit is an internal accounting unit for declared profile stages; it is
 not an Idealab currency price. Obtain currency cost only from the approved
 provider billing source, and never copy an invoice, token, endpoint, or raw
 provider response into this repository.
+
+For this exact fixture, take the baseline after profile-selection preflight.
+All five source texts are shorter than the current 200-character LLM threshold,
+so a clean managed run should account for five successful file-embedding
+stages, five `llm:not_invoked` reservations released without consumption, and
+four successful search-query embeddings. The final aggregate should therefore
+increase consumed units by nine, leave no new reserved or indeterminate units,
+and the operator-controlled usage ledger should show the five LLM releases.
+The public aggregate alone cannot prove that stage split; until a safe
+stage-level report is retained, that part of live accounting acceptance remains
+**NOT VERIFIED**.
 
 The paid profile should be rejected or held when it has any leakage, cannot
 complete the agreed corpus/query run, lacks an explicit quality win on the

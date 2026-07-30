@@ -34,6 +34,8 @@ dependencies = [
     # HTTP
     "requests>=2.31",
     "httpx>=0.27",
+    # Cross-replica request replay protection
+    "redis>=5.0",
     # Numerics
     "numpy>=1.26",
     # Logging

@@ -60,6 +60,8 @@ func run() error {
 	if len(os.Args) < 2 {
 		return errors.New(
 			"usage: testdb <check|create|drop|version|assert-state|" +
+				"assert-workspace-ai-profile-table <absent|present>|" +
+				"assert-managed-ai-settlement-outbox <absent|present>|" +
 				"seed-file-enrichment|assert-file-preserved <down|up>|" +
 				"seed-v15-noncanonical-text|assert-v15-noncanonical-text|" +
 				"assert-canonical-model-text-values|" +
@@ -116,6 +118,22 @@ func run() error {
 			return errors.New("assert-state requires down or up")
 		}
 		return assertMigrationState(ctx, os.Args[2])
+	case "assert-workspace-ai-profile-table":
+		if len(os.Args) != 3 ||
+			(os.Args[2] != "absent" && os.Args[2] != "present") {
+			return errors.New(
+				"assert-workspace-ai-profile-table requires absent or present",
+			)
+		}
+		return assertWorkspaceAIProfileTable(ctx, os.Args[2] == "present")
+	case "assert-managed-ai-settlement-outbox":
+		if len(os.Args) != 3 ||
+			(os.Args[2] != "absent" && os.Args[2] != "present") {
+			return errors.New(
+				"assert-managed-ai-settlement-outbox requires absent or present",
+			)
+		}
+		return assertManagedAISettlementOutbox(ctx, os.Args[2] == "present")
 	case "seed-file-enrichment":
 		if len(os.Args) != 2 {
 			return errors.New("seed-file-enrichment takes no arguments")
@@ -162,6 +180,56 @@ func run() error {
 	default:
 		return fmt.Errorf("unknown command %q", os.Args[1])
 	}
+}
+
+func assertWorkspaceAIProfileTable(ctx context.Context, wantPresent bool) error {
+	conn, err := targetConnection(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close(ctx)
+
+	var profilePresent bool
+	if err := conn.QueryRow(
+		ctx,
+		`SELECT to_regclass('public.workspace_ai_profiles') IS NOT NULL`,
+	).Scan(&profilePresent); err != nil {
+		return fmt.Errorf("inspect workspace AI profile schema: %w", err)
+	}
+	if profilePresent != wantPresent {
+		return fmt.Errorf(
+			"workspace profile schema present: %t, want %t",
+			profilePresent,
+			wantPresent,
+		)
+	}
+	return nil
+}
+
+func assertManagedAISettlementOutbox(ctx context.Context, wantPresent bool) error {
+	conn, err := targetConnection(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close(ctx)
+
+	var present bool
+	if err := conn.QueryRow(
+		ctx,
+		`SELECT to_regclass(
+		    'public.managed_ai_stage_settlement_outbox'
+		) IS NOT NULL`,
+	).Scan(&present); err != nil {
+		return fmt.Errorf("inspect managed AI settlement outbox: %w", err)
+	}
+	if present != wantPresent {
+		return fmt.Errorf(
+			"managed AI settlement outbox present: %t, want %t",
+			present,
+			wantPresent,
+		)
+	}
+	return nil
 }
 
 func seedV15NonCanonicalText(ctx context.Context) error {
@@ -1408,6 +1476,7 @@ func assertMigrationState(ctx context.Context, state string) error {
 		canonicalSummary      bool
 		nonDisplayFunction    bool
 		workspaceAIProfiles   bool
+		managedAIOutbox       bool
 	)
 	err = conn.QueryRow(ctx, `
 SELECT
@@ -1490,7 +1559,8 @@ SELECT
        AND conrelid = 'public.files'::regclass
   ),
   to_regprocedure('public.mem_model_text_has_non_display_character(text)') IS NOT NULL,
-  to_regclass('public.workspace_ai_profiles') IS NOT NULL
+  to_regclass('public.workspace_ai_profiles') IS NOT NULL,
+  to_regclass('public.managed_ai_stage_settlement_outbox') IS NOT NULL
 `).Scan(
 		&rawKey,
 		&hashedKey,
@@ -1511,6 +1581,7 @@ SELECT
 		&canonicalSummary,
 		&nonDisplayFunction,
 		&workspaceAIProfiles,
+		&managedAIOutbox,
 	)
 	if err != nil {
 		return fmt.Errorf("inspect migration state: %w", err)
@@ -1537,7 +1608,8 @@ SELECT
 			!canonicalCaption &&
 			!canonicalSummary &&
 			!nonDisplayFunction &&
-			!workspaceAIProfiles
+			!workspaceAIProfiles &&
+			!managedAIOutbox
 	case "up":
 		valid = !rawKey &&
 			hashedKey &&
@@ -1557,11 +1629,12 @@ SELECT
 			canonicalCaption &&
 			canonicalSummary &&
 			nonDisplayFunction &&
-			workspaceAIProfiles
+			workspaceAIProfiles &&
+			managedAIOutbox
 	}
 	if !valid {
 		return fmt.Errorf(
-			"unexpected %s schema state: raw_key=%t hashed_key=%t replay_principal=%t old_file_index=%t hash_constraint=%t redact_constraint=%t receipt_constraint=%t replay_constraint=%t managed_entitlements=%t file_user_tags=%t file_source_metadata=%t file_processor_metadata=%t file_annotations=%t file_caption_constraint=%t file_summary_constraint=%t canonical_caption=%t canonical_summary=%t non_display_function=%t workspace_ai_profiles=%t",
+			"unexpected %s schema state: raw_key=%t hashed_key=%t replay_principal=%t old_file_index=%t hash_constraint=%t redact_constraint=%t receipt_constraint=%t replay_constraint=%t managed_entitlements=%t file_user_tags=%t file_source_metadata=%t file_processor_metadata=%t file_annotations=%t file_caption_constraint=%t file_summary_constraint=%t canonical_caption=%t canonical_summary=%t non_display_function=%t workspace_ai_profiles=%t managed_ai_outbox=%t",
 			state,
 			rawKey,
 			hashedKey,
@@ -1582,6 +1655,7 @@ SELECT
 			canonicalSummary,
 			nonDisplayFunction,
 			workspaceAIProfiles,
+			managedAIOutbox,
 		)
 	}
 	return nil

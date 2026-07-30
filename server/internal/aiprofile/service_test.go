@@ -26,6 +26,8 @@ type fakeSelectionStore struct {
 	corpusSpec  string
 	hasCorpus   bool
 	corpusErr   error
+	hasDerived  bool
+	derivedErr  error
 
 	saveCalls int
 	saved     []Selection
@@ -64,6 +66,18 @@ func (s *fakeSelectionStore) workspaceOwner(_ context.Context, _ uuid.UUID) (uui
 	return s.ownerID, nil
 }
 
+func (s *fakeSelectionStore) withProfileLock(
+	ctx context.Context,
+	_ uuid.UUID,
+	fn func(uuid.UUID, selectionSnapshotStore) error,
+) error {
+	ownerID, err := s.workspaceOwner(ctx, uuid.Nil)
+	if err != nil {
+		return err
+	}
+	return fn(ownerID, s)
+}
+
 func (s *fakeSelectionStore) hasIndexingInFlight(_ context.Context, _ uuid.UUID) (bool, error) {
 	return s.inFlight, s.inFlightErr
 }
@@ -73,6 +87,13 @@ func (s *fakeSelectionStore) textCorpusProvider(
 	_ uuid.UUID,
 ) (string, bool, error) {
 	return s.corpusSpec, s.hasCorpus, s.corpusErr
+}
+
+func (s *fakeSelectionStore) hasDerivedCorpus(
+	_ context.Context,
+	_ uuid.UUID,
+) (bool, error) {
+	return s.hasDerived, s.derivedErr
 }
 
 type fakeEmbeddingProbe struct {
@@ -176,32 +197,32 @@ func TestServiceSelectProbesAndPersistsAnImmutableSnapshot(t *testing.T) {
 	workspaceID, actorID := uuid.New(), uuid.New()
 	store := &fakeSelectionStore{ownerID: uuid.New()}
 	probe := &fakeEmbeddingProbe{dimension: textEmbeddingDimension}
-	service := newTestService(store, probe, IdealabQualityV1)
+	service := newTestService(store, probe, IdealabQualityV2)
 
-	selection, err := service.Select(context.Background(), workspaceID, actorID, IdealabQualityV1)
+	selection, err := service.Select(context.Background(), workspaceID, actorID, IdealabQualityV2)
 	if err != nil {
 		t.Fatalf("Select() error = %v", err)
 	}
-	if probe.calls != 1 || probe.spec != "openai:text-embedding-3-large" || probe.wantDim != textEmbeddingDimension {
+	if probe.calls != 1 || probe.spec != "idealab:text-embedding-3-large" || probe.wantDim != textEmbeddingDimension {
 		t.Fatalf("probe = %#v", probe)
 	}
 	usage := service.probeUsage.(*fakeManagedProbeUsage)
 	reservation := usage.reservation.(*fakeManagedProbeReservation)
 	if usage.calls != 1 || usage.workspaceID != workspaceID ||
-		usage.definition.ID != IdealabQualityV1 || reservation.finalizeCalls != 1 {
+		usage.definition.ID != IdealabQualityV2 || reservation.finalizeCalls != 1 {
 		t.Fatalf("managed probe usage = %#v reservation = %#v", usage, reservation)
 	}
 	if store.saveCalls != 1 || len(store.saved) != 1 {
 		t.Fatalf("save calls/results = %d/%d, want 1/1", store.saveCalls, len(store.saved))
 	}
-	if selection.WorkspaceID != workspaceID || selection.ProfileID != IdealabQualityV1 ||
+	if selection.WorkspaceID != workspaceID || selection.ProfileID != IdealabQualityV2 ||
 		selection.DataEgress != DataEgressManagedIdealab ||
 		selection.Embedding != (Stage{
 			Enabled:    true,
-			Provider:   "openai:text-embedding-3-large",
+			Provider:   "idealab:text-embedding-3-large",
 			Dimensions: textEmbeddingDimension,
 		}) ||
-		!selection.LLM.Enabled || selection.LLM.Provider != "openai:qwen3.7-max-2026-06-08" ||
+		!selection.LLM.Enabled || selection.LLM.Provider != "idealab:qwen3.7-max-2026-06-08" ||
 		selection.SelectedByUserID == nil || *selection.SelectedByUserID != actorID {
 		t.Fatalf("selection = %#v", selection)
 	}
@@ -222,10 +243,10 @@ func TestServiceSelectManagedProbeFailsClosedAndDoesNotDuplicateReplay(t *testin
 	t.Run("missing usage gate blocks before the paid probe", func(t *testing.T) {
 		store := &fakeSelectionStore{ownerID: ownerID}
 		probe := &fakeEmbeddingProbe{dimension: textEmbeddingDimension}
-		service := newTestService(store, probe, IdealabQualityV1)
+		service := newTestService(store, probe, IdealabQualityV2)
 		service.probeUsage = nil
 
-		_, err := service.Select(context.Background(), workspaceID, actorID, IdealabQualityV1)
+		_, err := service.Select(context.Background(), workspaceID, actorID, IdealabQualityV2)
 		if !errors.Is(err, ErrManagedUsageUnavailable) {
 			t.Fatalf("Select() error = %v, want ErrManagedUsageUnavailable", err)
 		}
@@ -237,12 +258,12 @@ func TestServiceSelectManagedProbeFailsClosedAndDoesNotDuplicateReplay(t *testin
 	t.Run("replayed successful preflight skips the worker call", func(t *testing.T) {
 		store := &fakeSelectionStore{ownerID: ownerID}
 		probe := &fakeEmbeddingProbe{dimension: textEmbeddingDimension}
-		service := newTestService(store, probe, IdealabQualityV1)
+		service := newTestService(store, probe, IdealabQualityV2)
 		service.probeUsage = &fakeManagedProbeUsage{
 			reservation: &fakeManagedProbeReservation{replay: true},
 		}
 
-		selection, err := service.Select(context.Background(), workspaceID, actorID, IdealabQualityV1)
+		selection, err := service.Select(context.Background(), workspaceID, actorID, IdealabQualityV2)
 		if err != nil || selection == nil {
 			t.Fatalf("Select() = %#v, %v", selection, err)
 		}
@@ -255,10 +276,10 @@ func TestServiceSelectManagedProbeFailsClosedAndDoesNotDuplicateReplay(t *testin
 		store := &fakeSelectionStore{ownerID: ownerID}
 		probe := &fakeEmbeddingProbe{dimension: textEmbeddingDimension - 1}
 		reservation := &fakeManagedProbeReservation{}
-		service := newTestService(store, probe, IdealabQualityV1)
+		service := newTestService(store, probe, IdealabQualityV2)
 		service.probeUsage = &fakeManagedProbeUsage{reservation: reservation}
 
-		_, err := service.Select(context.Background(), workspaceID, actorID, IdealabQualityV1)
+		_, err := service.Select(context.Background(), workspaceID, actorID, IdealabQualityV2)
 		if !errors.Is(err, ErrEmbeddingDimensionMismatch) {
 			t.Fatalf("Select() error = %v, want ErrEmbeddingDimensionMismatch", err)
 		}
@@ -311,9 +332,9 @@ func TestServiceSelectBlocksUnsafeCorpusSwitchBeforeProbeOrWrite(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			probe := &fakeEmbeddingProbe{dimension: textEmbeddingDimension}
-			service := newTestService(test.store, probe, IdealabQualityV1)
+			service := newTestService(test.store, probe, IdealabQualityV2)
 
-			_, err := service.Select(context.Background(), workspaceID, actorID, IdealabQualityV1)
+			_, err := service.Select(context.Background(), workspaceID, actorID, IdealabQualityV2)
 			if !errors.Is(err, test.want) {
 				t.Fatalf("Select() error = %v, want %v", err, test.want)
 			}
@@ -327,36 +348,122 @@ func TestServiceSelectBlocksUnsafeCorpusSwitchBeforeProbeOrWrite(t *testing.T) {
 	}
 }
 
-func TestServiceSelectUsesResourceOwnerSwitchLock(t *testing.T) {
+func TestServiceSelectRequiresExactPipelineIdentityForExistingCorpus(t *testing.T) {
+	workspaceID, actorID, ownerID := uuid.New(), uuid.New(), uuid.New()
+	legacy, ok := Find(LocalFastV1)
+	if !ok {
+		t.Fatal("legacy local profile missing")
+	}
+	current, ok := Find(LocalFastV2)
+	if !ok {
+		t.Fatal("current local profile missing")
+	}
+	legacySelection := selectionFromDefinition(
+		legacy,
+		workspaceID,
+		actorID,
+		time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC),
+	)
+	currentSelection := selectionFromDefinition(
+		current,
+		workspaceID,
+		actorID,
+		time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC),
+	)
+
+	tests := []struct {
+		name       string
+		current    *Selection
+		hasCorpus  bool
+		wantErr    error
+		wantSaves  int
+		wantProbes int
+	}{
+		{
+			name:       "V1 corpus cannot be reinterpreted as V2",
+			current:    &legacySelection,
+			hasCorpus:  true,
+			wantErr:    ErrProfileCorpusMismatch,
+			wantSaves:  0,
+			wantProbes: 0,
+		},
+		{
+			name:       "empty workspace may move from V1 snapshot to V2",
+			current:    &legacySelection,
+			hasCorpus:  false,
+			wantSaves:  1,
+			wantProbes: 1,
+		},
+		{
+			name:       "exact V2 corpus may be reselected",
+			current:    &currentSelection,
+			hasCorpus:  true,
+			wantSaves:  1,
+			wantProbes: 1,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &fakeSelectionStore{
+				ownerID:    ownerID,
+				current:    test.current,
+				hasCorpus:  test.hasCorpus,
+				corpusSpec: current.Embedding.Provider,
+			}
+			probe := &fakeEmbeddingProbe{dimension: textEmbeddingDimension}
+			service := newTestService(store, probe, LocalFastV2)
+			_, err := service.Select(
+				context.Background(),
+				workspaceID,
+				actorID,
+				LocalFastV2,
+			)
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("Select() error = %v, want %v", err, test.wantErr)
+			}
+			if store.saveCalls != test.wantSaves || probe.calls != test.wantProbes {
+				t.Fatalf(
+					"save/probe calls = %d/%d, want %d/%d",
+					store.saveCalls,
+					probe.calls,
+					test.wantSaves,
+					test.wantProbes,
+				)
+			}
+		})
+	}
+}
+
+func TestServiceSelectDoesNotDependOnProcessLocalIndexLock(t *testing.T) {
 	workspaceID, actorID, ownerID := uuid.New(), uuid.New(), uuid.New()
 	store := &fakeSelectionStore{ownerID: ownerID}
 	probe := &signalingEmbeddingProbe{
 		dimension: textEmbeddingDimension,
 		entered:   make(chan struct{}),
 	}
-	service := newTestService(store, probe, IdealabQualityV1)
+	service := newTestService(store, probe, IdealabQualityV2)
 
 	unlockIndexing := indexmeta.LockIndexing(ownerID)
+	defer unlockIndexing()
 	result := make(chan error, 1)
 	go func() {
-		_, err := service.Select(context.Background(), workspaceID, actorID, IdealabQualityV1)
+		_, err := service.Select(context.Background(), workspaceID, actorID, IdealabQualityV2)
 		result <- err
 	}()
 
 	select {
 	case <-probe.entered:
-		t.Fatal("Select reached the probe while owner indexing lock was held")
-	case <-time.After(25 * time.Millisecond):
+	case <-time.After(time.Second):
+		t.Fatal("Select still depended on the process-local indexing lock")
 	}
 
-	unlockIndexing()
 	select {
 	case err := <-result:
 		if err != nil {
-			t.Fatalf("Select() error after unlocking indexing: %v", err)
+			t.Fatalf("Select() error while local indexing lock was held: %v", err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("Select did not continue after the owner indexing lock was released")
+		t.Fatal("Select did not finish through the store coordination boundary")
 	}
 	if store.saveCalls != 1 {
 		t.Fatalf("save calls = %d, want 1", store.saveCalls)
@@ -369,7 +476,7 @@ func TestServiceSelectFailsClosed(t *testing.T) {
 
 	t.Run("nil store is rejected before probe", func(t *testing.T) {
 		probe := &fakeEmbeddingProbe{dimension: textEmbeddingDimension}
-		_, err := New(nil, probe).Select(context.Background(), workspaceID, actorID, IdealabQualityV1)
+		_, err := New(nil, probe).Select(context.Background(), workspaceID, actorID, IdealabQualityV2)
 		if !errors.Is(err, ErrStoreUnavailable) {
 			t.Fatalf("Select() error = %v, want ErrStoreUnavailable", err)
 		}
@@ -381,8 +488,8 @@ func TestServiceSelectFailsClosed(t *testing.T) {
 	t.Run("workspace owner lookup fails before probe", func(t *testing.T) {
 		store := &fakeSelectionStore{ownerErr: ErrWorkspaceNotFound}
 		probe := &fakeEmbeddingProbe{dimension: textEmbeddingDimension}
-		_, err := newTestService(store, probe, IdealabQualityV1).Select(
-			context.Background(), workspaceID, actorID, IdealabQualityV1,
+		_, err := newTestService(store, probe, IdealabQualityV2).Select(
+			context.Background(), workspaceID, actorID, IdealabQualityV2,
 		)
 		if !errors.Is(err, ErrWorkspaceNotFound) {
 			t.Fatalf("Select() error = %v, want ErrWorkspaceNotFound", err)
@@ -394,8 +501,8 @@ func TestServiceSelectFailsClosed(t *testing.T) {
 
 	t.Run("nil probe", func(t *testing.T) {
 		store := &fakeSelectionStore{ownerID: ownerID}
-		_, err := newTestService(store, nil, IdealabQualityV1).Select(
-			context.Background(), workspaceID, actorID, IdealabQualityV1,
+		_, err := newTestService(store, nil, IdealabQualityV2).Select(
+			context.Background(), workspaceID, actorID, IdealabQualityV2,
 		)
 		if !errors.Is(err, ErrProbeUnavailable) {
 			t.Fatalf("Select() error = %v, want ErrProbeUnavailable", err)
@@ -408,8 +515,8 @@ func TestServiceSelectFailsClosed(t *testing.T) {
 	t.Run("dimension mismatch", func(t *testing.T) {
 		store := &fakeSelectionStore{ownerID: ownerID}
 		probe := &fakeEmbeddingProbe{dimension: textEmbeddingDimension - 1}
-		_, err := newTestService(store, probe, IdealabQualityV1).Select(
-			context.Background(), workspaceID, actorID, IdealabQualityV1,
+		_, err := newTestService(store, probe, IdealabQualityV2).Select(
+			context.Background(), workspaceID, actorID, IdealabQualityV2,
 		)
 		if !errors.Is(err, ErrEmbeddingDimensionMismatch) {
 			t.Fatalf("Select() error = %v, want ErrEmbeddingDimensionMismatch", err)
@@ -422,8 +529,8 @@ func TestServiceSelectFailsClosed(t *testing.T) {
 	t.Run("probe error is redacted", func(t *testing.T) {
 		store := &fakeSelectionStore{ownerID: ownerID}
 		probe := &fakeEmbeddingProbe{err: errors.New(secret)}
-		_, err := newTestService(store, probe, IdealabQualityV1).Select(
-			context.Background(), workspaceID, actorID, IdealabQualityV1,
+		_, err := newTestService(store, probe, IdealabQualityV2).Select(
+			context.Background(), workspaceID, actorID, IdealabQualityV2,
 		)
 		if !errors.Is(err, ErrEmbeddingProbeFailed) {
 			t.Fatalf("Select() error = %v, want ErrEmbeddingProbeFailed", err)
@@ -440,7 +547,7 @@ func TestServiceSelectFailsClosed(t *testing.T) {
 		store := &fakeSelectionStore{ownerID: ownerID}
 		probe := &fakeEmbeddingProbe{dimension: textEmbeddingDimension}
 		service := newTestService(store, probe, LocalFastV1)
-		if _, err := service.Select(context.Background(), workspaceID, actorID, IdealabQualityV1); !errors.Is(err, ErrProfileDisabled) {
+		if _, err := service.Select(context.Background(), workspaceID, actorID, IdealabQualityV2); !errors.Is(err, ErrProfileDisabled) {
 			t.Fatalf("disabled Select() error = %v, want ErrProfileDisabled", err)
 		}
 		if _, err := service.Select(context.Background(), workspaceID, actorID, "does-not-exist"); !errors.Is(err, ErrUnknownProfile) {
@@ -470,24 +577,21 @@ func TestServiceSelectFailsClosed(t *testing.T) {
 func TestServiceListGetAndResolveReturnDefensiveCopies(t *testing.T) {
 	workspaceID, ownerID := uuid.New(), uuid.New()
 	actorID := uuid.New()
-	snapshot := Selection{
-		WorkspaceID:      workspaceID,
-		ProfileID:        LocalFastV1,
-		ProfileRevision:  "2026-07-29",
-		PipelineRevision: "file-enrichment-v1",
-		Embedding: Stage{
-			Enabled:    true,
-			Provider:   "ollama:qwen3-embedding:0.6b",
-			Dimensions: textEmbeddingDimension,
-		},
-		AllowedMIMETypes: []string{"text/*"},
-		SelectedByUserID: &actorID,
+	definition, ok := Find(LocalFastV1)
+	if !ok {
+		t.Fatalf("Find(%q) failed", LocalFastV1)
 	}
+	snapshot := selectionFromDefinition(
+		definition,
+		workspaceID,
+		actorID,
+		time.Date(2026, 7, 29, 12, 34, 56, 0, time.UTC),
+	)
 	store := &fakeSelectionStore{current: &snapshot, resolved: &snapshot}
-	service := newTestService(store, nil, LocalFastV1)
+	service := newTestService(store, nil, LocalFastV1, LocalFastV2)
 
 	profiles := service.List()
-	if len(profiles) != 1 || profiles[0].ID != LocalFastV1 {
+	if len(profiles) != 1 || profiles[0].ID != LocalFastV2 {
 		t.Fatalf("List() = %#v", profiles)
 	}
 	profiles[0].AllowedMIMETypes[0] = "application/mutated"
@@ -511,5 +615,98 @@ func TestServiceListGetAndResolveReturnDefensiveCopies(t *testing.T) {
 	}
 	if resolved.WorkspaceID != workspaceID || resolved.ProfileID != LocalFastV1 {
 		t.Fatalf("ResolveForOwner() = %#v", resolved)
+	}
+}
+
+func TestServiceDeprecatedProfilesResolveButCannotBeSelected(t *testing.T) {
+	workspaceID, ownerID, actorID := uuid.New(), uuid.New(), uuid.New()
+	for _, profileID := range []string{LocalFastV1, IdealabQualityV1} {
+		t.Run(profileID, func(t *testing.T) {
+			definition, ok := Find(profileID)
+			if !ok {
+				t.Fatalf("Find(%q) failed", profileID)
+			}
+			snapshot := selectionFromDefinition(
+				definition,
+				workspaceID,
+				actorID,
+				time.Date(2026, 7, 29, 12, 34, 56, 0, time.UTC),
+			)
+			store := &fakeSelectionStore{
+				ownerID:  ownerID,
+				current:  &snapshot,
+				resolved: &snapshot,
+			}
+			service := newTestService(store, nil, profileID)
+
+			if got := service.List(); len(got) != 0 {
+				t.Fatalf("List() exposed deprecated profile: %#v", got)
+			}
+			if _, err := service.Get(context.Background(), workspaceID); err != nil {
+				t.Fatalf("Get() rejected exact persisted V1: %v", err)
+			}
+			if _, err := service.ResolveForOwner(context.Background(), ownerID); err != nil {
+				t.Fatalf("ResolveForOwner() rejected exact persisted V1: %v", err)
+			}
+			if _, err := service.Select(
+				context.Background(),
+				workspaceID,
+				actorID,
+				profileID,
+			); !errors.Is(err, ErrProfileDisabled) {
+				t.Fatalf("Select() error = %v, want ErrProfileDisabled", err)
+			}
+		})
+	}
+}
+
+func TestServiceGetAndResolveRevalidatePersistedSelections(t *testing.T) {
+	workspaceID, ownerID, actorID := uuid.New(), uuid.New(), uuid.New()
+	at := time.Date(2026, 7, 29, 12, 34, 56, 0, time.UTC)
+
+	quality, ok := Find(IdealabQualityV2)
+	if !ok {
+		t.Fatalf("Find(%q) failed", IdealabQualityV2)
+	}
+	disabled := selectionFromDefinition(quality, workspaceID, actorID, at)
+
+	local, ok := Find(LocalFastV1)
+	if !ok {
+		t.Fatalf("Find(%q) failed", LocalFastV1)
+	}
+	invalid := selectionFromDefinition(local, workspaceID, actorID, at)
+	invalid.Embedding.Provider = "ollama:unapproved-model"
+
+	tests := []struct {
+		name      string
+		selection Selection
+		wantErr   error
+	}{
+		{
+			name:      "current allowlist disables persisted profile",
+			selection: disabled,
+			wantErr:   ErrProfileDisabled,
+		},
+		{
+			name:      "catalog mismatch invalidates persisted profile",
+			selection: invalid,
+			wantErr:   ErrInvalidSelection,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &fakeSelectionStore{
+				current:  &test.selection,
+				resolved: &test.selection,
+			}
+			service := newTestService(store, nil, LocalFastV1)
+
+			if _, err := service.Get(context.Background(), workspaceID); !errors.Is(err, test.wantErr) {
+				t.Fatalf("Get() error = %v, want %v", err, test.wantErr)
+			}
+			if _, err := service.ResolveForOwner(context.Background(), ownerID); !errors.Is(err, test.wantErr) {
+				t.Fatalf("ResolveForOwner() error = %v, want %v", err, test.wantErr)
+			}
+		})
 	}
 }

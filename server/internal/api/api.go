@@ -138,12 +138,16 @@ type Server struct {
 	WorkspaceTransferGate    chan struct{}
 	WorkspaceTransferTmpDir  string
 	DeploymentMode           string
-	ManagedEmbeddingProvider string
-	Entitlements             EntitlementService
-	RegistrationMode         string
-	SessionTTL               time.Duration
-	CORSOrigins              []string // allowed browser origins; empty disables CORS
-	Log                      *slog.Logger
+	// ManagedEmbeddingProvider is retained for compatibility with focused
+	// tests and legacy wiring. Production also supplies the complete exact
+	// generation allow-set in ManagedEmbeddingProviders.
+	ManagedEmbeddingProvider  string
+	ManagedEmbeddingProviders []string
+	Entitlements              EntitlementService
+	RegistrationMode          string
+	SessionTTL                time.Duration
+	CORSOrigins               []string // allowed browser origins; empty disables CORS
+	Log                       *slog.Logger
 }
 
 // Router returns a chi.Router with all v1 routes wired.

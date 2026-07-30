@@ -64,9 +64,13 @@ so the stack coexists with other local Redis/MinIO instances):
 | `MEM_S3_REGION` | `us-east-1` | Region tag |
 | `MEM_S3_USE_SSL` | derived from endpoint scheme | force TLS |
 | `MEM_WORKER_GRPC` | `localhost:50051` | Worker dial target (`make worker` listen addr) |
+| `MEM_WORKER_AUTH_KEY_ID` | — | HMAC key identifier; required in SaaS |
+| `MEM_WORKER_AUTH_KEY_B64` | — | standard base64 of exactly 32 random bytes; required in SaaS and shared with Worker |
 | `MEM_DEPLOYMENT_MODE` | `private` | `private` or `saas`; managed quality profiles are SaaS-only |
-| `MEM_AI_PROFILES` | `local-fast-v1` | Comma-separated server allowlist of workspace profile IDs; enable `idealab-quality-v1` explicitly |
-| `MEM_MANAGED_EMBEDDING_PROVIDER` | — | Required in SaaS; must be exactly `openai:text-embedding-3-large` when `idealab-quality-v1` is enabled |
+| `MEM_AI_PROFILES` | local V1 compatibility + selectable `local-fast-v2` | Comma-separated runtime allowlist; deprecated V1 is hidden from new selection; enable `idealab-quality-v2` explicitly |
+| `MEM_MANAGED_EMBEDDING_PROVIDER` | — | Required in SaaS; primary exact compiled V1/V2 embedding provider; the full exact allow-set is derived from enabled profiles |
+| `MEM_OPENAI_MANAGED_BINDING` | `false` | Must be `true` only for deprecated hosted `idealab-quality-v1`; distinguishes it from private OpenAI BYOM |
+| `MEM_MANAGED_EMBEDDING_RESERVATION_TTL` | `10m` | Managed reservation lease; SaaS values below `6m` are rejected because indexing may run for five minutes |
 | `MEM_SESSION_TTL` | `24h` | Login session token TTL |
 | `MEM_LOG_LEVEL` | `info` | `debug|info|warn|error` |
 
@@ -74,23 +78,43 @@ so the stack coexists with other local Redis/MinIO instances):
 
 A workspace profile is a server-owned, fixed AI pipeline; the client selects a
 profile ID and cannot supply a provider URL, model name, prompt, or credential.
-The default local allowlist contains `local-fast-v1`, which uses
+The default local allowlist retains hidden `local-fast-v1` compatibility and
+exposes `local-fast-v2`, which uses
 `ollama:qwen3-embedding:0.6b` at 768 dimensions. Install that Ollama artifact
 explicitly before selection with `mem model install qwen3-embedding-0.6b-ollama`.
 That curated installer checks hardware/disk compatibility, the pinned artifact
 digest, and a 768-dimensional output. Selection
 performs a Worker-side 768-dimensional probe but never downloads a model or
-falls back to a global default. CLIP visual support is optional and separately
-provisioned; it is not part of the profile activation probe.
+falls back to a global default. Visual, LLM, VLM, ASR, and rerank stages remain
+disabled in the local profile until each has an explicit offline installation
+and execution contract.
 
-`idealab-quality-v1` is SaaS-only. Its deployment must explicitly enable the
-profile with `MEM_AI_PROFILES=local-fast-v1,idealab-quality-v1`, use the exact
-managed embedding spec above, and configure the Worker with the Idealab
-OpenAI-compatible endpoint and a runtime-injected key. It is a pinned routing
+`idealab-quality-v2` is SaaS-only. An upgrade deployment should explicitly
+enable the profile with
+`MEM_AI_PROFILES=local-fast-v1,local-fast-v2,idealab-quality-v2`, use the exact
+managed embedding spec above, and configure the Worker with
+`IDEALAB_BASE_URL` plus a runtime-injected `IDEALAB_API_KEY`. Generic
+`OPENAI_*` settings cannot satisfy this binding. It is a pinned routing
 contract, not a benchmark claim. Profile changes require a fresh versioned
 index generation and rebuild; vectors from distinct providers are never mixed
 in place. See [managed profile configuration](../docs/MANAGED_EMBEDDINGS.md)
 and [local profile activation](../docs/LOCAL_EMBEDDING_MODELS.md).
+
+SaaS additionally requires the same 32-byte HMAC key on memd and Worker plus
+Worker-wide shared Redis replay protection. memd signs every Process request,
+checks fetched-content SHA before managed egress through the Worker, and
+verifies a response MAC before persistence/accounting. Startup performs a
+signed exact-provider readiness challenge. HMAC is not encryption: keep Worker
+on a private restricted network and prefer TLS/mTLS. Exact V1 snapshots remain
+only for persisted-selection compatibility and are never listed or newly
+selected.
+
+If persisted `idealab-quality-v1` workspaces also exist, keep that ID in the
+allowlist, set `MEM_OPENAI_MANAGED_BINDING=true`, and mount its explicit
+`OPENAI_BASE_URL`/`OPENAI_API_KEY` Worker binding. memd supports both managed
+generations in one process, derives an exact two-provider allow-set, and runs a
+signed readiness challenge for each. V1 remains hidden and non-selectable; an
+existing V1 corpus cannot switch to V2 without a versioned full rebuild.
 
 ## Bootstrap a dev user
 
@@ -211,7 +235,7 @@ evidence returns `502/context_unavailable`.
 | `mem auth token revoke <id>` | Revoke |
 | `mem profile list` | List the server-enabled workspace AI profile IDs |
 | `mem profile status` | Show the selected workspace AI profile snapshot |
-| `mem profile select local-fast-v1` | Select an allowlisted profile; the server probes its exact embedding contract |
+| `mem profile select local-fast-v2` | Select an allowlisted profile; the server probes its exact embedding contract |
 | `mem put <path>` | Upload a single file (auto MIME) |
 | `mem put <path> --to /Photos/2012` | Upload into a virtual folder (mkdir -p) |
 | `mem put <dir> --recursive [--to /Albums]` | Upload every file under dir, mirroring the on-disk tree into `--to` |

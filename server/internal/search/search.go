@@ -418,6 +418,15 @@ func (s *Service) searchText(ctx context.Context, q Query, text string) ([]Hit, 
 	if err != nil {
 		return nil, fmt.Errorf("resolve text embedding space: %w", err)
 	}
+	return s.searchTextWithRoute(ctx, q, text, route)
+}
+
+func (s *Service) searchTextWithRoute(
+	ctx context.Context,
+	q Query,
+	text string,
+	route embeddingRoute,
+) ([]Hit, error) {
 	// Managed entitlement establishes this value before provider invocation.
 	// Treat it as an assertion over the server-resolved route, not an override
 	// that can strip a selected profile's explicit dimensions/stage settings.
@@ -429,7 +438,10 @@ func (s *Service) searchText(ctx context.Context, q Query, text string) ([]Hit, 
 	}
 	embCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	var vec []float32
+	var (
+		vec []float32
+		err error
+	)
 	if route.profile != nil {
 		profileWorker, ok := s.worker.(profileTextEmbedder)
 		if !ok {
@@ -470,13 +482,18 @@ func (s *Service) searchVisual(ctx context.Context, q Query, text string) ([]Hit
 	if err != nil {
 		return nil, fmt.Errorf("resolve visual embedding space: %w", err)
 	}
-	visualSpec := route.visualSpec
-	if visualSpec == "" {
-		// Visual embedding provider: SPEC §9.4 default is "clip:ViT-B-32".
-		// We force CLIP for legacy queries here — using e.g.
-		// nomic-embed-text would land in a different latent space than the
-		// indexed images, producing meaningless results.
-		visualSpec = "clip:ViT-B-32"
+	return s.searchVisualWithRoute(ctx, q, text, route)
+}
+
+func (s *Service) searchVisualWithRoute(
+	ctx context.Context,
+	q Query,
+	text string,
+	route embeddingRoute,
+) ([]Hit, error) {
+	visualSpec, err := visualProviderForRoute(route)
+	if err != nil {
+		return nil, err
 	}
 	embCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
@@ -495,6 +512,17 @@ func (s *Service) searchVisual(ctx context.Context, q Query, text string) ([]Hit
 	return s.runVisualANN(ctx, q, vec)
 }
 
+func visualProviderForRoute(route embeddingRoute) (string, error) {
+	if route.visualSpec != "" {
+		return route.visualSpec, nil
+	}
+	if route.profile != nil {
+		return "", fmt.Errorf("workspace AI profile visual embedding is disabled")
+	}
+	// Legacy visual search preserves the historical explicit CLIP provider.
+	return "clip:ViT-B-32", nil
+}
+
 // searchAuto runs text + visual in parallel, merges by file_id keeping the
 // best-scoring row per file, re-sorts by score.
 type autoResult struct {
@@ -503,15 +531,53 @@ type autoResult struct {
 }
 
 func (s *Service) searchAuto(ctx context.Context, q Query, text string) ([]Hit, error) {
+	route, err := s.embeddingRouteForUser(ctx, q.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve auto embedding spaces: %w", err)
+	}
+	return s.searchAutoWithRoute(ctx, q, text, route)
+}
+
+func (s *Service) searchAutoWithRoute(
+	ctx context.Context,
+	q Query,
+	text string,
+	route embeddingRoute,
+) ([]Hit, error) {
+	return s.runAutoSearch(
+		q,
+		route,
+		func() ([]Hit, error) {
+			return s.searchTextWithRoute(ctx, q, text, route)
+		},
+		func() ([]Hit, error) {
+			return s.searchVisualWithRoute(ctx, q, text, route)
+		},
+	)
+}
+
+func (s *Service) runAutoSearch(
+	q Query,
+	route embeddingRoute,
+	textSearch func() ([]Hit, error),
+	visualSearch func() ([]Hit, error),
+) ([]Hit, error) {
+	// A selected text-only profile deliberately has no visual provider. Auto
+	// therefore means text-only for that workspace: do not invoke a disabled
+	// stage, and preserve a successful empty text result as "no matches".
+	if route.profile != nil && route.visualSpec == "" {
+		return textSearch()
+	}
+
 	textCh := make(chan autoResult, 1)
 	visualCh := make(chan autoResult, 1)
 
 	go func() {
-		hits, err := s.searchText(ctx, q, text)
+		hits, err := textSearch()
 		textCh <- autoResult{hits, err}
 	}()
 	go func() {
-		hits, err := s.searchVisual(ctx, q, text)
+		hits, err := visualSearch()
 		visualCh <- autoResult{hits, err}
 	}()
 	tr := <-textCh
@@ -850,8 +916,9 @@ func searchRouteFromAIProfile(selection *aiprofile.Selection) (embeddingRoute, e
 		selection.Embedding.Dimensions != textEmbeddingSchemaDim {
 		return embeddingRoute{}, fmt.Errorf("workspace AI profile has an invalid text embedding stage")
 	}
-	if !selection.VisualEmbedding.Enabled || selection.VisualEmbedding.Provider == "" ||
-		selection.VisualEmbedding.Dimensions != visualEmbeddingSchemaDim {
+	if selection.VisualEmbedding.Enabled &&
+		(selection.VisualEmbedding.Provider == "" ||
+			selection.VisualEmbedding.Dimensions != visualEmbeddingSchemaDim) {
 		return embeddingRoute{}, fmt.Errorf("workspace AI profile has an invalid visual embedding stage")
 	}
 	profile := &workerclient.AIProfileOptions{
@@ -859,11 +926,14 @@ func searchRouteFromAIProfile(selection *aiprofile.Selection) (embeddingRoute, e
 		ID:               selection.ProfileID,
 		Revision:         selection.ProfileRevision,
 		PipelineRevision: selection.PipelineRevision,
+		DataEgress:       selection.DataEgress,
 		Embedding: workerclient.ProviderStage{
 			Enabled: true, Provider: selection.Embedding.Provider, Dimensions: selection.Embedding.Dimensions,
 		},
 		VisualEmbedding: workerclient.ProviderStage{
-			Enabled: true, Provider: selection.VisualEmbedding.Provider, Dimensions: selection.VisualEmbedding.Dimensions,
+			Enabled:    selection.VisualEmbedding.Enabled,
+			Provider:   selection.VisualEmbedding.Provider,
+			Dimensions: selection.VisualEmbedding.Dimensions,
 		},
 		LLM:    workerclient.ProviderStage{Enabled: false},
 		VLM:    workerclient.ProviderStage{Enabled: false},

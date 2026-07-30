@@ -16,14 +16,19 @@ import (
 )
 
 type fakeProcessorServiceClient struct {
-	process func(context.Context, *workerpb.ProcessRequest) (*workerpb.ProcessResponse, error)
+	process            func(context.Context, *workerpb.ProcessRequest) (*workerpb.ProcessResponse, error)
+	processWithOptions func(context.Context, *workerpb.ProcessRequest, ...grpc.CallOption) (*workerpb.ProcessResponse, error)
+	health             func(context.Context, *workerpb.HealthCheckRequest, ...grpc.CallOption) (*workerpb.HealthCheckResponse, error)
 }
 
 func (f *fakeProcessorServiceClient) Process(
 	ctx context.Context,
 	req *workerpb.ProcessRequest,
-	_ ...grpc.CallOption,
+	options ...grpc.CallOption,
 ) (*workerpb.ProcessResponse, error) {
+	if f.processWithOptions != nil {
+		return f.processWithOptions(ctx, req, options...)
+	}
 	if f.process == nil {
 		return nil, errors.New("unexpected Process call")
 	}
@@ -38,11 +43,14 @@ func (*fakeProcessorServiceClient) Chat(
 	return nil, errors.New("unexpected Chat call")
 }
 
-func (*fakeProcessorServiceClient) HealthCheck(
-	context.Context,
-	*workerpb.HealthCheckRequest,
-	...grpc.CallOption,
+func (f *fakeProcessorServiceClient) HealthCheck(
+	ctx context.Context,
+	request *workerpb.HealthCheckRequest,
+	options ...grpc.CallOption,
 ) (*workerpb.HealthCheckResponse, error) {
+	if f.health != nil {
+		return f.health(ctx, request, options...)
+	}
 	return nil, errors.New("unexpected HealthCheck call")
 }
 
@@ -78,7 +86,7 @@ func TestProbeVLMSendsImageAndProbeOptions(t *testing.T) {
 		t.Fatal("worker Process was not called")
 	}
 	if gotReq.FileId != "provider-probe" || gotReq.Mime != "image/png" ||
-		gotReq.Name != "provider-probe.png" {
+		gotReq.Name != "provider-probe.png" || gotReq.Sha256 == "" {
 		t.Fatalf("unexpected request metadata: %#v", gotReq)
 	}
 
@@ -104,6 +112,9 @@ func TestProbeVLMSendsImageAndProbeOptions(t *testing.T) {
 	}
 	if cfg.Width != 1 || cfg.Height != 1 {
 		t.Fatalf("probe image size = %dx%d, want 1x1", cfg.Width, cfg.Height)
+	}
+	if gotReq.Sha256 != contentSHA256(raw) {
+		t.Fatalf("probe content SHA = %q, want fetched image digest", gotReq.Sha256)
 	}
 }
 
@@ -131,9 +142,117 @@ func TestProbeVLMRequiresNonEmptyCaption(t *testing.T) {
 }
 
 func TestBuildVLMProbeRequestRejectsEmptySpec(t *testing.T) {
-	if _, err := buildVLMProbeRequest(" \t"); err == nil {
+	if _, err := buildVLMProbeRequest(" \t", false); err == nil {
 		t.Fatal("empty VLM spec was accepted")
 	}
+}
+
+func TestLegacyIdealabProviderIsRejectedBeforeWorkerCall(t *testing.T) {
+	calls := 0
+	client := &Client{
+		addr: "test-worker",
+		conn: &grpc.ClientConn{},
+		stub: &fakeProcessorServiceClient{process: func(
+			context.Context,
+			*workerpb.ProcessRequest,
+		) (*workerpb.ProcessResponse, error) {
+			calls++
+			return &workerpb.ProcessResponse{}, nil
+		}},
+		dialed: true,
+	}
+	if _, err := client.EmbedTextWith(
+		context.Background(),
+		"query",
+		"idealab:text-embedding-3-large",
+	); err == nil {
+		t.Fatal("legacy query accepted the platform Idealab namespace")
+	}
+	if _, err := client.ProbeVLM(
+		context.Background(),
+		"idealab:qwen3.7-max-2026-06-08",
+	); err == nil {
+		t.Fatal("legacy VLM probe accepted the platform Idealab namespace")
+	}
+	if _, err := client.Index(context.Background(), FileMeta{
+		EmbeddingProvider: "idealab:text-embedding-3-large",
+	}); err == nil {
+		t.Fatal("legacy indexing accepted the platform Idealab namespace")
+	}
+	if calls != 0 {
+		t.Fatalf("rejected managed legacy paths made %d Worker calls", calls)
+	}
+}
+
+func TestLegacyOpenAIProviderIsRejectedOnlyForManagedBinding(t *testing.T) {
+	newClient := func(managed bool, calls *int) *Client {
+		client := &Client{
+			addr: "test-worker",
+			conn: &grpc.ClientConn{},
+			stub: &fakeProcessorServiceClient{process: func(
+				context.Context,
+				*workerpb.ProcessRequest,
+			) (*workerpb.ProcessResponse, error) {
+				*calls++
+				return &workerpb.ProcessResponse{
+					Status:  workerpb.ProcessStatus_STATUS_OK,
+					Caption: "private BYOM response",
+					Embeddings: map[string]*workerpb.Embedding{
+						"text": {
+							Provider: "openai:private-model",
+							Rows: []*workerpb.EmbeddingRow{{
+								Values: []float32{1},
+							}},
+						},
+					},
+				}, nil
+			}},
+			dialed: true,
+		}
+		WithManagedOpenAIBinding(managed)(client)
+		return client
+	}
+
+	t.Run("managed binding rejects vendor-wide legacy paths", func(t *testing.T) {
+		calls := 0
+		client := newClient(true, &calls)
+		if _, err := client.EmbedTextWith(
+			context.Background(),
+			"query",
+			"openai:private-model",
+		); err == nil {
+			t.Fatal("legacy query accepted the managed OPENAI_* binding")
+		}
+		if _, err := client.ProbeVLM(
+			context.Background(),
+			"openai:arbitrary-vlm",
+		); err == nil {
+			t.Fatal("legacy VLM probe accepted the managed OPENAI_* binding")
+		}
+		if _, err := client.Index(context.Background(), FileMeta{
+			LLMProvider: "openai:qwen3.7-max-2026-06-08",
+		}); err == nil {
+			t.Fatal("legacy indexing accepted the managed OPENAI_* binding")
+		}
+		if calls != 0 {
+			t.Fatalf("rejected managed OpenAI paths made %d Worker calls", calls)
+		}
+	})
+
+	t.Run("private BYOM remains compatible", func(t *testing.T) {
+		calls := 0
+		client := newClient(false, &calls)
+		if _, err := client.EmbedTextWith(
+			context.Background(),
+			"query",
+			"openai:private-model",
+		); err != nil {
+			t.Fatalf("private OpenAI BYOM query was rejected: %v", err)
+		}
+		if calls != 1 {
+			t.Fatalf("private OpenAI BYOM Worker calls = %d, want 1", calls)
+		}
+	})
 }
 
 func TestBuildOptionsJSONProfileIsAuthoritativeAndCredentialFree(t *testing.T) {
@@ -146,14 +265,15 @@ func TestBuildOptionsJSONProfileIsAuthoritativeAndCredentialFree(t *testing.T) {
 			ID:               "idealab-quality-v1",
 			Revision:         "2026-07-29",
 			PipelineRevision: "enrichment-v1",
+			DataEgress:       "managed_idealab",
 			Embedding: ProviderStage{
-				Enabled: true, Provider: "openai:text-embedding-3-large", Dimensions: 768,
+				Enabled: true, Provider: "idealab:text-embedding-3-large", Dimensions: 768,
 			},
 			VisualEmbedding: ProviderStage{
 				Enabled: true, Provider: "clip:ViT-B-32", Dimensions: 512,
 			},
-			LLM:    ProviderStage{Enabled: true, Provider: "openai:qwen3.7-max-2026-06-08"},
-			VLM:    ProviderStage{Enabled: true, Provider: "openai:qwen3.7-max-2026-06-08"},
+			LLM:    ProviderStage{Enabled: true, Provider: "idealab:qwen3.7-max-2026-06-08"},
+			VLM:    ProviderStage{Enabled: true, Provider: "idealab:qwen3.7-max-2026-06-08"},
 			ASR:    ProviderStage{Enabled: true, Provider: "faster-whisper:tiny"},
 			Rerank: ProviderStage{Enabled: false},
 		},
@@ -177,7 +297,7 @@ func TestBuildOptionsJSONProfileIsAuthoritativeAndCredentialFree(t *testing.T) {
 		t.Fatalf("profile = %#v", profile)
 	}
 	embedding, ok := profile["embedding"].(map[string]any)
-	if !ok || embedding["provider"] != "openai:text-embedding-3-large" ||
+	if !ok || embedding["provider"] != "idealab:text-embedding-3-large" ||
 		embedding["dimensions"] != float64(768) {
 		t.Fatalf("embedding = %#v", profile["embedding"])
 	}
@@ -220,7 +340,7 @@ func TestProbeEmbeddingUsesExplicitProfileDimensions(t *testing.T) {
 				Status: workerpb.ProcessStatus_STATUS_OK,
 				Embeddings: map[string]*workerpb.Embedding{
 					"text": {
-						Provider: "openai:text-embedding-3-large",
+						Provider: "idealab:text-embedding-3-large",
 						Rows:     []*workerpb.EmbeddingRow{{Values: make([]float32, 768)}},
 					},
 				},
@@ -229,7 +349,7 @@ func TestProbeEmbeddingUsesExplicitProfileDimensions(t *testing.T) {
 		dialed: true,
 	}
 	dimension, err := client.ProbeEmbedding(
-		context.Background(), "openai:text-embedding-3-large", 768,
+		context.Background(), "idealab:text-embedding-3-large", 768,
 	)
 	if err != nil || dimension != 768 {
 		t.Fatalf("ProbeEmbedding = %d, %v", dimension, err)
@@ -243,7 +363,7 @@ func TestProbeEmbeddingUsesExplicitProfileDimensions(t *testing.T) {
 		t.Fatalf("options = %#v", envelope)
 	}
 	embedding := profile["embedding"].(map[string]any)
-	if embedding["provider"] != "openai:text-embedding-3-large" ||
+	if embedding["provider"] != "idealab:text-embedding-3-large" ||
 		embedding["dimensions"] != float64(768) ||
 		profile["id"] != "profile-probe-v1" {
 		t.Fatalf("profile = %#v", profile)
@@ -274,10 +394,11 @@ func TestProfileEmbeddingRejectsProviderMismatch(t *testing.T) {
 		}},
 		dialed: true,
 	}
-
 	profile := AIProfileOptions{
 		Embedding: ProviderStage{
-			Enabled: true, Provider: "openai:text-embedding-3-large", Dimensions: 768,
+			Enabled:    true,
+			Provider:   "idealab:text-embedding-3-large",
+			Dimensions: 768,
 		},
 	}
 	assertMismatch := func(t *testing.T, err error) {
@@ -286,13 +407,16 @@ func TestProfileEmbeddingRejectsProviderMismatch(t *testing.T) {
 			t.Fatalf("provider mismatch was not rejected: %v", err)
 		}
 	}
-
 	t.Run("query", func(t *testing.T) {
 		_, err := client.EmbedTextWithProfile(context.Background(), "query", profile)
 		assertMismatch(t, err)
 	})
 	t.Run("probe", func(t *testing.T) {
-		_, err := client.ProbeEmbedding(context.Background(), profile.Embedding.Provider, profile.Embedding.Dimensions)
+		_, err := client.ProbeEmbedding(
+			context.Background(),
+			profile.Embedding.Provider,
+			profile.Embedding.Dimensions,
+		)
 		assertMismatch(t, err)
 	})
 }

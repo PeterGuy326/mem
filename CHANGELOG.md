@@ -10,11 +10,17 @@ The project is not yet publishing stable semantic-versioned releases.
 ### Added
 
 - Server-owned, workspace-scoped AI profiles: an offline-first
-  `local-fast-v1` fixed to Ollama Qwen3 Embedding 0.6B at 768 dimensions, and
-  a SaaS-only `idealab-quality-v1` fixed to Idealab-compatible
-  `text-embedding-3-large` plus Qwen3.7 Max, with explicit stage contracts,
-  profile-aware CLI/API selection, preflight probing, and isolated index
-  generations.
+  `local-fast-v2` fixed to Ollama Qwen3 Embedding 0.6B at 768 dimensions, and
+  a SaaS-only `idealab-quality-v2` fixed to an explicitly bound Idealab
+  `text-embedding-3-large` plus Qwen3.7 Max, with explicit text/PDF stage
+  contracts at profile revision `2026-07-30.1` / pipeline revision
+  `file-enrichment-v2`, profile-aware CLI/API selection, preflight probing,
+  per-stage usage receipts, crash-recoverable transactional settlement, and no
+  implicit model download or provider fallback.
+- Authenticated hosted memd-to-Worker execution with deterministic request and
+  response HMACs, shared Redis replay protection, exact-provider startup
+  readiness, fetched-content SHA verification before managed egress, and
+  private/BYOM-compatible deployment classification.
 - Repeatable stdio MCP certification for OpenClaw, Hermes Agent, Claude Code,
   OpenCode, and Codex, with versioned config manifests, a model-free fake-memd
   lifecycle/failure contract, isolated real-host evidence, and explicit
@@ -77,6 +83,15 @@ The project is not yet publishing stable semantic-versioned releases.
 
 ### Changed
 
+- Preserve the published `local-fast-v1` and `idealab-quality-v1` snapshots
+  exactly for enabled persisted workspaces while hiding them from new
+  selection; one SaaS process can authenticate and account for both exact
+  managed generations during migration, V2 owns the revised text/PDF-only
+  contract, and any populated V1→V2 switch now requires a versioned generation
+  rebuild.
+- Serialize managed result/outbox commits with stale reconciliation and period
+  rollover, safely terminalize late file state, and scrub outbox file/content
+  identity when the source file is deleted.
 - Ollama text embeddings now use one modern batched `/api/embed` request with
   an explicit 768-dimensional contract and fail closed on batch or dimension
   mismatches.

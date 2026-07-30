@@ -16,6 +16,8 @@ package workerclient
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,8 +37,11 @@ import (
 // A Client where addr=="" is a no-op stub (used when MEM_WORKER_GRPC is unset
 // — local dev without the worker still has functioning upload/download).
 type Client struct {
-	addr   string
-	bucket string
+	addr                       string
+	bucket                     string
+	auth                       *channelAuth
+	authErr                    error
+	managedOpenAIBindingActive bool
 
 	mu     sync.Mutex
 	conn   *grpc.ClientConn
@@ -47,8 +52,24 @@ type Client struct {
 // New constructs a Client. addr is "host:port" (or "" to disable the worker
 // entirely). bucket is the S3 bucket name memd writes objects to — used to
 // build the s3:// URI passed to the worker.
-func New(addr, bucket string) *Client {
-	return &Client{addr: addr, bucket: bucket}
+func New(addr, bucket string, options ...Option) *Client {
+	client := &Client{addr: addr, bucket: bucket}
+	for _, option := range options {
+		if option != nil {
+			option(client)
+		}
+	}
+	return client
+}
+
+// WithManagedOpenAIBinding marks OPENAI_* as a platform-managed credential
+// rather than a private BYOM binding. While active, legacy openai:* overrides
+// require an explicit AI profile and cannot reach the Worker through the
+// unmetered compatibility paths.
+func WithManagedOpenAIBinding(active bool) Option {
+	return func(client *Client) {
+		client.managedOpenAIBindingActive = active
+	}
 }
 
 // Enabled reports whether the worker is configured. Callers should fast-path
@@ -84,6 +105,9 @@ func (c *Client) ensureDialed() error {
 	}
 	if c.addr == "" {
 		return errors.New("workerclient: addr is empty (MEM_WORKER_GRPC not set)")
+	}
+	if c.authErr != nil {
+		return c.authErr
 	}
 	conn, err := grpc.NewClient(
 		c.addr,
@@ -142,6 +166,7 @@ type AIProfileOptions struct {
 	ID               string        `json:"id"`
 	Revision         string        `json:"revision"`
 	PipelineRevision string        `json:"pipeline_revision"`
+	DataEgress       string        `json:"data_egress"`
 	Embedding        ProviderStage `json:"embedding"`
 	VisualEmbedding  ProviderStage `json:"visual_embedding"`
 	LLM              ProviderStage `json:"llm"`
@@ -159,6 +184,16 @@ func (c *Client) Index(ctx context.Context, m FileMeta) (*workerpb.ProcessRespon
 	if !c.Enabled() {
 		return nil, errors.New("workerclient: disabled")
 	}
+	if m.AIProfile == nil && containsManagedProviderWithoutProfile(
+		c.managedOpenAIBindingActive,
+		m.EmbeddingProvider,
+		m.VisualEmbeddingProvider,
+		m.VLMProvider,
+		m.LLMProvider,
+		m.ASRProvider,
+	) {
+		return nil, errors.New("workerclient: managed provider requires an AI profile")
+	}
 	if err := c.ensureDialed(); err != nil {
 		return nil, err
 	}
@@ -174,7 +209,7 @@ func (c *Client) Index(ctx context.Context, m FileMeta) (*workerpb.ProcessRespon
 	if opts := buildOptionsJSON(m); opts != nil {
 		req.OptionsJson = opts
 	}
-	return c.stub.Process(ctx, req)
+	return c.callProcess(ctx, req)
 }
 
 // buildOptionsJSON encodes per-request provider overrides into a JSON blob
@@ -219,16 +254,16 @@ func (c *Client) ProbeVLM(ctx context.Context, providerSpec string) (string, err
 	if !c.Enabled() {
 		return "", errors.New("workerclient: disabled")
 	}
-	if err := c.ensureDialed(); err != nil {
+	req, err := buildVLMProbeRequest(providerSpec, c.managedOpenAIBindingActive)
+	if err != nil {
 		return "", err
 	}
-	req, err := buildVLMProbeRequest(providerSpec)
-	if err != nil {
+	if err := c.ensureDialed(); err != nil {
 		return "", err
 	}
 	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	resp, err := c.stub.Process(cctx, req)
+	resp, err := c.callProcess(cctx, req)
 	if err != nil {
 		return "", fmt.Errorf("worker process(VLM probe): %w", err)
 	}
@@ -242,9 +277,15 @@ func (c *Client) ProbeVLM(ctx context.Context, providerSpec string) (string, err
 	return caption, nil
 }
 
-func buildVLMProbeRequest(providerSpec string) (*workerpb.ProcessRequest, error) {
+func buildVLMProbeRequest(
+	providerSpec string,
+	managedOpenAIBindingActive bool,
+) (*workerpb.ProcessRequest, error) {
 	if strings.TrimSpace(providerSpec) == "" {
 		return nil, errors.New("workerclient: VLM provider spec is empty")
+	}
+	if containsManagedProviderWithoutProfile(managedOpenAIBindingActive, providerSpec) {
+		return nil, errors.New("workerclient: managed provider requires an AI profile")
 	}
 	options, err := json.Marshal(map[string]any{
 		"vlm_provider":   providerSpec,
@@ -257,6 +298,7 @@ func buildVLMProbeRequest(providerSpec string) (*workerpb.ProcessRequest, error)
 		FileId:      "provider-probe",
 		StorageUri:  vlmProbeDataURI,
 		Mime:        "image/png",
+		Sha256:      dataURIContentSHA256(vlmProbeDataURI),
 		Name:        "provider-probe.png",
 		OptionsJson: options,
 	}, nil
@@ -290,26 +332,44 @@ func (c *Client) ProbeEmbedding(
 	if strings.TrimSpace(providerSpec) == "" || dimensions <= 0 {
 		return 0, errors.New("workerclient: invalid embedding profile probe")
 	}
+	dataEgress, err := profileDataEgress(providerSpec)
+	if err != nil {
+		return 0, err
+	}
 	vec, err := c.embedTextProfile(ctx, "workspace AI profile embedding probe", AIProfileOptions{
 		Contract:         "mem.ai-profile/v1",
 		ID:               "profile-probe-v1",
 		Revision:         "probe-v1",
 		PipelineRevision: "probe-v1",
+		DataEgress:       dataEgress,
 		Embedding: ProviderStage{
 			Enabled: true, Provider: providerSpec, Dimensions: dimensions,
 		},
-		VisualEmbedding: ProviderStage{
-			Enabled: true, Provider: "clip:ViT-B-32", Dimensions: 512,
-		},
-		LLM:    ProviderStage{Enabled: false},
-		VLM:    ProviderStage{Enabled: false},
-		ASR:    ProviderStage{Enabled: false},
-		Rerank: ProviderStage{Enabled: false},
+		VisualEmbedding: ProviderStage{Enabled: false},
+		LLM:             ProviderStage{Enabled: false},
+		VLM:             ProviderStage{Enabled: false},
+		ASR:             ProviderStage{Enabled: false},
+		Rerank:          ProviderStage{Enabled: false},
 	})
 	if err != nil {
 		return 0, err
 	}
 	return len(vec), nil
+}
+
+func profileDataEgress(providerSpec string) (string, error) {
+	vendor, _, ok := strings.Cut(providerSpec, ":")
+	if !ok {
+		return "", errors.New("workerclient: invalid embedding profile provider")
+	}
+	switch vendor {
+	case "ollama":
+		return "local_only", nil
+	case "idealab":
+		return "managed_idealab", nil
+	default:
+		return "", errors.New("workerclient: embedding profile provider has no trusted egress binding")
+	}
 }
 
 // EmbedText returns an embedding vector for q by reusing the Process
@@ -326,6 +386,9 @@ func (c *Client) embedText(ctx context.Context, q, providerSpec string) ([]float
 	if !c.Enabled() {
 		return nil, errors.New("workerclient: disabled")
 	}
+	if containsManagedProviderWithoutProfile(c.managedOpenAIBindingActive, providerSpec) {
+		return nil, errors.New("workerclient: managed provider requires an AI profile")
+	}
 	if err := c.ensureDialed(); err != nil {
 		return nil, err
 	}
@@ -340,6 +403,7 @@ func (c *Client) embedText(ctx context.Context, q, providerSpec string) ([]float
 		FileId:     "query",
 		StorageUri: dataURI,
 		Mime:       "text/plain",
+		Sha256:     contentSHA256([]byte(q)),
 		UserId:     "",
 		Name:       "query.txt",
 	}
@@ -348,7 +412,7 @@ func (c *Client) embedText(ctx context.Context, q, providerSpec string) ([]float
 	}
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	resp, err := c.stub.Process(cctx, req)
+	resp, err := c.callProcess(cctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("worker process(query): %w", err)
 	}
@@ -382,13 +446,14 @@ func (c *Client) embedTextProfile(
 		FileId:      "profile-query",
 		StorageUri:  encodeDataURI(q),
 		Mime:        "text/plain",
+		Sha256:      contentSHA256([]byte(q)),
 		UserId:      "",
 		Name:        "profile-query.txt",
 		OptionsJson: options,
 	}
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	resp, err := c.stub.Process(cctx, req)
+	resp, err := c.callProcess(cctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("worker process(profile query): %w", err)
 	}
@@ -410,4 +475,36 @@ func (c *Client) embedTextProfile(
 			emb.Provider, profile.Embedding.Provider)
 	}
 	return emb.Rows[0].Values, nil
+}
+
+func containsManagedProviderWithoutProfile(
+	managedOpenAIBindingActive bool,
+	specs ...string,
+) bool {
+	for _, spec := range specs {
+		vendor, _, ok := strings.Cut(strings.TrimSpace(spec), ":")
+		vendor = strings.ToLower(strings.TrimSpace(vendor))
+		if ok && (vendor == "idealab" ||
+			(managedOpenAIBindingActive && vendor == "openai")) {
+			return true
+		}
+	}
+	return false
+}
+
+func contentSHA256(content []byte) string {
+	sum := sha256.Sum256(content)
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func dataURIContentSHA256(uri string) string {
+	_, encoded, ok := strings.Cut(uri, ",")
+	if !ok {
+		return ""
+	}
+	content, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return ""
+	}
+	return contentSHA256(content)
 }

@@ -24,6 +24,65 @@ type ledgerFake struct {
 	events              *[]string
 }
 
+type releasedRetryLedger struct {
+	ledgerFake
+
+	alwaysReleased  bool
+	replayOperation string
+	attempts        map[string]int
+	releasedRows    map[string]*entitlement.Reservation
+	lookups         []entitlement.ReserveCommand
+	lookupOptions   []entitlement.ReservationLookupOptions
+}
+
+func (f *releasedRetryLedger) Reserve(
+	_ context.Context,
+	command entitlement.ReserveCommand,
+) (*entitlement.Reservation, error) {
+	f.commands = append(f.commands, command)
+	if f.attempts == nil {
+		f.attempts = make(map[string]int)
+	}
+	f.attempts[command.Operation]++
+	attempt := f.attempts[command.Operation]
+	if f.alwaysReleased || attempt == 1 {
+		if f.releasedRows == nil {
+			f.releasedRows = make(map[string]*entitlement.Reservation)
+		}
+		key := command.Operation + "\x00" + command.IdempotencyKey
+		f.releasedRows[key] = &entitlement.Reservation{
+			ID:     uuid.NewSHA1(uuid.NameSpaceOID, []byte(key)),
+			Status: entitlement.StatusReleased,
+		}
+		return nil, entitlement.ErrReleasedKey
+	}
+	status := entitlement.StatusReserved
+	replayed := command.Operation == f.replayOperation
+	if replayed {
+		status = entitlement.StatusSucceeded
+	}
+	return &entitlement.Reservation{
+		ID:       uuid.NewSHA1(uuid.NameSpaceOID, []byte(command.IdempotencyKey)),
+		Status:   status,
+		Replayed: replayed,
+	}, nil
+}
+
+func (f *releasedRetryLedger) LookupReservation(
+	_ context.Context,
+	command entitlement.ReserveCommand,
+	options entitlement.ReservationLookupOptions,
+) (*entitlement.Reservation, error) {
+	f.lookups = append(f.lookups, command)
+	f.lookupOptions = append(f.lookupOptions, options)
+	key := command.Operation + "\x00" + command.IdempotencyKey
+	reservation, ok := f.releasedRows[key]
+	if !ok {
+		return nil, entitlement.ErrReservationNotFound
+	}
+	return reservation, nil
+}
+
 func (f *ledgerFake) Reserve(
 	_ context.Context,
 	command entitlement.ReserveCommand,
@@ -87,11 +146,12 @@ func qualityCommand() Command {
 		panic("quality profile missing")
 	}
 	return Command{
-		WorkspaceID:     uuid.MustParse("01833e6e-9a2e-713d-a677-9a8e13ed8e14"),
-		FileID:          uuid.MustParse("01833e6e-9a2e-713d-a677-9a8e13ed8e15"),
-		ContentSHA256:   strings.Repeat("a", 64),
-		ProfileID:       definition.ID,
-		ProfileRevision: definition.Revision,
+		WorkspaceID:      uuid.MustParse("01833e6e-9a2e-713d-a677-9a8e13ed8e14"),
+		FileID:           uuid.MustParse("01833e6e-9a2e-713d-a677-9a8e13ed8e15"),
+		ContentSHA256:    strings.Repeat("a", 64),
+		ProfileID:        definition.ID,
+		ProfileRevision:  definition.Revision,
+		PipelineRevision: definition.PipelineRevision,
 		Stages: []StageSpec{
 			{Stage: StageEmbedding, ProviderSpec: definition.Embedding.Provider},
 			{Stage: StageLLM, ProviderSpec: definition.LLM.Provider},
@@ -183,6 +243,206 @@ func TestPrepareStageIDsAreDeterministicAndCanonical(t *testing.T) {
 		first.commands[0].RequestFingerprint == third.commands[0].RequestFingerprint {
 		t.Fatal("content identity did not change deterministic stage hashes")
 	}
+
+	changedPipeline := qualityCommand()
+	changedPipeline.PipelineRevision = "different-pipeline"
+	if _, err := New(&ledgerFake{}).Prepare(context.Background(), changedPipeline); !errors.Is(err, ErrInvalidProfile) {
+		t.Fatalf("stale pipeline Prepare() error = %v, want ErrInvalidProfile", err)
+	}
+
+	baseIdentity := qualityCommand()
+	stage := normalizedStage{
+		Stage:        StageEmbedding,
+		ProviderSpec: baseIdentity.Stages[0].ProviderSpec,
+	}
+	firstIdentity, err := reserveCommand(baseIdentity, stage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseIdentity.PipelineRevision = "file-enrichment-v3"
+	secondIdentity, err := reserveCommand(baseIdentity, stage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstIdentity.IdempotencyKey == secondIdentity.IdempotencyKey ||
+		firstIdentity.RequestFingerprint == secondIdentity.RequestFingerprint {
+		t.Fatal("pipeline revision did not change deterministic stage hashes")
+	}
+}
+
+func TestPrepareChainsReleasedStageKeys(t *testing.T) {
+	ledger := &releasedRetryLedger{}
+	handle, err := New(ledger).Prepare(context.Background(), qualityCommand())
+	if err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	if handle.HasReplay() {
+		t.Fatal("Handle.HasReplay() = true, want false")
+	}
+	if got := len(handle.Reservations()); got != 2 {
+		t.Fatalf("reservations = %d, want 2", got)
+	}
+	if got := len(ledger.commands); got != 4 {
+		t.Fatalf("reserve commands = %d, want released+fresh for each stage", got)
+	}
+	if got := len(ledger.lookups); got != 2 {
+		t.Fatalf("released lookups = %d, want 2", got)
+	}
+	for i, lookup := range ledger.lookups {
+		if !ledger.lookupOptions[i].IncludeReleased {
+			t.Fatalf("lookup %d did not explicitly include released state", i)
+		}
+		first, retry := ledger.commands[i*2], ledger.commands[i*2+1]
+		released := ledger.releasedRows[first.Operation+"\x00"+first.IdempotencyKey]
+		want := chainedReserveCommand(first, released.ID)
+		if retry != want {
+			t.Fatalf("retry command %d = %#v, want deterministic chain %#v", i, retry, want)
+		}
+		if retry.IdempotencyKey == first.IdempotencyKey ||
+			retry.RequestFingerprint == first.RequestFingerprint {
+			t.Fatalf("retry command %d reused a released identity", i)
+		}
+		if lookup != first {
+			t.Fatalf("lookup command %d = %#v, want released command %#v", i, lookup, first)
+		}
+	}
+}
+
+func TestPrepareStopsAfterReleasedChainReplaysSucceededStage(t *testing.T) {
+	ledger := &releasedRetryLedger{replayOperation: "file.ai.embedding"}
+	handle, err := New(ledger).Prepare(context.Background(), qualityCommand())
+	if err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	if !handle.HasReplay() {
+		t.Fatal("Handle.HasReplay() = false, want true")
+	}
+	reservations := handle.Reservations()
+	if len(reservations) != 1 || !reservations[0].Replayed ||
+		reservations[0].Stage != StageEmbedding {
+		t.Fatalf("reservations = %#v, want only replayed embedding", reservations)
+	}
+	if got := len(ledger.commands); got != 2 {
+		t.Fatalf("reserve commands = %d, want no later LLM reservation", got)
+	}
+	for _, command := range ledger.commands {
+		if command.Operation != "file.ai.embedding" {
+			t.Fatalf("reserved later stage after replay: %#v", command)
+		}
+	}
+}
+
+func TestPrepareReleasedRetryFailsClosedAtBound(t *testing.T) {
+	ledger := &releasedRetryLedger{alwaysReleased: true}
+	handle, err := New(ledger).Prepare(context.Background(), qualityCommand())
+	if !errors.Is(err, ErrReleasedRetryLimit) {
+		t.Fatalf("Prepare() error = %v, want ErrReleasedRetryLimit", err)
+	}
+	if handle != nil {
+		t.Fatalf("Prepare() handle = %#v, want nil", handle)
+	}
+	if got := len(ledger.commands); got != maxReleasedReservationHops {
+		t.Fatalf("reserve commands = %d, want bound %d", got, maxReleasedReservationHops)
+	}
+}
+
+func TestPrepareGenericLedgerKeepsReleasedKeyTerminal(t *testing.T) {
+	ledger := &ledgerFake{
+		reserveErrAt: 1,
+		reserveErr:   entitlement.ErrReleasedKey,
+	}
+	handle, err := New(ledger).Prepare(context.Background(), qualityCommand())
+	if !errors.Is(err, entitlement.ErrReleasedKey) {
+		t.Fatalf("Prepare() error = %v, want ErrReleasedKey", err)
+	}
+	if handle != nil {
+		t.Fatalf("Prepare() handle = %#v, want nil", handle)
+	}
+	if got := len(ledger.commands); got != 1 {
+		t.Fatalf("reserve commands = %d, want no untrusted retry", got)
+	}
+}
+
+func TestSettleUsageMapsClosedOutcomes(t *testing.T) {
+	ledger := &ledgerFake{}
+	service := New(ledger)
+	succeededID, releasedID, indeterminateID := uuid.New(), uuid.New(), uuid.New()
+
+	for _, test := range []struct {
+		usageID uuid.UUID
+		outcome Outcome
+	}{
+		{usageID: succeededID, outcome: OutcomeSucceeded},
+		{usageID: releasedID, outcome: OutcomeNotInvoked},
+		{usageID: indeterminateID, outcome: OutcomeIndeterminate},
+	} {
+		if err := service.SettleUsage(context.Background(), test.usageID, test.outcome); err != nil {
+			t.Fatalf("SettleUsage(%q) error = %v", test.outcome, err)
+		}
+		// Outbox delivery is at least once. Repeating the same closed outcome
+		// must be passed through to the idempotent entitlement transition.
+		if err := service.SettleUsage(context.Background(), test.usageID, test.outcome); err != nil {
+			t.Fatalf("repeated SettleUsage(%q) error = %v", test.outcome, err)
+		}
+	}
+	if got, want := ledger.finalized, []uuid.UUID{succeededID, succeededID}; !sameUUIDs(got, want) {
+		t.Fatalf("finalized = %#v, want %#v", got, want)
+	}
+	if got, want := ledger.released, []uuid.UUID{releasedID, releasedID}; !sameUUIDs(got, want) {
+		t.Fatalf("released = %#v, want %#v", got, want)
+	}
+	if got, want := ledger.markedIndeterminate, []uuid.UUID{
+		indeterminateID,
+		indeterminateID,
+	}; !sameUUIDs(got, want) {
+		t.Fatalf("indeterminate = %#v, want %#v", got, want)
+	}
+	if err := service.SettleUsage(context.Background(), uuid.New(), Outcome("open")); !errors.Is(err, ErrInvalidOutcome) {
+		t.Fatalf("invalid outcome error = %v, want ErrInvalidOutcome", err)
+	}
+	if err := service.SettleUsage(context.Background(), uuid.Nil, OutcomeSucceeded); !errors.Is(err, ErrInvalidReservation) {
+		t.Fatalf("nil usage error = %v, want ErrInvalidReservation", err)
+	}
+	if err := New(nil).SettleUsage(context.Background(), uuid.New(), OutcomeSucceeded); !errors.Is(err, ErrEntitlementUnavailable) {
+		t.Fatalf("nil ledger error = %v, want ErrEntitlementUnavailable", err)
+	}
+}
+
+func TestHandleSettlesStagesIndependently(t *testing.T) {
+	ledger := &ledgerFake{}
+	handle, err := New(ledger).Prepare(context.Background(), qualityCommand())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservations := handle.Reservations()
+	if len(reservations) != 2 {
+		t.Fatalf("reservations = %d, want 2", len(reservations))
+	}
+
+	if err := handle.ReleaseStagesNotInvoked(
+		context.Background(),
+		[]Stage{StageLLM},
+	); err != nil {
+		t.Fatalf("ReleaseStagesNotInvoked() error = %v", err)
+	}
+	if err := handle.FinalizeStages(
+		context.Background(),
+		[]Stage{StageEmbedding},
+	); err != nil {
+		t.Fatalf("FinalizeStages() error = %v", err)
+	}
+	if len(ledger.released) != 1 || ledger.released[0] != reservations[1].UsageID {
+		t.Fatalf("released = %#v, want LLM reservation", ledger.released)
+	}
+	if len(ledger.finalized) != 1 || ledger.finalized[0] != reservations[0].UsageID {
+		t.Fatalf("finalized = %#v, want embedding reservation", ledger.finalized)
+	}
+	if err := handle.MarkStagesIndeterminate(
+		context.Background(),
+		[]Stage{StageEmbedding},
+	); !errors.Is(err, ErrInvalidStage) {
+		t.Fatalf("settled stage error = %v, want ErrInvalidStage", err)
+	}
 }
 
 func TestPrepareRejectsNonCatalogOrMismatchedManagedStage(t *testing.T) {
@@ -209,6 +469,13 @@ func TestPrepareRejectsNonCatalogOrMismatchedManagedStage(t *testing.T) {
 			name: "stale profile revision",
 			mutate: func(command *Command) {
 				command.ProfileRevision = "stale-revision"
+			},
+			want: ErrInvalidProfile,
+		},
+		{
+			name: "stale pipeline revision",
+			mutate: func(command *Command) {
+				command.PipelineRevision = "stale-pipeline"
 			},
 			want: ErrInvalidProfile,
 		},
@@ -252,11 +519,12 @@ func TestPrepareSkipsLocalAndEmptyStages(t *testing.T) {
 		t.Fatal("local profile missing")
 	}
 	command := Command{
-		WorkspaceID:     uuid.New(),
-		FileID:          uuid.New(),
-		ContentSHA256:   strings.Repeat("c", 64),
-		ProfileID:       local.ID,
-		ProfileRevision: local.Revision,
+		WorkspaceID:      uuid.New(),
+		FileID:           uuid.New(),
+		ContentSHA256:    strings.Repeat("c", 64),
+		ProfileID:        local.ID,
+		ProfileRevision:  local.Revision,
+		PipelineRevision: local.PipelineRevision,
 		Stages: []StageSpec{
 			{Stage: StageEmbedding, ProviderSpec: local.Embedding.Provider},
 			{Stage: StageVisualEmbedding, ProviderSpec: local.VisualEmbedding.Provider},
@@ -280,19 +548,18 @@ func TestPrepareSkipsLocalAndEmptyStages(t *testing.T) {
 		t.Fatalf("noop handle finalized %d reservations", len(ledger.finalized))
 	}
 
-	// The managed profile intentionally retains a local CLIP visual stage.
-	// Its presence in the managed catalog must not turn it into a billable
-	// network invocation.
+	// Disabled optional stages must not create a billable invocation.
 	quality, ok := aiprofile.Find(aiprofile.IdealabQualityV1)
 	if !ok {
 		t.Fatal("quality profile missing")
 	}
 	qualityCommand := Command{
-		WorkspaceID:     uuid.New(),
-		FileID:          uuid.New(),
-		ContentSHA256:   strings.Repeat("d", 64),
-		ProfileID:       quality.ID,
-		ProfileRevision: quality.Revision,
+		WorkspaceID:      uuid.New(),
+		FileID:           uuid.New(),
+		ContentSHA256:    strings.Repeat("d", 64),
+		ProfileID:        quality.ID,
+		ProfileRevision:  quality.Revision,
+		PipelineRevision: quality.PipelineRevision,
 		Stages: []StageSpec{
 			{Stage: StageVisualEmbedding, ProviderSpec: quality.VisualEmbedding.Provider},
 			{Stage: StageASR},
@@ -445,6 +712,18 @@ func TestPrepareReleasesEarlierReservationsWhenLaterReserveFails(t *testing.T) {
 }
 
 func sameStrings(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func sameUUIDs(got, want []uuid.UUID) bool {
 	if len(got) != len(want) {
 		return false
 	}

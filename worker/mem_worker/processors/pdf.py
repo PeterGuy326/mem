@@ -20,6 +20,7 @@ from io import BytesIO
 from typing import Optional
 
 from ..logging import get_logger
+from ..managed_usage import PROCESSOR_STAGES_KEY
 from ..providers import EmbeddingProvider, LLMProvider
 from .base import ANNOTATION_ANALYSIS_VERSION, FileRef, ProcessResult
 from .text import TextProcessor
@@ -57,12 +58,21 @@ class PDFProcessor:
         )
 
     def process(self, file: FileRef) -> ProcessResult:
+        def pre_provider_metadata(**values):
+            stages = self._text.initial_managed_usage_stages()
+            if stages:
+                values[PROCESSOR_STAGES_KEY] = stages
+            return values
+
         try:
             from pypdf import PdfReader
         except ImportError as exc:  # dependency missing → degrade, don't crash
             return ProcessResult(
                 processor=self.name,
-                metadata={"error": f"pypdf unavailable: {exc}", "byte_length": len(file.data)},
+                metadata=pre_provider_metadata(
+                    error=f"pypdf unavailable: {exc}",
+                    byte_length=len(file.data),
+                ),
             )
 
         try:
@@ -71,7 +81,10 @@ class PDFProcessor:
             log.warning("pdf.parse_failed", file_id=file.file_id, error=str(exc))
             return ProcessResult(
                 processor=self.name,
-                metadata={"parse_error": str(exc), "byte_length": len(file.data)},
+                metadata=pre_provider_metadata(
+                    parse_error=str(exc),
+                    byte_length=len(file.data),
+                ),
             )
 
         page_count = len(reader.pages)
@@ -88,12 +101,12 @@ class PDFProcessor:
             # No extractable text layer (likely a scanned/image-only PDF).
             return ProcessResult(
                 processor=self.name,
-                metadata={
-                    "page_count": page_count,
-                    "text_empty": True,
-                    "note": "no extractable text layer (OCR fallback not yet implemented)",
-                    "byte_length": len(file.data),
-                },
+                metadata=pre_provider_metadata(
+                    page_count=page_count,
+                    text_empty=True,
+                    note="no extractable text layer (OCR fallback not yet implemented)",
+                    byte_length=len(file.data),
+                ),
             )
 
         # Reuse the text pipeline by presenting the extracted text as a synthetic

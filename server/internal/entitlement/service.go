@@ -41,6 +41,7 @@ var (
 	ErrReplayResultInvalid    = errors.New("managed embedding replay result is invalid")
 	ErrReservationNotFound    = errors.New("managed embedding reservation not found")
 	ErrInvalidTransition      = errors.New("invalid managed embedding usage transition")
+	ErrSettlementPending      = errors.New("managed AI usage settlement is pending")
 	ErrEntitlementUnavailable = errors.New("managed embedding entitlement store unavailable")
 )
 
@@ -90,6 +91,14 @@ type Reservation struct {
 	Replayed    bool
 	References  []ReplayReference
 	Summary     Summary
+}
+
+// ReservationLookupOptions is an explicit capability boundary for trusted
+// server coordinators that need to continue an audited retry chain after a
+// provider stage was proven not invoked. Generic callers must keep using
+// Reserve, which deliberately returns ErrReleasedKey for the same key.
+type ReservationLookupOptions struct {
+	IncludeReleased bool
 }
 
 // DecisionError retains the atomic quota snapshot returned by a failed
@@ -310,6 +319,78 @@ func (s *Service) Reserve(ctx context.Context, cmd ReserveCommand) (*Reservation
 	}, nil
 }
 
+// LookupReservation returns a previously released reservation only when the
+// trusted caller explicitly opts in. It never creates usage, changes quota, or
+// weakens Reserve's public idempotency semantics. The managed-usage
+// coordinator uses the immutable reservation ID to derive a new, chained
+// attempt key without deleting or rewriting the released audit record.
+func (s *Service) LookupReservation(
+	ctx context.Context,
+	cmd ReserveCommand,
+	options ReservationLookupOptions,
+) (*Reservation, error) {
+	if err := validateReserveCommand(cmd); err != nil {
+		return nil, err
+	}
+	if !options.IncludeReleased {
+		return nil, ErrReleasedKey
+	}
+	if s == nil || s.pool == nil {
+		return nil, ErrEntitlementUnavailable
+	}
+
+	idempotencyHash := hashDomain(
+		"mem/managed-embedding/idempotency/v1/"+cmd.WorkspaceID.String()+"/"+cmd.Operation,
+		cmd.IdempotencyKey,
+	)
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("%w: begin reservation lookup: %v", ErrEntitlementUnavailable, err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	row, found, err := loadReservationByKey(
+		ctx,
+		tx,
+		cmd.WorkspaceID,
+		cmd.Operation,
+		idempotencyHash,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, ErrReservationNotFound
+	}
+	if row.RequestFingerprint != cmd.RequestFingerprint {
+		return nil, commitDecision(ctx, tx, ErrIdempotencyConflict)
+	}
+	if row.Status != StatusReleased {
+		switch row.Status {
+		case StatusSucceeded:
+			return nil, commitDecision(ctx, tx, ErrInvalidTransition)
+		case StatusReserved:
+			return nil, commitDecision(ctx, tx, ErrRequestInProgress)
+		case StatusIndeterminate:
+			return nil, commitDecision(ctx, tx, ErrRequestIndeterminate)
+		default:
+			return nil, commitDecision(ctx, tx, ErrInvalidTransition)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("%w: commit reservation lookup: %v", ErrEntitlementUnavailable, err)
+	}
+	return &Reservation{
+		ID:          row.ID,
+		WorkspaceID: row.WorkspaceID,
+		Operation:   row.Operation,
+		Provider:    row.Provider,
+		Model:       row.Model,
+		Units:       row.Units,
+		Status:      row.Status,
+	}, nil
+}
+
 func commitDecision(ctx context.Context, tx pgx.Tx, decision error) error {
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("%w: commit reservation decision: %v", ErrEntitlementUnavailable, err)
@@ -355,6 +436,16 @@ func (s *Service) transition(
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	workspaceID, found, err := loadReservationWorkspaceID(ctx, tx, usageID)
+	if err != nil {
+		return Summary{}, err
+	}
+	if !found {
+		return Summary{}, ErrReservationNotFound
+	}
+	if err := lockWorkspaceEntitlement(ctx, tx, workspaceID); err != nil {
+		return Summary{}, err
+	}
 	row, found, err := loadReservationByID(ctx, tx, usageID)
 	if err != nil {
 		return Summary{}, err
@@ -465,7 +556,27 @@ func (s *Service) ReconcileStale(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("%w: begin reconcile: %v", ErrEntitlementUnavailable, err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	count, err := s.reconcileStaleTx(ctx, tx, uuid.Nil, s.now())
+	hasSettlementOutbox, err := managedAISettlementOutboxExists(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+	now := s.now()
+	if hasSettlementOutbox {
+		if err := lockStaleWorkspaceEntitlements(
+			ctx,
+			tx,
+			now.Add(-s.reservationTTL),
+		); err != nil {
+			return 0, err
+		}
+	}
+	count, err := s.reconcileStaleTx(
+		ctx,
+		tx,
+		uuid.Nil,
+		now,
+		hasSettlementOutbox,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -483,7 +594,7 @@ func (s *Service) prepareEntitlementTx(
 ) (Summary, error) {
 	var summary Summary
 	err := tx.QueryRow(ctx, `
-		SELECT workspace_id, plan_key, status,
+		SELECT /* mem.prepare-entitlement */ workspace_id, plan_key, status,
 		       managed_embedding_unit_limit,
 		       managed_embedding_units_reserved,
 		       managed_embedding_units_consumed,
@@ -504,7 +615,35 @@ func (s *Service) prepareEntitlementTx(
 	if err != nil {
 		return Summary{}, fmt.Errorf("%w: lock entitlement: %v", ErrEntitlementUnavailable, err)
 	}
-	if _, err := s.reconcileStaleTx(ctx, tx, workspaceID, now); err != nil {
+	hasSettlementOutbox, err := managedAISettlementOutboxExists(ctx, tx)
+	if err != nil {
+		return Summary{}, err
+	}
+	if !now.Before(summary.ResetAt) && hasSettlementOutbox {
+		pending, err := hasPendingManagedAISettlement(ctx, tx, workspaceID)
+		if err != nil {
+			return Summary{}, err
+		}
+		if pending {
+			// A closed provider result is already durable. Rolling the billing
+			// period would reset its reserved counter before the dispatcher can
+			// apply that exact outcome, permanently turning a known result into
+			// an invalid transition. Fail the entire entitlement transaction so
+			// the outbox reconciler can settle it first.
+			return Summary{}, fmt.Errorf(
+				"%w: %w",
+				ErrEntitlementUnavailable,
+				ErrSettlementPending,
+			)
+		}
+	}
+	if _, err := s.reconcileStaleTx(
+		ctx,
+		tx,
+		workspaceID,
+		now,
+		hasSettlementOutbox,
+	); err != nil {
 		return Summary{}, err
 	}
 	if !now.Before(summary.ResetAt) {
@@ -534,6 +673,98 @@ func (s *Service) prepareEntitlementTx(
 	}
 	completeSummary(&summary, now)
 	return summary, nil
+}
+
+// lockStaleWorkspaceEntitlements gives global stale reconciliation the same
+// lock order as reservation, settlement, period rollover, and result/outbox
+// commits: workspace entitlement first, then usage rows. A result transaction
+// that already owns the entitlement lock can therefore publish its outbox
+// before the reconciler's UPDATE takes a fresh READ COMMITTED snapshot.
+func lockStaleWorkspaceEntitlements(
+	ctx context.Context,
+	tx pgx.Tx,
+	staleBefore time.Time,
+) error {
+	rows, err := tx.Query(ctx, `
+		SELECT /* mem.reconcile-stale-workspaces */ entitlement.workspace_id
+		  FROM workspace_entitlements AS entitlement
+		 WHERE EXISTS (
+		       SELECT 1
+		         FROM managed_embedding_usage AS usage
+		        WHERE usage.workspace_id = entitlement.workspace_id
+		          AND usage.status = 'reserved'
+		          AND usage.updated_at <= $1
+		 )
+		 ORDER BY entitlement.workspace_id
+		 FOR UPDATE OF entitlement
+	`, staleBefore)
+	if err != nil {
+		return fmt.Errorf(
+			"%w: lock stale managed usage workspaces: %v",
+			ErrEntitlementUnavailable,
+			err,
+		)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var workspaceID uuid.UUID
+		if err := rows.Scan(&workspaceID); err != nil {
+			return fmt.Errorf(
+				"%w: scan stale managed usage workspace: %v",
+				ErrEntitlementUnavailable,
+				err,
+			)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf(
+			"%w: iterate stale managed usage workspaces: %v",
+			ErrEntitlementUnavailable,
+			err,
+		)
+	}
+	return nil
+}
+
+func managedAISettlementOutboxExists(ctx context.Context, tx pgx.Tx) (bool, error) {
+	var exists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT to_regclass(
+		    'public.managed_ai_stage_settlement_outbox'
+		) IS NOT NULL
+	`).Scan(&exists); err != nil {
+		return false, fmt.Errorf(
+			"%w: inspect managed AI settlement outbox: %v",
+			ErrEntitlementUnavailable,
+			err,
+		)
+	}
+	return exists, nil
+}
+
+func hasPendingManagedAISettlement(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID uuid.UUID,
+) (bool, error) {
+	var pending bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+		    SELECT 1
+		      FROM managed_ai_stage_settlement_outbox AS settlement
+		      JOIN managed_embedding_usage AS usage
+		        ON usage.id = settlement.usage_id
+		     WHERE usage.workspace_id = $1
+		       AND settlement.settled_at IS NULL
+		)
+	`, workspaceID).Scan(&pending); err != nil {
+		return false, fmt.Errorf(
+			"%w: inspect pending managed AI settlement: %v",
+			ErrEntitlementUnavailable,
+			err,
+		)
+	}
+	return pending, nil
 }
 
 func reconcileExpiredPeriodTx(
@@ -581,23 +812,16 @@ func (s *Service) reconcileStaleTx(
 	tx pgx.Tx,
 	workspaceID uuid.UUID,
 	now time.Time,
+	hasSettlementOutbox bool,
 ) (int64, error) {
-	query := `
-		UPDATE managed_embedding_usage
-		   SET status = 'indeterminate', updated_at = $1
-		 WHERE status = 'reserved'
-		   AND updated_at <= $2
-	`
+	query := staleReservationReconcileQuery(
+		workspaceID != uuid.Nil,
+		hasSettlementOutbox,
+	)
 	args := []any{now, now.Add(-s.reservationTTL)}
 	if workspaceID != uuid.Nil {
-		query += " AND workspace_id = $3"
 		args = append(args, workspaceID)
 	}
-	query += `
-		RETURNING id, workspace_id, operation, provider, model, units, status,
-		          request_fingerprint_sha256, idempotency_key_sha256,
-		          period_start, period_end, created_at, updated_at
-	`
 	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return 0, fmt.Errorf("%w: reconcile stale reservations: %v", ErrEntitlementUnavailable, err)
@@ -621,6 +845,40 @@ func (s *Service) reconcileStaleTx(
 		}
 	}
 	return int64(len(stale)), nil
+}
+
+func staleReservationReconcileQuery(
+	workspaceScoped bool,
+	hasSettlementOutbox bool,
+) string {
+	query := `
+		UPDATE managed_embedding_usage AS usage
+		   SET status = 'indeterminate', updated_at = $1
+		 WHERE usage.status = 'reserved'
+		   AND usage.updated_at <= $2
+	`
+	if workspaceScoped {
+		query += " AND usage.workspace_id = $3"
+	}
+	if hasSettlementOutbox {
+		// Keep the exclusion in the same UPDATE statement as the status change.
+		// A separately loaded candidate list would leave a check/use race where
+		// stale reconciliation could overwrite a committed closed outcome.
+		query += `
+		   AND NOT EXISTS (
+		       SELECT 1
+		         FROM managed_ai_stage_settlement_outbox AS settlement
+		        WHERE settlement.usage_id = usage.id
+		          AND settlement.settled_at IS NULL
+		   )
+		`
+	}
+	query += `
+		RETURNING id, workspace_id, operation, provider, model, units, status,
+		          request_fingerprint_sha256, idempotency_key_sha256,
+		          period_start, period_end, created_at, updated_at
+	`
+	return query
 }
 
 type usageRow struct {
@@ -685,6 +943,56 @@ func loadReservationByKey(
 		return usageRow{}, false, fmt.Errorf("%w: read idempotency record: %v", ErrEntitlementUnavailable, err)
 	}
 	return row, true, nil
+}
+
+// loadReservationWorkspaceID intentionally does not lock the usage row. A
+// transition needs the immutable workspace identity so it can acquire the
+// workspace entitlement first; it then locks and re-reads the complete usage
+// row. managed_embedding_usage.workspace_id is never updated.
+func loadReservationWorkspaceID(
+	ctx context.Context,
+	tx pgx.Tx,
+	usageID uuid.UUID,
+) (uuid.UUID, bool, error) {
+	var workspaceID uuid.UUID
+	err := tx.QueryRow(ctx, `
+		SELECT workspace_id
+		  FROM managed_embedding_usage
+		 WHERE id = $1
+	`, usageID).Scan(&workspaceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, false, nil
+	}
+	if err != nil {
+		return uuid.Nil, false, fmt.Errorf(
+			"%w: read reservation workspace: %v",
+			ErrEntitlementUnavailable,
+			err,
+		)
+	}
+	return workspaceID, true, nil
+}
+
+func lockWorkspaceEntitlement(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID uuid.UUID,
+) error {
+	var lockedWorkspaceID uuid.UUID
+	err := tx.QueryRow(ctx, `
+		SELECT workspace_id
+		  FROM workspace_entitlements
+		 WHERE workspace_id = $1
+		 FOR UPDATE
+	`, workspaceID).Scan(&lockedWorkspaceID)
+	if err != nil {
+		return fmt.Errorf(
+			"%w: lock transition entitlement: %v",
+			ErrEntitlementUnavailable,
+			err,
+		)
+	}
+	return nil
 }
 
 func loadReservationByID(

@@ -55,8 +55,23 @@ class _Capture:
     def script(self, *responses: _FakeResp):
         self._scripted.extend(responses)
 
-    def __call__(self, url, json=None, timeout=None, stream=False):  # noqa: A002
-        self.calls.append({"url": url, "json": json, "timeout": timeout, "stream": stream})
+    def __call__(
+        self,
+        url,
+        json=None,
+        timeout=None,
+        stream=False,
+        allow_redirects=True,
+    ):  # noqa: A002
+        self.calls.append(
+            {
+                "url": url,
+                "json": json,
+                "timeout": timeout,
+                "stream": stream,
+                "allow_redirects": allow_redirects,
+            }
+        )
         if not self._scripted:
             return _FakeResp({"error": "no scripted response"}, status=500)
         return self._scripted.pop(0)
@@ -138,6 +153,7 @@ def test_embed_text_request_shape(capture, monkeypatch):
         "dimensions": 768,
         "truncate": False,
     }
+    assert first["allow_redirects"] is False
     assert p.dim == 768
 
 
