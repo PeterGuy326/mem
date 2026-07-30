@@ -14,6 +14,7 @@ proxies / Azure / vLLM-compat endpoints).
 from __future__ import annotations
 
 import base64
+import math
 from typing import Any, Iterator, Optional
 
 import requests
@@ -74,25 +75,74 @@ class OpenAIEmbeddingProvider(_BaseOpenAI):
         model: str = "text-embedding-3-small",
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
+        dimensions: int | None = None,
     ):
         super().__init__(api_key, base_url)
         self.model = model
         self.name = f"openai:{model}"
+        configured_dimensions = (
+            dimensions if dimensions is not None else get_settings().openai_embedding_dimensions
+        )
+        if (
+            configured_dimensions is not None
+            and (
+                isinstance(configured_dimensions, bool)
+                or not isinstance(configured_dimensions, int)
+                or configured_dimensions <= 0
+            )
+        ):
+            raise ProviderError("openai: embedding dimensions must be a positive integer")
+        self._configured_dimensions = configured_dimensions
         # dim is a hint only — final value is len(vectors[0]) at call time.
-        self.dim = self._DIM_HINTS.get(model, 0)
+        self.dim = configured_dimensions or self._DIM_HINTS.get(model, 0)
 
     def embed_text(self, texts: list[str]) -> list[Vector]:
         if not texts:
             return []
-        data = self._post(
-            "/v1/embeddings",
-            {
-                "model": self.model,
-                "input": texts,
-            },
-        )
-        rows = data.get("data") or []
-        return [row["embedding"] for row in rows]
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "input": texts,
+        }
+        # Some OpenAI-compatible endpoints reject unknown fields. Only send
+        # this capability when the deployment/profile configured it explicitly.
+        if self._configured_dimensions is not None:
+            payload["dimensions"] = self._configured_dimensions
+        data = self._post("/v1/embeddings", payload)
+        rows = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(rows, list) or len(rows) != len(texts):
+            count = len(rows) if isinstance(rows, list) else "invalid"
+            raise ProviderError(
+                f"openai: malformed embed response: got {count} vectors for {len(texts)} inputs"
+            )
+
+        vectors: list[Vector] = []
+        observed_dimensions: int | None = self._configured_dimensions
+        for index, row in enumerate(rows):
+            vector = row.get("embedding") if isinstance(row, dict) else None
+            if not isinstance(vector, list):
+                raise ProviderError(
+                    f"openai: malformed embed response: vector {index} is not an array"
+                )
+            if observed_dimensions is None:
+                observed_dimensions = len(vector)
+            if len(vector) != observed_dimensions:
+                raise ProviderError(
+                    f"openai: embedding dimension mismatch at vector {index}: "
+                    f"got {len(vector)}, want {observed_dimensions}"
+                )
+            if any(
+                isinstance(value, bool) or not isinstance(value, (int, float)) for value in vector
+            ):
+                raise ProviderError(
+                    f"openai: malformed embed response: vector {index} contains a non-numeric value"
+                )
+            converted = [float(value) for value in vector]
+            if any(not math.isfinite(value) for value in converted):
+                raise ProviderError(
+                    f"openai: malformed embed response: vector {index} contains a non-finite value"
+                )
+            vectors.append(converted)
+        return vectors
 
     def embed_image(self, images: list[bytes]) -> list[Vector]:
         raise NotImplementedError(

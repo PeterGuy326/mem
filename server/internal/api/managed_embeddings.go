@@ -65,7 +65,11 @@ func (m *managedSearchExecutor) Search(
 		return hits, nil
 	}
 
-	hits, err := m.base.Search(ctx, query)
+	// The concrete search service performs a final, immediate-before-Worker
+	// guard for paid workspace profiles. Pass its in-process capability only
+	// after Reserve succeeded, so alternate internal call paths cannot borrow a
+	// managed profile without an entitlement decision.
+	hits, err := m.base.Search(search.WithManagedEmbeddingReservation(ctx, m.providerSpec), query)
 	if err != nil {
 		markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		summary, markErr := m.entitlements.MarkIndeterminate(markCtx, reservation.ID)
@@ -90,9 +94,15 @@ func (m *managedSearchExecutor) Search(
 	summary, err := m.entitlements.Finalize(finalizeCtx, reservation.ID, references)
 	cancel()
 	if err != nil {
-		// A crash or failed commit leaves `reserved`; the TTL reconciler moves
-		// it to indeterminate. Returning results before this commit would allow
-		// an unaccounted managed call.
+		// The provider has already run, so do not leave a known settlement
+		// failure merely reserved until the TTL reconciler. Mark it
+		// indeterminate immediately; never return results before a successful
+		// committed finalization.
+		markCtx, markCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		if marked, markErr := m.entitlements.MarkIndeterminate(markCtx, reservation.ID); markErr == nil {
+			m.setResult(marked, false)
+		}
+		markCancel()
 		return nil, &managedSearchError{cause: errManagedUsageCommit}
 	}
 	m.setResult(summary, false)

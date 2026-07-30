@@ -21,7 +21,7 @@ from typing import Optional
 
 from ..logging import get_logger
 from ..providers import EmbeddingProvider, LLMProvider
-from .base import FileRef, ProcessResult
+from .base import ANNOTATION_ANALYSIS_VERSION, FileRef, ProcessResult
 from .text import TextProcessor
 
 log = get_logger(__name__)
@@ -36,11 +36,25 @@ class PDFProcessor:
         embedder: Optional[EmbeddingProvider] = None,
         llm: Optional[LLMProvider] = None,
         *,
-        llm_spec: Optional[str] = None,
+        llm_spec: str | None = None,
+        embedding_spec: str | None = None,
+        embedding_dimensions: int | None = None,
+        embedding_enabled: bool | None = None,
+        llm_enabled: bool | None = None,
+        analysis_version: str = ANNOTATION_ANALYSIS_VERSION,
     ):
         # Delegate the heavy lifting (chunk/embed/summarize) to TextProcessor,
         # forwarding any injected providers so tests can stub them.
-        self._text = TextProcessor(embedder=embedder, llm=llm, llm_spec=llm_spec)
+        self._text = TextProcessor(
+            embedder=embedder,
+            llm=llm,
+            llm_spec=llm_spec,
+            embedding_spec=embedding_spec,
+            embedding_dimensions=embedding_dimensions,
+            embedding_enabled=embedding_enabled,
+            llm_enabled=llm_enabled,
+            analysis_version=analysis_version,
+        )
 
     def process(self, file: FileRef) -> ProcessResult:
         try:

@@ -1,0 +1,16 @@
+{
+  "q-en-path-filter": {
+    "file-en-budget-alpha": 3
+  },
+  "q-en-text-exact": {
+    "file-en-cassini": 3,
+    "file-en-cassino": 0
+  },
+  "q-zh-hard-negative": {
+    "file-zh-magnolia-approved": 0,
+    "file-zh-orchid-cancelled": 3
+  },
+  "q-zh-text-paraphrase": {
+    "file-zh-orchid-cancelled": 3
+  }
+}

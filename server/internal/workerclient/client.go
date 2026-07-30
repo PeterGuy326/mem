@@ -114,6 +114,40 @@ type FileMeta struct {
 	EmbeddingProvider       string
 	VisualEmbeddingProvider string // CLIP image-tower embedder for image/* files
 	VLMProvider             string
+	LLMProvider             string
+	ASRProvider             string
+	// AIProfile is the server-resolved, immutable profile contract for this
+	// indexing request. When set it takes precedence over the legacy provider
+	// fields above: the worker must honour the explicit enabled/disabled state
+	// and must not read a process-wide MEM_DEFAULT_* fallback.
+	//
+	// No URL, credential, or raw source field is representable here. The worker
+	// receives only fixed provider identifiers and harmless provenance.
+	AIProfile *AIProfileOptions
+}
+
+// ProviderStage is one explicitly enabled or disabled processing stage in a
+// server-owned AI profile. Dimensions is meaningful only for embedding stages.
+type ProviderStage struct {
+	Enabled    bool   `json:"enabled"`
+	Provider   string `json:"provider,omitempty"`
+	Dimensions int    `json:"dimensions,omitempty"`
+}
+
+// AIProfileOptions is the options_json contract shared with the Worker. It is
+// intentionally a small, credential-free snapshot rather than a reference to
+// mutable process defaults. Keep Contract stable when changing this shape.
+type AIProfileOptions struct {
+	Contract         string        `json:"contract"`
+	ID               string        `json:"id"`
+	Revision         string        `json:"revision"`
+	PipelineRevision string        `json:"pipeline_revision"`
+	Embedding        ProviderStage `json:"embedding"`
+	VisualEmbedding  ProviderStage `json:"visual_embedding"`
+	LLM              ProviderStage `json:"llm"`
+	VLM              ProviderStage `json:"vlm"`
+	ASR              ProviderStage `json:"asr"`
+	Rerank           ProviderStage `json:"rerank"`
 }
 
 // Index runs Process synchronously and returns the response. Callers wanting
@@ -144,9 +178,16 @@ func (c *Client) Index(ctx context.Context, m FileMeta) (*workerpb.ProcessRespon
 }
 
 // buildOptionsJSON encodes per-request provider overrides into a JSON blob
-// the worker understands. Returns nil when no overrides are set.
+// the worker understands. An AIProfile is authoritative and deliberately does
+// not fall through to any legacy/global provider setting.
 func buildOptionsJSON(m FileMeta) []byte {
-	if m.EmbeddingProvider == "" && m.VisualEmbeddingProvider == "" && m.VLMProvider == "" {
+	if m.AIProfile != nil {
+		out := map[string]any{"ai_profile": m.AIProfile}
+		b, _ := json.Marshal(out)
+		return b
+	}
+	if m.EmbeddingProvider == "" && m.VisualEmbeddingProvider == "" &&
+		m.VLMProvider == "" && m.LLMProvider == "" && m.ASRProvider == "" {
 		return nil
 	}
 	out := map[string]string{}
@@ -158,6 +199,12 @@ func buildOptionsJSON(m FileMeta) []byte {
 	}
 	if m.VLMProvider != "" {
 		out["vlm_provider"] = m.VLMProvider
+	}
+	if m.LLMProvider != "" {
+		out["llm_provider"] = m.LLMProvider
+	}
+	if m.ASRProvider != "" {
+		out["asr_provider"] = m.ASRProvider
 	}
 	b, _ := json.Marshal(out)
 	return b
@@ -221,6 +268,50 @@ func (c *Client) EmbedTextWith(ctx context.Context, q, providerSpec string) ([]f
 	return c.embedText(ctx, q, providerSpec)
 }
 
+// EmbedTextWithProfile embeds query text under one immutable, server-resolved
+// profile. Unlike EmbedTextWith it transmits explicit stage enablement and
+// dimensions, so the Worker cannot fall back to MEM_DEFAULT_* settings.
+func (c *Client) EmbedTextWithProfile(
+	ctx context.Context,
+	q string,
+	profile AIProfileOptions,
+) ([]float32, error) {
+	return c.embedTextProfile(ctx, q, profile)
+}
+
+// ProbeEmbedding satisfies aiprofile.EmbeddingProbe without importing that
+// package (and therefore without creating a dependency cycle). It makes the
+// Worker exercise the exact dimensions requested by the profile contract.
+func (c *Client) ProbeEmbedding(
+	ctx context.Context,
+	providerSpec string,
+	dimensions int,
+) (int, error) {
+	if strings.TrimSpace(providerSpec) == "" || dimensions <= 0 {
+		return 0, errors.New("workerclient: invalid embedding profile probe")
+	}
+	vec, err := c.embedTextProfile(ctx, "workspace AI profile embedding probe", AIProfileOptions{
+		Contract:         "mem.ai-profile/v1",
+		ID:               "profile-probe-v1",
+		Revision:         "probe-v1",
+		PipelineRevision: "probe-v1",
+		Embedding: ProviderStage{
+			Enabled: true, Provider: providerSpec, Dimensions: dimensions,
+		},
+		VisualEmbedding: ProviderStage{
+			Enabled: true, Provider: "clip:ViT-B-32", Dimensions: 512,
+		},
+		LLM:    ProviderStage{Enabled: false},
+		VLM:    ProviderStage{Enabled: false},
+		ASR:    ProviderStage{Enabled: false},
+		Rerank: ProviderStage{Enabled: false},
+	})
+	if err != nil {
+		return 0, err
+	}
+	return len(vec), nil
+}
+
 // EmbedText returns an embedding vector for q by reusing the Process
 // pipeline on a synthetic data: URI (chunked by the worker, first chunk wins).
 //
@@ -269,5 +360,54 @@ func (c *Client) embedText(ctx context.Context, q, providerSpec string) ([]float
 		return nil, errors.New("worker returned no text embedding for query")
 	}
 	// First chunk is enough — query text is short by construction.
+	return emb.Rows[0].Values, nil
+}
+
+func (c *Client) embedTextProfile(
+	ctx context.Context,
+	q string,
+	profile AIProfileOptions,
+) ([]float32, error) {
+	if !c.Enabled() {
+		return nil, errors.New("workerclient: disabled")
+	}
+	if err := c.ensureDialed(); err != nil {
+		return nil, err
+	}
+	options, err := json.Marshal(map[string]any{"ai_profile": profile})
+	if err != nil {
+		return nil, fmt.Errorf("encode AI profile query options: %w", err)
+	}
+	req := &workerpb.ProcessRequest{
+		FileId:      "profile-query",
+		StorageUri:  encodeDataURI(q),
+		Mime:        "text/plain",
+		UserId:      "",
+		Name:        "profile-query.txt",
+		OptionsJson: options,
+	}
+	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	resp, err := c.stub.Process(cctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("worker process(profile query): %w", err)
+	}
+	if resp.Status == workerpb.ProcessStatus_STATUS_FAILED {
+		return nil, fmt.Errorf("worker process(profile query) failed: %s", resp.Error)
+	}
+	emb, ok := resp.Embeddings["text"]
+	if !ok || len(emb.Rows) == 0 {
+		return nil, errors.New("worker returned no text embedding for profile query")
+	}
+	if profile.Embedding.Dimensions > 0 && len(emb.Rows[0].Values) != profile.Embedding.Dimensions {
+		return nil, fmt.Errorf("worker profile embedding dimension mismatch: got %d, want %d",
+			len(emb.Rows[0].Values), profile.Embedding.Dimensions)
+	}
+	// Dimensions alone do not identify an embedding space. Reject a stale or
+	// misconfigured Worker that returns a vector from a different provider.
+	if profile.Embedding.Provider != "" && emb.Provider != profile.Embedding.Provider {
+		return nil, fmt.Errorf("worker profile embedding provider mismatch: got %q, want %q",
+			emb.Provider, profile.Embedding.Provider)
+	}
 	return emb.Rows[0].Values, nil
 }

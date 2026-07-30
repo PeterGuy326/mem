@@ -31,10 +31,12 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/PeterGuy326/mem/server/internal/aiprofile"
 	"github.com/PeterGuy326/mem/server/internal/enrichmentkey"
 	"github.com/PeterGuy326/mem/server/internal/face"
 	"github.com/PeterGuy326/mem/server/internal/file"
 	"github.com/PeterGuy326/mem/server/internal/indexmeta"
+	"github.com/PeterGuy326/mem/server/internal/managedusage"
 	"github.com/PeterGuy326/mem/server/internal/modeltext"
 	"github.com/PeterGuy326/mem/server/internal/workerclient"
 	"github.com/PeterGuy326/mem/server/internal/workerpb"
@@ -48,12 +50,53 @@ type RelatorIface interface {
 
 // Service is the indexer. Construct with New. Safe for concurrent use.
 type Service struct {
-	pool    *pgxpool.Pool
-	client  *workerclient.Client
-	relator RelatorIface
-	face    *face.Service
-	log     *slog.Logger
+	pool           *pgxpool.Pool
+	client         *workerclient.Client
+	relator        RelatorIface
+	face           *face.Service
+	log            *slog.Logger
+	profiles       aiProfileResolver
+	requireProfile bool
+	managedUsage   managedUsageCoordinator
 }
+
+// aiProfileResolver is kept narrow so indexer tests and future profile-store
+// changes do not pull HTTP authorization into the asynchronous file pipeline.
+type aiProfileResolver interface {
+	ResolveForOwner(context.Context, uuid.UUID) (*aiprofile.Selection, error)
+}
+
+// managedUsageCoordinator is the pre-invocation commercial boundary for
+// profile-managed stages. Keeping it narrow lets the async indexer exercise
+// the same reservation protocol as synchronous managed search without giving
+// a Worker or a client request any access to entitlement storage.
+type managedUsageCoordinator interface {
+	Prepare(context.Context, managedusage.Command) (*managedusage.Handle, error)
+}
+
+// providerRoute is the complete, request-local model routing decision for one
+// indexing job.  AIProfile is mutually exclusive with the legacy fields:
+// once a workspace has selected a profile, no mutable provider_settings row
+// or Worker process default may be blended into that job.
+type providerRoute struct {
+	WorkspaceID             uuid.UUID
+	ProfileID               string
+	ProfileRevision         string
+	DataEgress              string
+	EmbeddingProvider       string
+	VisualEmbeddingProvider string
+	LLMProvider             string
+	VLMProvider             string
+	ASRProvider             string
+	AIProfile               *workerclient.AIProfileOptions
+	AllowedMIMETypes        []string
+}
+
+const (
+	aiProfileContract        = "mem.ai-profile/v1"
+	textEmbeddingSchemaDim   = 768
+	visualEmbeddingSchemaDim = 512
+)
 
 // New constructs an indexer Service. If client is nil or disabled, IndexFile
 // becomes a no-op that just leaves index_status='pending'. The relator and
@@ -63,6 +106,27 @@ func New(pool *pgxpool.Pool, client *workerclient.Client, relator RelatorIface, 
 		log = slog.Default()
 	}
 	return &Service{pool: pool, client: client, relator: relator, face: faceSvc, log: log}
+}
+
+// SetAIProfiles makes an explicitly selected workspace profile authoritative
+// for asynchronous indexing. In SaaS, requireProfile blocks the old global
+// default path so an unselected workspace cannot consume a platform key.
+func (s *Service) SetAIProfiles(resolver aiProfileResolver, requireProfile bool) {
+	if s == nil {
+		return
+	}
+	s.profiles = resolver
+	s.requireProfile = requireProfile
+}
+
+// SetManagedUsage installs the server-owned reservation coordinator used for
+// managed profile stages. A managed route without this coordinator fails
+// closed before it can dispatch source data to the Worker.
+func (s *Service) SetManagedUsage(usage managedUsageCoordinator) {
+	if s == nil {
+		return
+	}
+	s.managedUsage = usage
 }
 
 // IndexFileByID resolves the file row by id and dispatches to IndexFile.
@@ -140,17 +204,54 @@ func (s *Service) IndexFile(ctx context.Context, f *file.File) {
 
 	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	embProv, vlmProv, err := s.providerOverrides(ctx, f.UserID)
+	providers, err := s.providerOverrides(ctx, f.UserID)
 	if err != nil {
 		s.log.Error("indexer.provider_lookup_failed", "file_id", f.ID, "err", err)
 		_ = s.setStatus(ctx, f.ID, "failed")
 		return
 	}
-	// For images, always pin a CLIP image-tower embedder so the visual vector
-	// lands in the same 512-d latent space the search visual route queries.
-	// Without this we relied on the worker's default coinciding with CLIP.
-	visualProv := ""
-	if strings.HasPrefix(f.MIME, "image/") {
+	if !providers.allowsMIME(f.MIME) {
+		// A selected profile is an allowlist for data egress as well as a
+		// model choice. Do not send an unsupported source blob to the Worker
+		// merely to learn that it has no processor for it.
+		s.log.Info("indexer.skipped", "file_id", f.ID, "reason", "profile_mime_not_allowed")
+		_ = s.setStatus(ctx, f.ID, "done")
+		return
+	}
+	usageHandle, err := s.prepareManagedUsage(rpcCtx, f, providers)
+	if err != nil {
+		// Prepare may return a handle only when it could not prove that an
+		// earlier no-invocation cleanup completed. Retry that safe release,
+		// but never dispatch the Worker after a failed reservation decision.
+		if usageHandle != nil {
+			if releaseErr := releaseManagedUsage(ctx, usageHandle); releaseErr != nil {
+				s.log.Error("indexer.managed_usage_release_failed", "file_id", f.ID, "err", releaseErr)
+			}
+		}
+		s.log.Warn("indexer.managed_usage_unavailable", "file_id", f.ID, "err", err)
+		_ = s.setStatus(ctx, f.ID, "partial")
+		return
+	}
+	if usageHandle != nil && usageHandle.HasReplay() {
+		// A replayed reservation proves that an identical managed call already
+		// succeeded. File indexing has no safe, persisted Worker replay body,
+		// so invoking again would create an unaccounted duplicate provider
+		// call. Release any newly-created sibling reservations before returning:
+		// no Worker invocation began for them, and retaining them would consume
+		// quota until reconciliation despite no provider work.
+		if releaseErr := releaseManagedReplaySiblings(ctx, usageHandle); releaseErr != nil {
+			s.log.Error("indexer.managed_usage_replay_release_failed", "file_id", f.ID, "err", releaseErr)
+		}
+		// Leave a visible partial state for the explicit rebuild path.
+		s.log.Warn("indexer.managed_usage_replay", "file_id", f.ID)
+		_ = s.setStatus(ctx, f.ID, "partial")
+		return
+	}
+	// For legacy requests, always pin a CLIP image-tower embedder so the visual
+	// vector lands in the same 512-d latent space the search visual route
+	// queries. A profile carries this same explicit stage in its contract.
+	visualProv := providers.VisualEmbeddingProvider
+	if providers.AIProfile == nil && strings.HasPrefix(f.MIME, "image/") {
 		visualProv = "clip:ViT-B-32"
 	}
 	resp, err := s.client.Index(rpcCtx, workerclient.FileMeta{
@@ -160,39 +261,83 @@ func (s *Service) IndexFile(ctx context.Context, f *file.File) {
 		MIME:                    f.MIME,
 		SHA256:                  f.SHA256,
 		StorageKey:              f.StorageKey,
-		EmbeddingProvider:       embProv,
+		EmbeddingProvider:       providers.EmbeddingProvider,
 		VisualEmbeddingProvider: visualProv,
-		VLMProvider:             vlmProv,
+		VLMProvider:             providers.VLMProvider,
+		LLMProvider:             providers.LLMProvider,
+		ASRProvider:             providers.ASRProvider,
+		AIProfile:               providers.AIProfile,
 	})
 	if err != nil {
+		if usageHandle != nil {
+			if markErr := markManagedUsageIndeterminate(ctx, usageHandle); markErr != nil {
+				s.log.Error("indexer.managed_usage_mark_failed", "file_id", f.ID, "err", markErr)
+			}
+		}
 		s.log.Error("indexer.worker_failed", "file_id", f.ID, "err", err)
 		_ = s.setStatus(ctx, f.ID, "failed")
 		return
 	}
 	if resp.Status == workerpb.ProcessStatus_STATUS_FAILED {
+		if usageHandle != nil {
+			if markErr := markManagedUsageIndeterminate(ctx, usageHandle); markErr != nil {
+				s.log.Error("indexer.managed_usage_mark_failed", "file_id", f.ID, "err", markErr)
+			}
+		}
 		s.log.Error("indexer.process_failed", "file_id", f.ID, "err", resp.Error)
 		_ = s.setStatus(ctx, f.ID, "failed")
 		return
 	}
 	if resp.Status == workerpb.ProcessStatus_STATUS_SKIPPED {
+		if usageHandle != nil {
+			if releaseErr := releaseManagedUsage(ctx, usageHandle); releaseErr != nil {
+				s.log.Error("indexer.managed_usage_release_failed", "file_id", f.ID, "err", releaseErr)
+				_ = s.setStatus(ctx, f.ID, "partial")
+				return
+			}
+		}
 		s.log.Info("indexer.skipped", "file_id", f.ID, "reason", "unsupported_mime")
 		_ = s.setStatus(ctx, f.ID, "done")
 		return
+	}
+	if resp.Status == workerpb.ProcessStatus_STATUS_PARTIAL {
+		// A partial response can mean a managed adapter was attempted but did
+		// not return a usable result. Retain the reservation until an operator
+		// reconciles it rather than treating an upstream timeout as a free call.
+		if usageHandle != nil {
+			if markErr := markManagedUsageIndeterminate(ctx, usageHandle); markErr != nil {
+				s.log.Error("indexer.managed_usage_mark_failed", "file_id", f.ID, "err", markErr)
+				_ = s.setStatus(ctx, f.ID, "failed")
+				return
+			}
+		}
+	} else if usageHandle != nil {
+		if finalizeErr := finalizeManagedUsage(ctx, usageHandle); finalizeErr != nil {
+			// Do not persist a successful-looking model result unless its usage
+			// record is committed. Retain the reservation as indeterminate if
+			// possible; an identical retry must not call the provider again.
+			if markErr := markManagedUsageIndeterminate(ctx, usageHandle); markErr != nil {
+				s.log.Error("indexer.managed_usage_mark_failed", "file_id", f.ID, "err", markErr)
+			}
+			s.log.Error("indexer.managed_usage_finalize_failed", "file_id", f.ID, "err", finalizeErr)
+			_ = s.setStatus(ctx, f.ID, "partial")
+			return
+		}
 	}
 	if text := resp.Embeddings["text"]; text != nil && len(text.Rows) > 0 {
 		// Re-resolve after the long worker RPC. The in-process coordinator
 		// prevents local switches; this second check also fails safely if a
 		// different memd instance changed the setting while work was in flight.
-		latestEmb, _, resolveErr := s.providerOverrides(ctx, f.UserID)
+		latestProviders, resolveErr := s.providerOverrides(ctx, f.UserID)
 		if resolveErr != nil {
 			s.log.Error("indexer.embedding_provider_recheck_failed",
 				"file_id", f.ID, "err", resolveErr)
 			_ = s.setStatus(ctx, f.ID, "failed")
 			return
 		}
-		expected := embProv
-		if latestEmb != "" {
-			expected = latestEmb
+		expected := providers.EmbeddingProvider
+		if latestProviders.EmbeddingProvider != "" {
+			expected = latestProviders.EmbeddingProvider
 		}
 		if expected != "" && text.Provider != expected {
 			s.log.Error("indexer.embedding_provider_mismatch",
@@ -355,55 +500,310 @@ func (s *Service) fileUserID(ctx context.Context, tx pgx.Tx, fileID uuid.UUID) (
 	return uid, err
 }
 
-// providerOverrides reads the user's saved provider_settings rows so the
-// worker can be told which model to use for THIS user — important after a
+// providerOverrides resolves one model route for the job. A selected profile
+// wins over all legacy settings and Worker defaults. The legacy branch remains
+// for private deployments that have deliberately not adopted profiles yet.
+func (s *Service) providerOverrides(ctx context.Context, userID uuid.UUID) (providerRoute, error) {
+	if s.profiles != nil {
+		selection, err := s.profiles.ResolveForOwner(ctx, userID)
+		if err == nil {
+			route, routeErr := routeFromAIProfile(selection)
+			if routeErr != nil {
+				return providerRoute{}, routeErr
+			}
+			if err := s.requireProfileCorpusCompatibility(ctx, userID, route.EmbeddingProvider); err != nil {
+				return providerRoute{}, err
+			}
+			return route, nil
+		}
+		if !errors.Is(err, aiprofile.ErrNotFound) {
+			return providerRoute{}, fmt.Errorf("resolve workspace AI profile: %w", err)
+		}
+	}
+	if s.requireProfile {
+		return providerRoute{}, fmt.Errorf("workspace AI profile is required before indexing")
+	}
+
+	return s.legacyProviderOverrides(ctx, userID)
+}
+
+// legacyProviderOverrides reads the user's saved provider_settings rows so
+// the worker can be told which model to use for THIS user — important after a
 // `mem provider set embedding ...` switches dims.
 //
 // Done as a separate package-internal query (not via provider.Service) to
 // avoid an import cycle. When no setting exists, an existing corpus's recorded
 // provider is sent explicitly so worker environment changes cannot drift it.
-func (s *Service) providerOverrides(ctx context.Context, userID uuid.UUID) (emb, vlm string, err error) {
+func (s *Service) legacyProviderOverrides(ctx context.Context, userID uuid.UUID) (providerRoute, error) {
+	var route providerRoute
 	rows, err := s.pool.Query(ctx,
 		`SELECT kind, spec FROM provider_settings WHERE user_id = $1`, userID)
 	if err != nil {
-		return "", "", fmt.Errorf("query provider settings: %w", err)
+		return providerRoute{}, fmt.Errorf("query provider settings: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var kind, spec string
 		if err := rows.Scan(&kind, &spec); err != nil {
-			return "", "", fmt.Errorf("scan provider setting: %w", err)
+			return providerRoute{}, fmt.Errorf("scan provider setting: %w", err)
 		}
 		switch kind {
 		case "embedding":
-			emb = spec
+			route.EmbeddingProvider = spec
 		case "vlm":
-			vlm = spec
+			route.VLMProvider = spec
+		case "llm":
+			route.LLMProvider = spec
+		case "asr":
+			route.ASRProvider = spec
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return "", "", err
+		return providerRoute{}, err
 	}
 	corpusProvider, hasCorpus, err := indexmeta.TextProvider(ctx, s.pool, userID)
 	if err != nil {
-		if emb != "" && (errors.Is(err, indexmeta.ErrUnknownProvider) ||
+		if route.EmbeddingProvider != "" && (errors.Is(err, indexmeta.ErrUnknownProvider) ||
 			errors.Is(err, indexmeta.ErrMixedProviders)) {
 			// Explicit recovery path: an owner has selected a provider and is
 			// rebuilding legacy rows whose historical model was not recorded.
-			return emb, vlm, nil
+			return route, nil
 		}
-		return "", "", err
+		return providerRoute{}, err
 	}
 	if hasCorpus {
-		if emb != "" && emb != corpusProvider {
-			return "", "", fmt.Errorf(
+		if route.EmbeddingProvider != "" && route.EmbeddingProvider != corpusProvider {
+			return providerRoute{}, fmt.Errorf(
 				"configured embedding provider %q differs from corpus provider %q",
-				emb, corpusProvider,
+				route.EmbeddingProvider, corpusProvider,
 			)
 		}
-		emb = corpusProvider
+		route.EmbeddingProvider = corpusProvider
 	}
-	return emb, vlm, nil
+	return route, nil
+}
+
+// routeFromAIProfile converts a persisted, server-selected snapshot to the
+// strict Worker contract. It validates the storage dimensions again at the
+// boundary so a corrupted historical row cannot route a file into a different
+// vector space.
+func routeFromAIProfile(selection *aiprofile.Selection) (providerRoute, error) {
+	if err := aiprofile.ValidateSelection(selection); err != nil {
+		return providerRoute{}, fmt.Errorf("invalid workspace AI profile selection: %w", err)
+	}
+	if !selection.Embedding.Enabled || selection.Embedding.Provider == "" ||
+		selection.Embedding.Dimensions != textEmbeddingSchemaDim {
+		return providerRoute{}, fmt.Errorf("workspace AI profile has an invalid text embedding stage")
+	}
+	if !selection.VisualEmbedding.Enabled || selection.VisualEmbedding.Provider == "" ||
+		selection.VisualEmbedding.Dimensions != visualEmbeddingSchemaDim {
+		return providerRoute{}, fmt.Errorf("workspace AI profile has an invalid visual embedding stage")
+	}
+	profile := &workerclient.AIProfileOptions{
+		Contract:         aiProfileContract,
+		ID:               selection.ProfileID,
+		Revision:         selection.ProfileRevision,
+		PipelineRevision: selection.PipelineRevision,
+		Embedding:        routeStage(selection.Embedding),
+		VisualEmbedding:  routeStage(selection.VisualEmbedding),
+		LLM:              routeStage(selection.LLM),
+		VLM:              routeStage(selection.VLM),
+		ASR:              routeStage(selection.ASR),
+		Rerank:           routeStage(selection.Rerank),
+	}
+	return providerRoute{
+		WorkspaceID:             selection.WorkspaceID,
+		ProfileID:               selection.ProfileID,
+		ProfileRevision:         selection.ProfileRevision,
+		DataEgress:              selection.DataEgress,
+		EmbeddingProvider:       selection.Embedding.Provider,
+		VisualEmbeddingProvider: selection.VisualEmbedding.Provider,
+		LLMProvider:             selection.LLM.Provider,
+		VLMProvider:             selection.VLM.Provider,
+		ASRProvider:             selection.ASR.Provider,
+		AIProfile:               profile,
+		AllowedMIMETypes:        append([]string(nil), selection.AllowedMIMETypes...),
+	}, nil
+}
+
+func routeStage(stage aiprofile.Stage) workerclient.ProviderStage {
+	if !stage.Enabled {
+		return workerclient.ProviderStage{Enabled: false}
+	}
+	return workerclient.ProviderStage{
+		Enabled: stage.Enabled, Provider: stage.Provider, Dimensions: stage.Dimensions,
+	}
+}
+
+// requireProfileCorpusCompatibility enforces that a profile snapshot never
+// silently mixes its declared embedding provider with rows from a different
+// vector space. Profile selection performs the same guard before persistence;
+// this second check covers direct database corruption and multi-process races.
+func (s *Service) requireProfileCorpusCompatibility(
+	ctx context.Context,
+	userID uuid.UUID,
+	provider string,
+) error {
+	corpusProvider, hasCorpus, err := indexmeta.TextProvider(ctx, s.pool, userID)
+	if err != nil {
+		return fmt.Errorf("workspace AI profile corpus identity: %w", err)
+	}
+	if hasCorpus && corpusProvider != provider {
+		return fmt.Errorf("workspace AI profile embedding provider %q differs from corpus provider %q", provider, corpusProvider)
+	}
+	return nil
+}
+
+// allowsMIME is intentionally meaningful only for profile routes. Legacy
+// behavior delegates MIME support to the Worker registry for compatibility.
+func (route providerRoute) allowsMIME(raw string) bool {
+	if route.AIProfile == nil {
+		return true
+	}
+	mediaType, _, err := mime.ParseMediaType(raw)
+	if err != nil || mediaType == "" {
+		return false
+	}
+	for _, allowed := range route.AllowedMIMETypes {
+		if allowed == mediaType {
+			return true
+		}
+		if strings.HasSuffix(allowed, "/*") {
+			prefix := strings.TrimSuffix(allowed, "*")
+			if strings.HasPrefix(mediaType, prefix) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// prepareManagedUsage reserves every managed stage that this exact MIME route
+// can invoke before the source is dispatched to the Worker. The compiled
+// profile is the only source of provider identities; neither file metadata
+// nor a client request can add a billable stage.
+func (s *Service) prepareManagedUsage(
+	ctx context.Context,
+	f *file.File,
+	route providerRoute,
+) (*managedusage.Handle, error) {
+	if route.AIProfile == nil || route.DataEgress != aiprofile.DataEgressManagedIdealab {
+		return nil, nil
+	}
+	if s == nil || s.managedUsage == nil {
+		return nil, managedusage.ErrEntitlementUnavailable
+	}
+	stages := managedStagesForMIME(route, f.MIME)
+	if len(stages) == 0 {
+		return nil, nil
+	}
+	return s.managedUsage.Prepare(ctx, managedusage.Command{
+		WorkspaceID:     route.WorkspaceID,
+		FileID:          f.ID,
+		ContentSHA256:   f.SHA256,
+		ProfileID:       route.ProfileID,
+		ProfileRevision: route.ProfileRevision,
+		Stages:          stages,
+	})
+}
+
+// managedStagesForMIME mirrors the Worker profile dispatcher. It deliberately
+// lists only stages that the selected processor can reach; rerank is not
+// included because mem has no verified Idealab rerank invocation path.
+func managedStagesForMIME(route providerRoute, rawMIME string) []managedusage.StageSpec {
+	if route.AIProfile == nil || route.DataEgress != aiprofile.DataEgressManagedIdealab {
+		return nil
+	}
+	mediaType, _, err := mime.ParseMediaType(rawMIME)
+	if err != nil {
+		return nil
+	}
+	profile := route.AIProfile
+	stages := make([]managedusage.StageSpec, 0, 3)
+	appendStage := func(stage managedusage.Stage, provider workerclient.ProviderStage) {
+		if provider.Enabled && provider.Provider != "" {
+			stages = append(stages, managedusage.StageSpec{
+				Stage: stage, ProviderSpec: provider.Provider,
+			})
+		}
+	}
+	appendTextStages := func() {
+		appendStage(managedusage.StageEmbedding, profile.Embedding)
+		appendStage(managedusage.StageLLM, profile.LLM)
+	}
+
+	switch {
+	case strings.HasPrefix(mediaType, "text/"), isExtraTextMIME(mediaType), mediaType == "application/pdf":
+		appendTextStages()
+	case strings.HasPrefix(mediaType, "image/"):
+		// CLIP visual embedding is included so the coordinator can prove it
+		// is a fixed local stage and therefore must not consume managed quota.
+		appendStage(managedusage.StageVisualEmbedding, profile.VisualEmbedding)
+		appendStage(managedusage.StageVLM, profile.VLM)
+	case strings.HasPrefix(mediaType, "audio/"):
+		// AudioProcessor exits before text enrichment when ASR is disabled.
+		// If a future reviewed profile enables ASR, reserve it before the
+		// transcription and the downstream text stages it can unlock.
+		if profile.ASR.Enabled {
+			appendStage(managedusage.StageASR, profile.ASR)
+			appendTextStages()
+		}
+	}
+	if len(stages) == 0 {
+		return nil
+	}
+	return stages
+}
+
+func isExtraTextMIME(mediaType string) bool {
+	switch mediaType {
+	case "application/json", "application/xml", "application/yaml",
+		"application/x-yaml", "application/javascript", "application/typescript",
+		"application/x-sh", "application/x-python", "application/x-toml":
+		return true
+	default:
+		return false
+	}
+}
+
+const managedUsageSettlementTimeout = 5 * time.Second
+
+func finalizeManagedUsage(ctx context.Context, handle *managedusage.Handle) error {
+	if handle == nil {
+		return nil
+	}
+	settleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), managedUsageSettlementTimeout)
+	defer cancel()
+	return handle.Finalize(settleCtx)
+}
+
+func releaseManagedUsage(ctx context.Context, handle *managedusage.Handle) error {
+	if handle == nil {
+		return nil
+	}
+	settleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), managedUsageSettlementTimeout)
+	defer cancel()
+	return handle.ReleaseUninvoked(settleCtx)
+}
+
+// releaseManagedReplaySiblings releases only reservations that were newly
+// created alongside an already-succeeded replay. It must run before returning
+// from a replay path because no Worker invocation is allowed after HasReplay.
+// Handle.ReleaseUninvoked deliberately leaves replayed entries untouched.
+func releaseManagedReplaySiblings(ctx context.Context, handle *managedusage.Handle) error {
+	if handle == nil || !handle.HasReplay() {
+		return nil
+	}
+	return releaseManagedUsage(ctx, handle)
+}
+
+func markManagedUsageIndeterminate(ctx context.Context, handle *managedusage.Handle) error {
+	if handle == nil {
+		return nil
+	}
+	settleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), managedUsageSettlementTimeout)
+	defer cancel()
+	return handle.MarkIndeterminate(settleCtx)
 }
 
 func (s *Service) setStatus(ctx context.Context, fileID uuid.UUID, status string) error {
@@ -464,6 +864,7 @@ var safeProcessorMetadataKeys = map[string]struct{}{
 	"asr_provider":           {},
 	"transcript_empty":       {},
 	"annotations_complete":   {},
+	"ai_profile":             {},
 }
 
 var degradedMetadataKeys = map[string]string{
@@ -727,9 +1128,44 @@ func sanitizedProcessorFact(key string, value any) (any, bool) {
 	case "asr_provider":
 		text, ok := value.(string)
 		return text, ok && validMachineIdentifier(text, 255)
+	case "ai_profile":
+		return sanitizedAIProfileProvenance(value)
 	default:
 		return nil, false
 	}
+}
+
+// sanitizedAIProfileProvenance accepts only the small Worker projection of a
+// server-resolved profile. It deliberately does not preserve provider URLs,
+// credentials, prompts, raw upstream replies, or arbitrary metadata supplied
+// by a compromised worker.
+func sanitizedAIProfileProvenance(value any) (map[string]string, bool) {
+	object, ok := value.(map[string]any)
+	if !ok || len(object) != 4 {
+		return nil, false
+	}
+	contract, contractOK := object["contract"].(string)
+	id, idOK := object["id"].(string)
+	revision, revisionOK := object["revision"].(string)
+	pipeline, pipelineOK := object["pipeline_revision"].(string)
+	if !contractOK || contract != aiProfileContract || !idOK ||
+		!revisionOK || !pipelineOK || !validMachineIdentifier(id, 64) ||
+		!validMachineIdentifier(revision, 64) || !validMachineIdentifier(pipeline, 64) {
+		return nil, false
+	}
+	for key := range object {
+		switch key {
+		case "contract", "id", "revision", "pipeline_revision":
+		default:
+			return nil, false
+		}
+	}
+	return map[string]string{
+		"contract":          contract,
+		"id":                id,
+		"revision":          revision,
+		"pipeline_revision": pipeline,
+	}, true
 }
 
 func boundedJSONInteger(value any, minimum, maximum float64) (any, bool) {

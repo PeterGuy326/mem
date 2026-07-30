@@ -13,7 +13,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Optional
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -57,6 +57,13 @@ class Settings(BaseSettings):
     # ---- Provider: OpenAI (stub in W1) ----
     openai_api_key: Optional[str] = Field(default=None, alias="OPENAI_API_KEY")
     openai_base_url: Optional[str] = Field(default=None, alias="OPENAI_BASE_URL")
+    # Optional because not every OpenAI-compatible embedding endpoint supports
+    # the OpenAI ``dimensions`` request field. When set, the adapter requests
+    # and verifies exactly this many values per vector.
+    openai_embedding_dimensions: int | None = Field(
+        default=None,
+        alias="OPENAI_EMBEDDING_DIMENSIONS",
+    )
 
     # ---- Provider: Anthropic (stub in W1) ----
     anthropic_api_key: Optional[str] = Field(default=None, alias="ANTHROPIC_API_KEY")
@@ -78,6 +85,32 @@ class Settings(BaseSettings):
     # ---- Logging ----
     log_level: str = Field(default="INFO", alias="MEM_LOG_LEVEL")
     log_json: bool = Field(default=False, alias="MEM_LOG_JSON")
+
+    @field_validator("openai_embedding_dimensions", mode="before")
+    @classmethod
+    def validate_openai_embedding_dimensions(cls, value: object) -> int | None:
+        """Accept an optional, positive, decimal output dimension only.
+
+        This setting is forwarded to a managed endpoint, so reject coercions
+        such as booleans, floats, and signed strings rather than silently
+        changing the requested vector space.
+        """
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            raise ValueError("OPENAI_EMBEDDING_DIMENSIONS must be a positive integer")
+        if isinstance(value, int):
+            dimensions = value
+        elif isinstance(value, str):
+            normalized = value.strip()
+            if not normalized or not normalized.isascii() or not normalized.isdecimal():
+                raise ValueError("OPENAI_EMBEDDING_DIMENSIONS must be a positive integer")
+            dimensions = int(normalized)
+        else:
+            raise ValueError("OPENAI_EMBEDDING_DIMENSIONS must be a positive integer")
+        if dimensions <= 0:
+            raise ValueError("OPENAI_EMBEDDING_DIMENSIONS must be a positive integer")
+        return dimensions
 
 
 @lru_cache(maxsize=1)

@@ -20,7 +20,7 @@ from ..config import get_settings
 from ..logging import get_logger
 from ..providers import ASRProvider, LLMProvider, ProviderError, get_asr_provider
 from ..providers.base import EmbeddingProvider
-from .base import PROVIDER_ERROR_MARKER, FileRef, ProcessResult
+from .base import ANNOTATION_ANALYSIS_VERSION, PROVIDER_ERROR_MARKER, FileRef, ProcessResult
 from .text import TextProcessor
 
 log = get_logger(__name__)
@@ -37,20 +37,55 @@ class AudioProcessor:
         llm: LLMProvider | None = None,
         *,
         llm_spec: str | None = None,
+        asr_spec: str | None = None,
+        asr_enabled: bool | None = None,
+        embedding_spec: str | None = None,
+        embedding_dimensions: int | None = None,
+        embedding_enabled: bool | None = None,
+        llm_enabled: bool | None = None,
+        analysis_version: str = ANNOTATION_ANALYSIS_VERSION,
     ):
         self._asr = asr
+        self._asr_spec = asr_spec
+        self._asr_enabled = asr_enabled
         # Delegate chunk/embed/summarize to TextProcessor, forwarding any
         # injected providers so tests can stub them.
-        self._text = TextProcessor(embedder=embedder, llm=llm, llm_spec=llm_spec)
+        self._text = TextProcessor(
+            embedder=embedder,
+            llm=llm,
+            llm_spec=llm_spec,
+            embedding_spec=embedding_spec,
+            embedding_dimensions=embedding_dimensions,
+            embedding_enabled=embedding_enabled,
+            llm_enabled=llm_enabled,
+            analysis_version=analysis_version,
+        )
 
-    def _resolve_asr(self) -> ASRProvider:
+    def _resolve_asr(self) -> ASRProvider | None:
+        if self._asr_enabled is False:
+            return None
         if self._asr is None:
-            self._asr = get_asr_provider(get_settings().default_asr)
+            spec = self._asr_spec
+            if spec is None:
+                if self._asr_enabled is True:
+                    raise ProviderError("profile asr provider is missing")
+                spec = get_settings().default_asr
+            self._asr = get_asr_provider(spec)
         return self._asr
 
     def process(self, file: FileRef) -> ProcessResult:
+        if self._asr_enabled is False:
+            return ProcessResult(
+                processor=self.name,
+                metadata={
+                    "asr_skipped": "disabled_by_profile",
+                    "byte_length": len(file.data),
+                },
+            )
         try:
             asr = self._resolve_asr()
+            if asr is None:
+                raise ProviderError("profile asr provider is missing")
             transcription = asr.transcribe(file.data)
         except (ProviderError, NotImplementedError):
             log.warning(

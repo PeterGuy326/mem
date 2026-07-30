@@ -1,0 +1,4 @@
+{"id":"q-en-text-exact","text":"Cassini Saturn hexagonal north-pole storm rings","language":"en","slice":"exact","filters":{"workspace":"profile-eval","source_kind":"text"},"expected_source_kind":"text"}
+{"id":"q-zh-text-paraphrase","text":"哪份兰花记录说旧版本继续使用、不再逐步上线？","language":"zh","slice":"paraphrase","filters":{"workspace":"profile-eval","source_kind":"text"},"expected_source_kind":"text"}
+{"id":"q-en-path-filter","text":"Project Atlas budget ceiling 42000 credits","language":"en","slice":"filters","filters":{"workspace":"profile-eval","path_prefix":"/profile-eval/finance/","source_kind":"text"},"expected_source_kind":"text"}
+{"id":"q-zh-hard-negative","text":"兰花项目明确取消而不是批准灰度发布","language":"zh","slice":"hard-negative","filters":{"workspace":"profile-eval","source_kind":"text"},"expected_source_kind":"text"}

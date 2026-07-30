@@ -60,6 +60,7 @@ def structured_annotations(
     raw: str,
     *,
     provider: str = "",
+    analysis_version: str = ANNOTATION_ANALYSIS_VERSION,
 ) -> list[AnnotationSuggestion] | None:
     """Parse the exact model JSON contract.
 
@@ -109,7 +110,7 @@ def structured_annotations(
                 value=description_value,
                 confidence=description_confidence,
                 provider=provider_name,
-                analysis_version=ANNOTATION_ANALYSIS_VERSION,
+                analysis_version=analysis_version,
             )
         ]
     except ValueError:
@@ -131,7 +132,7 @@ def structured_annotations(
             value=value,
             confidence=confidence,
             provider=provider_name,
-            analysis_version=ANNOTATION_ANALYSIS_VERSION,
+            analysis_version=analysis_version,
         )
         if existing_position is None:
             tag_positions[key] = len(suggestions)
@@ -148,6 +149,7 @@ def plain_description(
     raw: str,
     *,
     provider: str = "",
+    analysis_version: str = ANNOTATION_ANALYSIS_VERSION,
 ) -> AnnotationSuggestion | None:
     """Convert a legacy plain response into a bounded description suggestion.
 
@@ -178,7 +180,7 @@ def plain_description(
         value=normalized,
         confidence=PLAIN_DESCRIPTION_CONFIDENCE,
         provider=_normalize_provider(provider),
-        analysis_version=ANNOTATION_ANALYSIS_VERSION,
+        analysis_version=analysis_version,
     )
 
 

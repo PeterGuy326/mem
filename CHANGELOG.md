@@ -9,6 +9,12 @@ The project is not yet publishing stable semantic-versioned releases.
 
 ### Added
 
+- Server-owned, workspace-scoped AI profiles: an offline-first
+  `local-fast-v1` fixed to Ollama Qwen3 Embedding 0.6B at 768 dimensions, and
+  a SaaS-only `idealab-quality-v1` fixed to Idealab-compatible
+  `text-embedding-3-large` plus Qwen3.7 Max, with explicit stage contracts,
+  profile-aware CLI/API selection, preflight probing, and isolated index
+  generations.
 - Repeatable stdio MCP certification for OpenClaw, Hermes Agent, Claude Code,
   OpenCode, and Codex, with versioned config manifests, a model-free fake-memd
   lifecycle/failure contract, isolated real-host evidence, and explicit
@@ -100,6 +106,11 @@ The project is not yet publishing stable semantic-versioned releases.
 
 ### Security
 
+- Make profile IDs the only client-selectable AI-routing input: reject model,
+  endpoint, credential, and stale-profile injection; validate 768-dimensional
+  embedding responses; reserve managed usage before a declared paid stage; and
+  fail closed rather than silently falling back across a billing or data-egress
+  boundary.
 - Authorize account, workspace membership, scope, and path before entitlement
   lookup or provider invocation; persist only bounded identifiers, accounting
   state, timestamps, and hashes in the managed-embedding usage ledger.

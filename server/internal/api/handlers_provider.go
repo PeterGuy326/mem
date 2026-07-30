@@ -9,10 +9,12 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/PeterGuy326/mem/server/internal/aiprofile"
 	"github.com/PeterGuy326/mem/server/internal/auth"
 	"github.com/PeterGuy326/mem/server/internal/indexmeta"
 	"github.com/PeterGuy326/mem/server/internal/provider"
 	"github.com/PeterGuy326/mem/server/internal/queue"
+	"github.com/PeterGuy326/mem/server/internal/workspace"
 )
 
 // handleListProviders → GET /v1/providers
@@ -56,6 +58,10 @@ func (s *Server) handleSetProvider(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_body", err.Error())
 		return
 	}
+	if err := s.validateLegacyProviderMutation(r.Context(), body.Spec); err != nil {
+		writeProviderPolicyError(w, err)
+		return
+	}
 	res, err := s.Provider.Set(r.Context(), u.ID, kind, body.Spec)
 	if err != nil {
 		if errors.Is(err, provider.ErrEmbeddingGeneration) {
@@ -86,6 +92,10 @@ func (s *Server) handleTestProvider(w http.ResponseWriter, r *http.Request) {
 	}
 	// Body is optional — ignore decode errors when empty.
 	_ = json.NewDecoder(r.Body).Decode(&body)
+	if err := s.validateLegacyProviderTest(r.Context(), u.ID, kind, body.Spec); err != nil {
+		writeProviderPolicyError(w, err)
+		return
+	}
 
 	out, err := s.Provider.Test(r.Context(), u.ID, kind, body.Spec)
 	if err != nil {
@@ -117,6 +127,10 @@ func (s *Server) handleReindexEmbedding(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "provider_lookup_failed", err.Error())
+		return
+	}
+	if err := s.validateLegacyProviderMutation(r.Context(), setting.Spec); err != nil {
+		writeProviderPolicyError(w, err)
 		return
 	}
 	queueEnabled := s.Queue != nil && s.Queue.Enabled()
@@ -191,4 +205,95 @@ func (s *Server) handleReindexEmbedding(w http.ResponseWriter, r *http.Request) 
 		"queued":   queued,
 		"failed":   failed,
 	})
+}
+
+// validateLegacyProviderMutation protects the legacy arbitrary-spec surface
+// from partially overriding a fixed profile or borrowing a platform managed
+// gateway credential. It runs on both Set and Test: a probe is an invocation.
+func (s *Server) validateLegacyProviderMutation(ctx context.Context, spec string) error {
+	active, err := s.activeAIProfile(ctx)
+	if err != nil {
+		return err
+	}
+	mode := s.DeploymentMode
+	if mode == "" {
+		// Direct handler unit tests construct a minimal Server; production
+		// config always sets this. Private is the backwards-compatible safe
+		// default because it has no platform credential entitlement.
+		mode = aiprofile.DeploymentPrivate
+	}
+	return aiprofile.ValidateLegacyProviderMutation(mode, active, spec)
+}
+
+func (s *Server) validateLegacyProviderTest(
+	ctx context.Context,
+	userID uuid.UUID,
+	kind, spec string,
+) error {
+	active, err := s.activeAIProfile(ctx)
+	if err != nil {
+		return err
+	}
+	if active != nil {
+		return aiprofile.ErrProfileActive
+	}
+	if spec == "" {
+		if s.Provider == nil {
+			return nil
+		}
+		setting, getErr := s.Provider.Get(ctx, userID, kind)
+		if getErr != nil {
+			// Preserve the existing not-found response from handleTestProvider;
+			// no provider call occurs in that path.
+			if errors.Is(getErr, provider.ErrNotFound) {
+				return nil
+			}
+			return getErr
+		}
+		spec = setting.Spec
+	}
+	mode := s.DeploymentMode
+	if mode == "" {
+		mode = aiprofile.DeploymentPrivate
+	}
+	return aiprofile.ValidateLegacyProviderMutation(mode, nil, spec)
+}
+
+func (s *Server) activeAIProfile(ctx context.Context) (*aiprofile.Selection, error) {
+	if s.AIProfiles == nil {
+		return nil, nil
+	}
+	// The provider routes are authenticated through workspaceMiddleware, so a
+	// workspace selection cannot be inferred from a caller-provided user ID.
+	selection, err := s.AIProfiles.Get(ctx, currentWorkspaceFromContext(ctx).ID)
+	if errors.Is(err, aiprofile.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return selection, nil
+}
+
+func currentWorkspaceFromContext(ctx context.Context) *workspace.Workspace {
+	return ctx.Value(ctxWorkspace).(*workspace.Workspace)
+}
+
+func writeProviderPolicyError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, aiprofile.ErrProfileActive):
+		writeError(w, http.StatusConflict, "ai_profile_active",
+			"an active workspace AI profile owns model selection")
+	case errors.Is(err, aiprofile.ErrManagedProviderRequiresProfile):
+		writeError(w, http.StatusConflict, "managed_profile_required",
+			"managed providers can only be selected through a workspace AI profile")
+	case errors.Is(err, aiprofile.ErrInvalidProviderSpec):
+		writeError(w, http.StatusBadRequest, "invalid_provider_spec", "provider spec is invalid")
+	case errors.Is(err, aiprofile.ErrStoreUnavailable):
+		writeError(w, http.StatusServiceUnavailable, "ai_profile_store_unavailable",
+			"workspace AI profile policy is unavailable")
+	default:
+		writeError(w, http.StatusInternalServerError, "provider_policy_unavailable",
+			"provider policy could not be evaluated")
+	}
 }

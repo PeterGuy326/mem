@@ -34,11 +34,13 @@ from .annotations import (
     tag_values,
 )
 from .base import (
+    ANNOTATION_ANALYSIS_VERSION,
     PROVIDER_ERROR_MARKER,
     EmbeddingRow,
     EmbeddingSet,
     FileRef,
     ProcessResult,
+    get_explicit_embedding_provider,
 )
 
 log = get_logger(__name__)
@@ -72,23 +74,52 @@ class TextProcessor:
         llm: LLMProvider | None = None,
         *,
         llm_spec: str | None = None,
+        embedding_spec: str | None = None,
+        embedding_dimensions: int | None = None,
+        embedding_enabled: bool | None = None,
+        llm_enabled: bool | None = None,
+        analysis_version: str = ANNOTATION_ANALYSIS_VERSION,
     ):
         self._embedder = embedder
         self._llm = llm
         self._llm_spec = llm_spec
+        self._embedding_spec = embedding_spec
+        self._embedding_dimensions = embedding_dimensions
+        # ``None`` retains legacy defaults; booleans are the explicit profile
+        # contract and must never fall through to MEM_DEFAULT_*.
+        self._embedding_enabled = embedding_enabled
+        self._llm_enabled = llm_enabled
+        self._analysis_version = analysis_version
 
     # ---- helpers ----
 
-    def _resolve_embedder(self) -> EmbeddingProvider:
+    def _resolve_embedder(self) -> EmbeddingProvider | None:
+        if self._embedding_enabled is False:
+            return None
         if self._embedder is None:
-            self._embedder = get_embedding_provider(get_settings().default_embedding)
+            spec = self._embedding_spec
+            if spec is None:
+                if self._embedding_enabled is True:
+                    raise ProviderError("profile embedding provider is missing")
+                # Preserve the legacy default construction path exactly when
+                # no profile capability state was supplied.
+                self._embedder = get_embedding_provider(get_settings().default_embedding)
+            else:
+                self._embedder = get_explicit_embedding_provider(
+                    spec,
+                    self._embedding_dimensions,
+                )
         return self._embedder
 
     def _resolve_llm(self) -> LLMProvider | None:
+        if self._llm_enabled is False:
+            return None
         if self._llm is not None:
             return self._llm
         spec = self._llm_spec
         if spec is None:
+            if self._llm_enabled is True:
+                raise ProviderError("profile llm provider is missing")
             spec = get_settings().default_llm
         spec = spec.strip()
         if not spec:
@@ -121,37 +152,45 @@ class TextProcessor:
         }
 
         # 1. Embeddings.
-        try:
-            embedder = self._resolve_embedder()
-            vectors = embedder.embed_text(chunks)
-            if vectors:
-                dim = len(vectors[0])
-                result.embeddings["text"] = EmbeddingSet(
-                    provider=embedder.name,
-                    dim=dim,
-                    rows=[
-                        EmbeddingRow(values=v, index=i, chunk_text=chunks[i])
-                        for i, v in enumerate(vectors)
-                    ],
+        if self._embedding_enabled is not False:
+            try:
+                embedder = self._resolve_embedder()
+                if embedder is not None:
+                    vectors = embedder.embed_text(chunks)
+                    if vectors:
+                        if self._embedding_dimensions is not None and any(
+                            len(vector) != self._embedding_dimensions for vector in vectors
+                        ):
+                            raise ProviderError(
+                                "profile embedding response did not match configured dimensions"
+                            )
+                        dim = len(vectors[0])
+                        result.embeddings["text"] = EmbeddingSet(
+                            provider=embedder.name,
+                            dim=dim,
+                            rows=[
+                                EmbeddingRow(values=v, index=i, chunk_text=chunks[i])
+                                for i, v in enumerate(vectors)
+                            ],
+                        )
+            except (ProviderError, NotImplementedError):
+                log.warning(
+                    "text.embed_failed",
+                    file_id=file.file_id,
+                    error=PROVIDER_ERROR_MARKER,
                 )
-        except (ProviderError, NotImplementedError):
-            log.warning(
-                "text.embed_failed",
-                file_id=file.file_id,
-                error=PROVIDER_ERROR_MARKER,
-            )
-            result.metadata["embed_error"] = PROVIDER_ERROR_MARKER
-        except Exception:  # noqa: BLE001 — provider bugs must stay partial and redacted
-            log.error(
-                "text.embed_unexpected",
-                file_id=file.file_id,
-                error=PROVIDER_ERROR_MARKER,
-            )
-            result.metadata["embed_error"] = PROVIDER_ERROR_MARKER
+                result.metadata["embed_error"] = PROVIDER_ERROR_MARKER
+            except Exception:  # noqa: BLE001 — provider bugs must stay partial and redacted
+                log.error(
+                    "text.embed_unexpected",
+                    file_id=file.file_id,
+                    error=PROVIDER_ERROR_MARKER,
+                )
+                result.metadata["embed_error"] = PROVIDER_ERROR_MARKER
 
         # 2. Optional model annotation. Provider resolution happens here so
         # importing the registry and serving HealthCheck never require a model.
-        if len(text) >= 200:
+        if len(text) >= 200 and self._llm_enabled is not False:
             try:
                 llm = self._resolve_llm()
                 if llm is None:
@@ -174,6 +213,7 @@ class TextProcessor:
                 suggestions = structured_annotations(
                     model_output,
                     provider=getattr(llm, "name", ""),
+                    analysis_version=self._analysis_version,
                 )
                 if suggestions is not None:
                     result.annotations = suggestions
@@ -184,6 +224,7 @@ class TextProcessor:
                     fallback = plain_description(
                         model_output,
                         provider=getattr(llm, "name", ""),
+                        analysis_version=self._analysis_version,
                     )
                     if fallback is not None:
                         # Compatibility for explicit hooks and their existing

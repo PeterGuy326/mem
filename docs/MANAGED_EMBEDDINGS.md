@@ -1,13 +1,13 @@
-# Managed embedding entitlements
+# Managed AI usage and embedding entitlements
 
-Managed embeddings are an optional hosted-service boundary. They do not turn
-mem into an answer-model proxy, and they do not make embeddings mandatory for
-structured memory: `remember` and lexical `context --source memory` remain
-model-independent.
+Managed AI stages (including embeddings) are an optional hosted-service
+boundary. They do not turn mem into an answer-model proxy, and they do not
+make embeddings mandatory for structured memory: `remember` and lexical
+`context --source memory` remain model-independent.
 
 ## Deployment modes
 
-| Mode | Embedding source | Commercial behavior |
+| Mode | AI source | Commercial behavior |
 | --- | --- | --- |
 | `private` | Local or user-configured provider | No subscription or entitlement check |
 | `saas`, local/BYOM provider | A provider spec other than the platform-managed exact spec | No managed-service charge |
@@ -24,20 +24,69 @@ Payment collection is outside this change. A billing service or an operator
 may activate `workspace_entitlements`; mem consumes that payment-provider-
 neutral state.
 
-## SaaS configuration
+`idealab-quality-v1` is a SaaS-only workspace profile. Private deployments may
+continue to use their local/BYOM path, but they cannot select this managed
+quality profile.
 
-The hosted process must configure:
+## SaaS configuration for `idealab-quality-v1`
+
+To make the managed quality profile available, configure the hosted process and
+the Worker with these exact values (inject the endpoint credential at runtime;
+do not put it in a checked-in `.env` file):
 
 ```bash
 MEM_DEPLOYMENT_MODE=saas
-MEM_MANAGED_EMBEDDING_PROVIDER=openai:text-embedding-3-small
+MEM_AI_PROFILES=local-fast-v1,idealab-quality-v1
+MEM_MANAGED_EMBEDDING_PROVIDER=openai:text-embedding-3-large
 MEM_MANAGED_EMBEDDING_RESERVATION_TTL=2m
+
+# Worker process configuration: use the Idealab OpenAI-compatible endpoint.
+OPENAI_BASE_URL=https://<idealab-openai-compatible-endpoint>
+OPENAI_API_KEY=<injected-runtime-secret>
 ```
 
-The provider value must be one exact `<provider>:<model>` spec. There is no
-fallback across a billing or privacy boundary. SaaS startup and `/readyz`
-fail closed when the entitlement schema or managed provider configuration is
-unavailable. Private mode bypasses this readiness dependency.
+`MEM_AI_PROFILES` defaults to only `local-fast-v1`; listing the paid profile is
+an explicit operator action. When `idealab-quality-v1` is enabled in SaaS,
+`MEM_MANAGED_EMBEDDING_PROVIDER` must be exactly
+`openai:text-embedding-3-large`. The provider value must be one exact
+`<provider>:<model>` spec. There is no fallback across a billing or privacy
+boundary. SaaS startup and `/readyz` fail closed when the entitlement schema or
+managed provider configuration is unavailable. Private mode bypasses this
+readiness dependency. The selected profile sends `dimensions: 768` on each
+embedding request; do not set a process-wide dimension variable merely to
+activate this profile.
+
+After the service is healthy, an authorized workspace administrator can inspect
+the server allowlist and select only its ID:
+
+```bash
+mem profile list
+mem profile status
+mem profile select idealab-quality-v1
+```
+
+The CLI never accepts a model name, base URL, prompt, or API key for this
+operation. The server fixes the managed profile to
+`openai:text-embedding-3-large` at 768 dimensions and the pinned
+`openai:qwen3.7-max-2026-06-08` text LLM; CLIP remains the fixed local visual
+space. VLM, ASR, and reranking are explicitly disabled until Idealab exposes
+reviewed API contracts for each capability. The profile name is a routing and
+support contract, not a benchmark or universal-quality claim.
+
+Once selected, the profile locks those model choices. A failure of a declared
+managed stage never falls back to a local model, a `MEM_DEFAULT_*` model, or a
+different cloud model. If the embedding stage is unavailable, the semantic
+operation fails rather than changing vector spaces. For file processing, mem
+may retain successful declared-stage outputs and report a partial result, but a
+partial result never means that an undeclared fallback model saw the file.
+`context --source all` likewise keeps independent lexical-memory evidence with
+a bounded partial warning when managed file recall fails.
+
+Profile selection is model routing, not a claim that every model has the same
+price or benchmark result. Each declared managed stage uses the pre-invocation
+accounting lifecycle described below. Switching between local and managed
+profiles requires a fresh versioned index generation and complete rebuild; it
+is not a provider setting to change in place.
 
 For an initial, offline entitlement activation, an operator can use a
 transaction like the following after replacing the workspace ID and quota.
@@ -96,6 +145,16 @@ automatically retry a `504`; first inspect the workspace usage/request state
 or contact an administrator. Stale crash reservations are reconciled to the
 same state after the configured TTL. Period rollover freezes crossing
 reservations as indeterminate before resetting the new period's counters.
+
+Managed profile activation and asynchronous file enrichment follow the same
+pre-invocation rule. Selecting `idealab-quality-v1` first reserves its fixed
+embedding preflight; the Worker is not asked to probe until that succeeds.
+For each supported file, mem reserves every declared managed stage that its
+MIME pipeline can invoke before sending the source to the Worker (for example,
+text/PDF embedding plus LLM). Images currently stay on the fixed local CLIP
+stage and consume no managed unit; their bytes are not sent to a guessed VLM.
+A Worker timeout, failed response, or partial managed result is retained as
+indeterminate rather than retried into a second provider call.
 
 If managed file recall fails while lexical structured-memory recall succeeds,
 `context --source all` returns the surviving evidence with

@@ -38,12 +38,14 @@ from .annotations import (
     tag_values,
 )
 from .base import (
+    ANNOTATION_ANALYSIS_VERSION,
     PROVIDER_ERROR_MARKER,
     EmbeddingRow,
     EmbeddingSet,
     Entity,
     FileRef,
     ProcessResult,
+    get_explicit_embedding_provider,
 )
 
 log = get_logger(__name__)
@@ -70,23 +72,58 @@ class ImageProcessor:
         self,
         vlm: VLMProvider | None = None,
         embedder: EmbeddingProvider | None = None,
+        *,
+        vlm_spec: str | None = None,
+        vlm_enabled: bool | None = None,
+        visual_embedding_spec: str | None = None,
+        visual_embedding_dimensions: int | None = None,
+        visual_embedding_enabled: bool | None = None,
+        analysis_version: str = ANNOTATION_ANALYSIS_VERSION,
     ):
         # Allow dependency injection (mostly for tests). In production
         # these are resolved lazily on first process() to avoid touching
         # Ollama at import time.
         self._vlm = vlm
         self._embedder = embedder
+        self._vlm_spec = vlm_spec
+        self._vlm_enabled = vlm_enabled
+        self._visual_embedding_spec = visual_embedding_spec
+        self._visual_embedding_dimensions = visual_embedding_dimensions
+        self._visual_embedding_enabled = visual_embedding_enabled
+        self._analysis_version = analysis_version
 
     # ---- helpers ----
 
-    def _resolve_vlm(self) -> VLMProvider:
+    def _resolve_vlm(self) -> VLMProvider | None:
+        if self._vlm_enabled is False:
+            return None
         if self._vlm is None:
-            self._vlm = get_vlm_provider(get_settings().default_vlm)
+            spec = self._vlm_spec
+            if spec is None:
+                if self._vlm_enabled is True:
+                    raise ProviderError("profile vlm provider is missing")
+                spec = get_settings().default_vlm
+            self._vlm = get_vlm_provider(spec)
         return self._vlm
 
-    def _resolve_embedder(self) -> EmbeddingProvider:
+    def _resolve_embedder(self) -> EmbeddingProvider | None:
+        if self._visual_embedding_enabled is False:
+            return None
         if self._embedder is None:
-            self._embedder = get_embedding_provider(get_settings().default_visual_embedding)
+            spec = self._visual_embedding_spec
+            if spec is None:
+                if self._visual_embedding_enabled is True:
+                    raise ProviderError("profile visual embedding provider is missing")
+                # Preserve the legacy default construction path exactly when
+                # no profile capability state was supplied.
+                self._embedder = get_embedding_provider(
+                    get_settings().default_visual_embedding
+                )
+            else:
+                self._embedder = get_explicit_embedding_provider(
+                    spec,
+                    self._visual_embedding_dimensions,
+                )
         return self._embedder
 
     # ---- main entrypoint ----
@@ -131,43 +168,49 @@ class ImageProcessor:
         # that return an ordinary caption instead of the requested JSON remain
         # compatible; malformed JSON-like output is never persisted verbatim.
         caption = ""
-        try:
-            vlm = self._resolve_vlm()
-            model_output = vlm.caption(file.data, prompt=IMAGE_ANNOTATION_PROMPT)
-            suggestions = structured_annotations(
-                model_output,
-                provider=getattr(vlm, "name", ""),
-            )
-            if suggestions is not None:
-                result.annotations = suggestions
-                result.annotations_complete = True
-                caption = description_value(suggestions) or ""
-                result.tags = tag_values(suggestions)
-            else:
-                fallback = plain_description(
-                    model_output,
-                    provider=getattr(vlm, "name", ""),
+        if self._vlm_enabled is not False:
+            try:
+                vlm = self._resolve_vlm()
+                if vlm is not None:
+                    model_output = vlm.caption(file.data, prompt=IMAGE_ANNOTATION_PROMPT)
+                    suggestions = structured_annotations(
+                        model_output,
+                        provider=getattr(vlm, "name", ""),
+                        analysis_version=self._analysis_version,
+                    )
+                    if suggestions is not None:
+                        result.annotations = suggestions
+                        result.annotations_complete = True
+                        caption = description_value(suggestions) or ""
+                        result.tags = tag_values(suggestions)
+                    else:
+                        fallback = plain_description(
+                            model_output,
+                            provider=getattr(vlm, "name", ""),
+                            analysis_version=self._analysis_version,
+                        )
+                        if fallback is not None:
+                            result.annotations = [fallback]
+                            result.annotations_complete = True
+                            caption = fallback.value
+                        else:
+                            result.metadata["annotation_parse_error"] = (
+                                "invalid structured model output"
+                            )
+            except (ProviderError, NotImplementedError):
+                log.warning(
+                    "image.vlm_failed",
+                    file_id=file.file_id,
+                    error=PROVIDER_ERROR_MARKER,
                 )
-                if fallback is not None:
-                    result.annotations = [fallback]
-                    result.annotations_complete = True
-                    caption = fallback.value
-                else:
-                    result.metadata["annotation_parse_error"] = "invalid structured model output"
-        except (ProviderError, NotImplementedError):
-            log.warning(
-                "image.vlm_failed",
-                file_id=file.file_id,
-                error=PROVIDER_ERROR_MARKER,
-            )
-            result.metadata["vlm_error"] = PROVIDER_ERROR_MARKER
-        except Exception:  # noqa: BLE001 — last-line defense must stay redacted
-            log.error(
-                "image.vlm_unexpected",
-                file_id=file.file_id,
-                error=PROVIDER_ERROR_MARKER,
-            )
-            result.metadata["vlm_error"] = PROVIDER_ERROR_MARKER
+                result.metadata["vlm_error"] = PROVIDER_ERROR_MARKER
+            except Exception:  # noqa: BLE001 — last-line defense must stay redacted
+                log.error(
+                    "image.vlm_unexpected",
+                    file_id=file.file_id,
+                    error=PROVIDER_ERROR_MARKER,
+                )
+                result.metadata["vlm_error"] = PROVIDER_ERROR_MARKER
         result.caption = caption or None
 
         # Provider availability probes only need to prove that the selected
@@ -180,78 +223,92 @@ class ImageProcessor:
         # 3. Visual embedding via the configured visual embedder.
         # If it has an embed_image() method (CLIP), use that for true visual
         # encoding; otherwise fall back to caption-text-embedding (W1 path).
-        try:
-            embedder = self._resolve_embedder()
-            vec: list[float] | None = None
-            src = "image"
-            embed_image = getattr(embedder, "embed_image", None)
-            if callable(embed_image):
-                # The method may exist on the interface but raise
-                # NotImplementedError if the concrete provider only handles text
-                # (e.g. ollama/openai/anthropic text-embedding models). In that
-                # case we fall back to embedding the VLM caption.
-                try:
-                    rows = embed_image([file.data])
-                    if rows:
-                        vec = rows[0]
-                except NotImplementedError:
-                    embed_image = None
-            if vec is None and caption:
-                # Fallback: caption-text-embed (degraded "visual" search).
-                rows = embedder.embed_text([caption])
-                if rows:
-                    vec = rows[0]
-                    src = "vlm_caption"
+        if self._visual_embedding_enabled is not False:
+            try:
+                embedder = self._resolve_embedder()
+                vec: list[float] | None = None
+                src = "image"
+                if embedder is not None:
+                    embed_image = getattr(embedder, "embed_image", None)
+                    if callable(embed_image):
+                        # The method may exist on the interface but raise
+                        # NotImplementedError if the concrete provider only handles text
+                        # (e.g. ollama/openai/anthropic text-embedding models). In that
+                        # case we fall back to embedding the VLM caption.
+                        try:
+                            rows = embed_image([file.data])
+                            if rows:
+                                vec = rows[0]
+                        except NotImplementedError:
+                            embed_image = None
+                    if vec is None and caption:
+                        # Fallback: caption-text-embed (degraded "visual" search).
+                        rows = embedder.embed_text([caption])
+                        if rows:
+                            vec = rows[0]
+                            src = "vlm_caption"
 
-            # The embeddings_visual column is fixed at vector(VISUAL_EMBED_DIM)
-            # (CLIP ViT-B/32 = 512-d) in the DB schema. A degraded fallback
-            # embedder (e.g. ollama:nomic-embed-text = 768-d) would produce a
-            # vector of the wrong dimension; inserting it aborts the whole
-            # indexing transaction and marks the file `failed`. Guard here:
-            # only emit a visual embedding when its dimension matches the
-            # schema, otherwise skip it (the text link is unaffected, the
-            # image still indexes with caption/EXIF metadata).
-            if vec is not None and len(vec) != VISUAL_EMBED_DIM:
+                # The embeddings_visual column is fixed at
+                # vector(VISUAL_EMBED_DIM) (CLIP ViT-B/32 = 512-d). A
+                # degraded text-embedder fallback must never abort indexing.
+                if (
+                    vec is not None
+                    and self._visual_embedding_dimensions is not None
+                    and len(vec) != self._visual_embedding_dimensions
+                ):
+                    log.warning(
+                        "image.profile_visual_dim_mismatch",
+                        file_id=file.file_id,
+                        got_dim=len(vec),
+                        want_dim=self._visual_embedding_dimensions,
+                        source=src,
+                        provider=embedder.name if embedder is not None else "",
+                    )
+                    result.metadata["visual_embed_skipped"] = (
+                        f"dim {len(vec)} != profile {self._visual_embedding_dimensions}"
+                    )
+                    vec = None
+                if vec is not None and len(vec) != VISUAL_EMBED_DIM:
+                    log.warning(
+                        "image.visual_dim_mismatch",
+                        file_id=file.file_id,
+                        got_dim=len(vec),
+                        want_dim=VISUAL_EMBED_DIM,
+                        source=src,
+                        provider=embedder.name if embedder is not None else "",
+                    )
+                    result.metadata["visual_embed_skipped"] = (
+                        f"dim {len(vec)} != schema {VISUAL_EMBED_DIM}"
+                    )
+                    vec = None
+
+                if vec and embedder is not None:
+                    result.embeddings["visual"] = EmbeddingSet(
+                        provider=embedder.name,
+                        dim=len(vec),
+                        rows=[
+                            EmbeddingRow(
+                                values=vec,
+                                index=0,
+                                chunk_text=caption or "",
+                                metadata={"source": src},
+                            )
+                        ],
+                    )
+            except (ProviderError, NotImplementedError):
                 log.warning(
-                    "image.visual_dim_mismatch",
+                    "image.embed_failed",
                     file_id=file.file_id,
-                    got_dim=len(vec),
-                    want_dim=VISUAL_EMBED_DIM,
-                    source=src,
-                    provider=embedder.name,
+                    error=PROVIDER_ERROR_MARKER,
                 )
-                result.metadata["visual_embed_skipped"] = (
-                    f"dim {len(vec)} != schema {VISUAL_EMBED_DIM}"
+                result.metadata["embed_error"] = PROVIDER_ERROR_MARKER
+            except Exception:  # noqa: BLE001 — keep image metadata on provider bugs
+                log.error(
+                    "image.embed_unexpected",
+                    file_id=file.file_id,
+                    error=PROVIDER_ERROR_MARKER,
                 )
-                vec = None
-
-            if vec:
-                result.embeddings["visual"] = EmbeddingSet(
-                    provider=embedder.name,
-                    dim=len(vec),
-                    rows=[
-                        EmbeddingRow(
-                            values=vec,
-                            index=0,
-                            chunk_text=caption or "",
-                            metadata={"source": src},
-                        )
-                    ],
-                )
-        except (ProviderError, NotImplementedError):
-            log.warning(
-                "image.embed_failed",
-                file_id=file.file_id,
-                error=PROVIDER_ERROR_MARKER,
-            )
-            result.metadata["embed_error"] = PROVIDER_ERROR_MARKER
-        except Exception:  # noqa: BLE001 — keep image metadata on provider bugs
-            log.error(
-                "image.embed_unexpected",
-                file_id=file.file_id,
-                error=PROVIDER_ERROR_MARKER,
-            )
-            result.metadata["embed_error"] = PROVIDER_ERROR_MARKER
+                result.metadata["embed_error"] = PROVIDER_ERROR_MARKER
 
         # 4. Face detection (opt-in via `face` extra). Each detected face
         # becomes one row in result.embeddings["face"], with bbox in the row

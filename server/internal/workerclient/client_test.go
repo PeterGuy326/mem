@@ -135,3 +135,164 @@ func TestBuildVLMProbeRequestRejectsEmptySpec(t *testing.T) {
 		t.Fatal("empty VLM spec was accepted")
 	}
 }
+
+func TestBuildOptionsJSONProfileIsAuthoritativeAndCredentialFree(t *testing.T) {
+	options := buildOptionsJSON(FileMeta{
+		// Legacy values must not leak into or alter a profiled request.
+		EmbeddingProvider: "openai:untrusted-client-model",
+		VLMProvider:       "openai:untrusted-client-vlm",
+		AIProfile: &AIProfileOptions{
+			Contract:         "mem.ai-profile/v1",
+			ID:               "idealab-quality-v1",
+			Revision:         "2026-07-29",
+			PipelineRevision: "enrichment-v1",
+			Embedding: ProviderStage{
+				Enabled: true, Provider: "openai:text-embedding-3-large", Dimensions: 768,
+			},
+			VisualEmbedding: ProviderStage{
+				Enabled: true, Provider: "clip:ViT-B-32", Dimensions: 512,
+			},
+			LLM:    ProviderStage{Enabled: true, Provider: "openai:qwen3.7-max-2026-06-08"},
+			VLM:    ProviderStage{Enabled: true, Provider: "openai:qwen3.7-max-2026-06-08"},
+			ASR:    ProviderStage{Enabled: true, Provider: "faster-whisper:tiny"},
+			Rerank: ProviderStage{Enabled: false},
+		},
+	})
+	if len(options) == 0 {
+		t.Fatal("profile options were omitted")
+	}
+	var got map[string]any
+	if err := json.Unmarshal(options, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("options keys = %#v", got)
+	}
+	profile, ok := got["ai_profile"].(map[string]any)
+	if !ok {
+		t.Fatalf("ai_profile = %#v", got["ai_profile"])
+	}
+	if profile["id"] != "idealab-quality-v1" ||
+		profile["pipeline_revision"] != "enrichment-v1" {
+		t.Fatalf("profile = %#v", profile)
+	}
+	embedding, ok := profile["embedding"].(map[string]any)
+	if !ok || embedding["provider"] != "openai:text-embedding-3-large" ||
+		embedding["dimensions"] != float64(768) {
+		t.Fatalf("embedding = %#v", profile["embedding"])
+	}
+	for _, forbidden := range []string{
+		"api_key", "credential", "base_url", "embedding_provider", "vlm_provider",
+	} {
+		if _, found := got[forbidden]; found {
+			t.Fatalf("profile options leaked %q: %#v", forbidden, got)
+		}
+	}
+}
+
+func TestBuildOptionsJSONLegacyIncludesLLMAndASR(t *testing.T) {
+	options := buildOptionsJSON(FileMeta{
+		EmbeddingProvider: "ollama:qwen3-embedding:0.6b",
+		LLMProvider:       "ollama:qwen3:4b",
+		ASRProvider:       "faster-whisper:tiny",
+	})
+	var got map[string]string
+	if err := json.Unmarshal(options, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["llm_provider"] != "ollama:qwen3:4b" ||
+		got["asr_provider"] != "faster-whisper:tiny" {
+		t.Fatalf("legacy options = %#v", got)
+	}
+}
+
+func TestProbeEmbeddingUsesExplicitProfileDimensions(t *testing.T) {
+	var got *workerpb.ProcessRequest
+	client := &Client{
+		addr: "test-worker",
+		conn: &grpc.ClientConn{},
+		stub: &fakeProcessorServiceClient{process: func(
+			_ context.Context,
+			req *workerpb.ProcessRequest,
+		) (*workerpb.ProcessResponse, error) {
+			got = req
+			return &workerpb.ProcessResponse{
+				Status: workerpb.ProcessStatus_STATUS_OK,
+				Embeddings: map[string]*workerpb.Embedding{
+					"text": {
+						Provider: "openai:text-embedding-3-large",
+						Rows:     []*workerpb.EmbeddingRow{{Values: make([]float32, 768)}},
+					},
+				},
+			}, nil
+		}},
+		dialed: true,
+	}
+	dimension, err := client.ProbeEmbedding(
+		context.Background(), "openai:text-embedding-3-large", 768,
+	)
+	if err != nil || dimension != 768 {
+		t.Fatalf("ProbeEmbedding = %d, %v", dimension, err)
+	}
+	var envelope map[string]any
+	if got == nil || json.Unmarshal(got.OptionsJson, &envelope) != nil {
+		t.Fatalf("profile probe request = %#v", got)
+	}
+	profile, ok := envelope["ai_profile"].(map[string]any)
+	if !ok {
+		t.Fatalf("options = %#v", envelope)
+	}
+	embedding := profile["embedding"].(map[string]any)
+	if embedding["provider"] != "openai:text-embedding-3-large" ||
+		embedding["dimensions"] != float64(768) ||
+		profile["id"] != "profile-probe-v1" {
+		t.Fatalf("profile = %#v", profile)
+	}
+	if profile["llm"].(map[string]any)["enabled"] != false ||
+		profile["vlm"].(map[string]any)["enabled"] != false {
+		t.Fatalf("probe allowed generative stages: %#v", profile)
+	}
+}
+
+func TestProfileEmbeddingRejectsProviderMismatch(t *testing.T) {
+	client := &Client{
+		addr: "test-worker",
+		conn: &grpc.ClientConn{},
+		stub: &fakeProcessorServiceClient{process: func(
+			context.Context,
+			*workerpb.ProcessRequest,
+		) (*workerpb.ProcessResponse, error) {
+			return &workerpb.ProcessResponse{
+				Status: workerpb.ProcessStatus_STATUS_OK,
+				Embeddings: map[string]*workerpb.Embedding{
+					"text": {
+						Provider: "ollama:qwen3-embedding:0.6b",
+						Rows:     []*workerpb.EmbeddingRow{{Values: make([]float32, 768)}},
+					},
+				},
+			}, nil
+		}},
+		dialed: true,
+	}
+
+	profile := AIProfileOptions{
+		Embedding: ProviderStage{
+			Enabled: true, Provider: "openai:text-embedding-3-large", Dimensions: 768,
+		},
+	}
+	assertMismatch := func(t *testing.T, err error) {
+		t.Helper()
+		if err == nil || !strings.Contains(err.Error(), "embedding provider mismatch") {
+			t.Fatalf("provider mismatch was not rejected: %v", err)
+		}
+	}
+
+	t.Run("query", func(t *testing.T) {
+		_, err := client.EmbedTextWithProfile(context.Background(), "query", profile)
+		assertMismatch(t, err)
+	})
+	t.Run("probe", func(t *testing.T) {
+		_, err := client.ProbeEmbedding(context.Background(), profile.Embedding.Provider, profile.Embedding.Dimensions)
+		assertMismatch(t, err)
+	})
+}

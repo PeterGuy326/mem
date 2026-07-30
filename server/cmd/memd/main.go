@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/PeterGuy326/mem/server/internal/aiprofile"
 	"github.com/PeterGuy326/mem/server/internal/api"
 	"github.com/PeterGuy326/mem/server/internal/auth"
 	"github.com/PeterGuy326/mem/server/internal/config"
@@ -26,6 +27,7 @@ import (
 	"github.com/PeterGuy326/mem/server/internal/folder"
 	"github.com/PeterGuy326/mem/server/internal/handoff"
 	"github.com/PeterGuy326/mem/server/internal/indexer"
+	"github.com/PeterGuy326/mem/server/internal/managedusage"
 	"github.com/PeterGuy326/mem/server/internal/memory"
 	"github.com/PeterGuy326/mem/server/internal/provider"
 	"github.com/PeterGuy326/mem/server/internal/queue"
@@ -142,6 +144,13 @@ func run() error {
 	} else {
 		logger.Info("worker client ready", "addr", cfg.WorkerGRPC)
 	}
+	profileSvc := aiprofile.New(database.Pool, workerCli, cfg.AIProfiles...)
+	var managedUsageSvc *managedusage.Service
+	if cfg.DeploymentMode == "saas" {
+		managedUsageSvc = managedusage.New(entitlementSvc)
+		profileSvc.SetManagedProbeUsage(managedUsageSvc)
+	}
+	logger.Info("workspace AI profiles ready", "enabled", cfg.AIProfiles)
 	relatorSvc := relator.New(database.Pool, logger)
 	faceSvc := face.New(database.Pool, logger)
 	idxSvc := indexer.New(database.Pool, workerCli, relatorSvc, faceSvc, logger)
@@ -150,6 +159,16 @@ func run() error {
 		workerCli,
 		cfg.ManagedEmbeddingProvider,
 	)
+	idxSvc.SetAIProfiles(profileSvc, cfg.DeploymentMode == "saas")
+	if managedUsageSvc != nil {
+		idxSvc.SetManagedUsage(managedUsageSvc)
+	}
+	searchSvc.SetAIProfiles(profileSvc, cfg.DeploymentMode == "saas")
+	// The HTTP managed-search executor owns the entitlement reservation and
+	// replay record. Require its in-process authorization marker at the final
+	// search-to-Worker boundary so a direct internal caller cannot make a paid
+	// quality-profile embedding request without first being accounted for.
+	searchSvc.RequireManagedProfileReservation(cfg.DeploymentMode == "saas")
 
 	// Async indexing queue (Asynq + Redis). Falls back to inline goroutine if
 	// MEM_REDIS_URL is unset — dev affordance only; production must set it.
@@ -178,6 +197,7 @@ func run() error {
 		Memory:                   memorySvc,
 		Handoff:                  handoffSvc,
 		Provider:                 providerSvc,
+		AIProfiles:               profileSvc,
 		Relator:                  relatorSvc,
 		Face:                     faceSvc,
 		Workspace:                workspaceSvc,

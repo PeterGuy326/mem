@@ -1407,6 +1407,7 @@ func assertMigrationState(ctx context.Context, state string) error {
 		canonicalCaption      bool
 		canonicalSummary      bool
 		nonDisplayFunction    bool
+		workspaceAIProfiles   bool
 	)
 	err = conn.QueryRow(ctx, `
 SELECT
@@ -1488,7 +1489,8 @@ SELECT
      WHERE conname = 'files_summary_canonical_model_text'
        AND conrelid = 'public.files'::regclass
   ),
-  to_regprocedure('public.mem_model_text_has_non_display_character(text)') IS NOT NULL
+  to_regprocedure('public.mem_model_text_has_non_display_character(text)') IS NOT NULL,
+  to_regclass('public.workspace_ai_profiles') IS NOT NULL
 `).Scan(
 		&rawKey,
 		&hashedKey,
@@ -1508,6 +1510,7 @@ SELECT
 		&canonicalCaption,
 		&canonicalSummary,
 		&nonDisplayFunction,
+		&workspaceAIProfiles,
 	)
 	if err != nil {
 		return fmt.Errorf("inspect migration state: %w", err)
@@ -1533,7 +1536,8 @@ SELECT
 			!fileSummaryConstraint &&
 			!canonicalCaption &&
 			!canonicalSummary &&
-			!nonDisplayFunction
+			!nonDisplayFunction &&
+			!workspaceAIProfiles
 	case "up":
 		valid = !rawKey &&
 			hashedKey &&
@@ -1552,11 +1556,12 @@ SELECT
 			fileSummaryConstraint &&
 			canonicalCaption &&
 			canonicalSummary &&
-			nonDisplayFunction
+			nonDisplayFunction &&
+			workspaceAIProfiles
 	}
 	if !valid {
 		return fmt.Errorf(
-			"unexpected %s schema state: raw_key=%t hashed_key=%t replay_principal=%t old_file_index=%t hash_constraint=%t redact_constraint=%t receipt_constraint=%t replay_constraint=%t managed_entitlements=%t file_user_tags=%t file_source_metadata=%t file_processor_metadata=%t file_annotations=%t file_caption_constraint=%t file_summary_constraint=%t canonical_caption=%t canonical_summary=%t non_display_function=%t",
+			"unexpected %s schema state: raw_key=%t hashed_key=%t replay_principal=%t old_file_index=%t hash_constraint=%t redact_constraint=%t receipt_constraint=%t replay_constraint=%t managed_entitlements=%t file_user_tags=%t file_source_metadata=%t file_processor_metadata=%t file_annotations=%t file_caption_constraint=%t file_summary_constraint=%t canonical_caption=%t canonical_summary=%t non_display_function=%t workspace_ai_profiles=%t",
 			state,
 			rawKey,
 			hashedKey,
@@ -1576,6 +1581,7 @@ SELECT
 			canonicalCaption,
 			canonicalSummary,
 			nonDisplayFunction,
+			workspaceAIProfiles,
 		)
 	}
 	return nil

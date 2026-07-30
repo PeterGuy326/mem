@@ -138,12 +138,13 @@ marker before it can drop anything. The control role therefore needs
 
 1. validates migrations on a fresh owned database and applies `0001` through
    the declared head;
-2. asserts the current privacy, enrichment and managed-entitlement schema;
-   proves an already-migrated `15 → 16` database canonicalizes bounded model
-   text; performs explicit `16 → 15 → 16` and `16 → 11 → 16` rollback round
-   trips; asserts the intermediate schema states; and proves accepted model
-   tags are removed before provenance disappears rather than being copied into
-   `user_tags` on re-up;
+2. asserts the current privacy, enrichment, managed-entitlement and workspace
+   AI-profile schema; proves the `15 → 17` migration path canonicalizes
+   bounded model text and adds workspace AI profiles; performs explicit
+   `17 → 15 → 17` and `17 → 11 → 17` rollback round trips; asserts the
+   intermediate schema states; and proves accepted model tags are removed
+   before provenance disappears rather than being copied into `user_tags` on
+   re-up;
 3. creates separate fresh databases for normal and race runs, then executes
    the real PostgreSQL memory, handoff, workspace-transfer, HTTP-router,
    folder/file path-locking, folder-lifecycle, relator, managed-entitlement,
@@ -166,7 +167,7 @@ Required tests:
 - `TestManagedSearchReplayPostgres`
 - `TestManagedEmbeddingHTTPAuthorizationPostgres`
 
-Expected result: migrations reach the declared current head (currently `16`),
+Expected result: migrations reach the declared current head (currently `17`),
 both rollback-state assertions pass, every named test prints `PASS`, all
 commands exit `0`, and the race run reports no data race.
 
@@ -323,6 +324,12 @@ non-zero. Metric deltas are informational: this issue establishes no
 model-quality threshold. See
 [`benchmarks/recall/README.md`](../benchmarks/recall/README.md) for the input
 contract and exact denominators.
+
+For the opt-in, profile-specific comparison of local and managed text
+embeddings, use [AI profile evaluation](AI_PROFILE_EVALUATION.md). It supplies
+a separate file-only synthetic fixture, requires isolated workspaces/index
+generations, and explains why its external-ranking adapter is not a cloud-model
+CI gate.
 
 ## 9. Regression ledger
 
