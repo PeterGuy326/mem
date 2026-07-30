@@ -403,5 +403,11 @@ func (c *Client) embedTextProfile(
 		return nil, fmt.Errorf("worker profile embedding dimension mismatch: got %d, want %d",
 			len(emb.Rows[0].Values), profile.Embedding.Dimensions)
 	}
+	// Dimensions alone do not identify an embedding space. Reject a stale or
+	// misconfigured Worker that returns a vector from a different provider.
+	if profile.Embedding.Provider != "" && emb.Provider != profile.Embedding.Provider {
+		return nil, fmt.Errorf("worker profile embedding provider mismatch: got %q, want %q",
+			emb.Provider, profile.Embedding.Provider)
+	}
 	return emb.Rows[0].Values, nil
 }

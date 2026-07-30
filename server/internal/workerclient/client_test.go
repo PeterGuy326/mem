@@ -253,3 +253,46 @@ func TestProbeEmbeddingUsesExplicitProfileDimensions(t *testing.T) {
 		t.Fatalf("probe allowed generative stages: %#v", profile)
 	}
 }
+
+func TestProfileEmbeddingRejectsProviderMismatch(t *testing.T) {
+	client := &Client{
+		addr: "test-worker",
+		conn: &grpc.ClientConn{},
+		stub: &fakeProcessorServiceClient{process: func(
+			context.Context,
+			*workerpb.ProcessRequest,
+		) (*workerpb.ProcessResponse, error) {
+			return &workerpb.ProcessResponse{
+				Status: workerpb.ProcessStatus_STATUS_OK,
+				Embeddings: map[string]*workerpb.Embedding{
+					"text": {
+						Provider: "ollama:qwen3-embedding:0.6b",
+						Rows:     []*workerpb.EmbeddingRow{{Values: make([]float32, 768)}},
+					},
+				},
+			}, nil
+		}},
+		dialed: true,
+	}
+
+	profile := AIProfileOptions{
+		Embedding: ProviderStage{
+			Enabled: true, Provider: "openai:text-embedding-3-large", Dimensions: 768,
+		},
+	}
+	assertMismatch := func(t *testing.T, err error) {
+		t.Helper()
+		if err == nil || !strings.Contains(err.Error(), "embedding provider mismatch") {
+			t.Fatalf("provider mismatch was not rejected: %v", err)
+		}
+	}
+
+	t.Run("query", func(t *testing.T) {
+		_, err := client.EmbedTextWithProfile(context.Background(), "query", profile)
+		assertMismatch(t, err)
+	})
+	t.Run("probe", func(t *testing.T) {
+		_, err := client.ProbeEmbedding(context.Background(), profile.Embedding.Provider, profile.Embedding.Dimensions)
+		assertMismatch(t, err)
+	})
+}
