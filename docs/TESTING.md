@@ -139,12 +139,14 @@ marker before it can drop anything. The control role therefore needs
 1. validates migrations on a fresh owned database and applies `0001` through
    the declared head;
 2. asserts the current privacy, enrichment, managed-entitlement and workspace
-   AI-profile schema; proves the `15 → 17` migration path canonicalizes
-   bounded model text and adds workspace AI profiles; performs explicit
-   `17 → 15 → 17` and `17 → 11 → 17` rollback round trips; asserts the
-   intermediate schema states; and proves accepted model tags are removed
-   before provenance disappears rather than being copied into `user_tags` on
-   re-up;
+   AI-profile schema; proves the `15 → 18` migration path canonicalizes
+   bounded model text and adds workspace AI profiles plus the managed-stage
+   settlement outbox; explicitly proves the
+   `16 → 17 → 18 → 17 → 18 → 16 → 18` table boundaries, then performs the
+   broader `18 → 15 → 18` and `18 → 11 → 18` rollback round trips; asserts
+   every intermediate schema state; and proves accepted model tags are
+   removed before provenance disappears rather than being copied into
+   `user_tags` on re-up;
 3. creates separate fresh databases for normal and race runs, then executes
    the real PostgreSQL memory, handoff, workspace-transfer, HTTP-router,
    folder/file path-locking, folder-lifecycle, relator, managed-entitlement,
@@ -166,10 +168,13 @@ Required tests:
 - `TestManagedEmbeddingEntitlementPostgres`
 - `TestManagedSearchReplayPostgres`
 - `TestManagedEmbeddingHTTPAuthorizationPostgres`
+- `TestAIProfilePostgres`
+- `TestManagedAISettlementOutboxPostgres`
+- `TestReleasedFileStageRetryPostgres`
 
-Expected result: migrations reach the declared current head (currently `17`),
-both rollback-state assertions pass, every named test prints `PASS`, all
-commands exit `0`, and the race run reports no data race.
+Expected result: migrations reach the declared current head (currently `18`),
+all rollback-state assertions pass, every named test prints `PASS`, all commands
+exit `0`, and the race run reports no data race.
 
 Cleanup is explicit and destructive only to the isolated Compose project:
 
@@ -341,8 +346,8 @@ Use this table in pull requests and add implementation-specific scenarios:
 | V2 | Worker processing regressions remain hermetic | `make test-worker` | Exit `0`; real-model gate explicitly skipped |
 | V3 | Enrichment, memory, transfer and managed-embedding control surfaces work in a browser | `make test-web` | Typecheck/lint/build, all three browser acceptance suites and managed status mapping pass |
 | V4 | High-risk Go paths are race-free | `make test-race` | Exit `0`; no data-race warning |
-| V5 | Fresh schema, rollback and PostgreSQL semantics hold | `make test-integration` | Migration head and thirteen named tests pass, none skipped |
-| V6 | DB concurrency paths are race-free | `make test-integration-race` | The same thirteen tests pass under `-race` |
+| V5 | Fresh schema, rollback and PostgreSQL semantics hold | `make test-integration` | Migration head and sixteen named tests pass, none skipped |
+| V6 | DB concurrency paths are race-free | `make test-integration-race` | The same sixteen tests pass under `-race` |
 | V7 | Real service boundaries agree | `make test-acceptance` | HTTP, CLI and MCP share one isolated service; memory citation/provenance, bounded checkpoint listing, full checkpoint get, lifecycle and forget redaction pass |
 | V8 | Five config shapes and the real adapter preserve the host-neutral MCP contract | `MEM_MCP_CERT_BINARY=... make test-agent-certification` | All fixtures and current-adapter scenarios pass with no skip |
 | V9 | Multilingual visual quality meets the chosen checkpoint | Opt-in command in section 7 | All fixed ranking assertions pass |

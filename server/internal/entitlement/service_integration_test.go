@@ -233,6 +233,206 @@ func TestManagedEmbeddingEntitlementPostgres(t *testing.T) {
 		service.now = func() time.Time { return baseNow }
 	})
 
+	t.Run("pending settlement survives concurrent summary reserve and stale reconcile", func(t *testing.T) {
+		resetEntitlement(t, ctx, database.Pool, ws.ID, baseNow, true, 3)
+		protected, err := service.Reserve(
+			ctx,
+			reserveCommand(ws.ID, "outbox-protected", "a"),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		insertPendingSettlement(
+			t,
+			ctx,
+			database.Pool,
+			user.ID,
+			protected.ID,
+			"succeeded",
+		)
+		if _, err := database.Pool.Exec(ctx, `
+			UPDATE managed_embedding_usage
+			   SET updated_at = $2
+			 WHERE id = $1
+		`, protected.ID, baseNow); err != nil {
+			t.Fatal(err)
+		}
+		service.now = func() time.Time { return baseNow.Add(2 * time.Minute) }
+
+		type reserveResult struct {
+			reservation *Reservation
+			err         error
+		}
+		start := make(chan struct{})
+		errs := make(chan error, 2)
+		reserved := make(chan reserveResult, 1)
+		var calls sync.WaitGroup
+		calls.Add(3)
+		go func() {
+			defer calls.Done()
+			<-start
+			_, err := service.Summary(ctx, ws.ID)
+			errs <- err
+		}()
+		go func() {
+			defer calls.Done()
+			<-start
+			reservation, err := service.Reserve(
+				ctx,
+				reserveCommand(ws.ID, "fresh-with-pending-outbox", "b"),
+			)
+			reserved <- reserveResult{reservation: reservation, err: err}
+		}()
+		go func() {
+			defer calls.Done()
+			<-start
+			_, err := service.ReconcileStale(ctx)
+			errs <- err
+		}()
+		close(start)
+		calls.Wait()
+		close(errs)
+
+		for err := range errs {
+			if err != nil {
+				t.Fatalf("concurrent entitlement operation: %v", err)
+			}
+		}
+		fresh := <-reserved
+		if fresh.err != nil {
+			t.Fatalf("concurrent reserve: %v", fresh.err)
+		}
+		if fresh.reservation == nil {
+			t.Fatal("concurrent reserve returned no reservation")
+		}
+
+		var protectedStatus string
+		if err := database.Pool.QueryRow(ctx, `
+			SELECT status
+			  FROM managed_embedding_usage
+			 WHERE id = $1
+		`, protected.ID).Scan(&protectedStatus); err != nil {
+			t.Fatal(err)
+		}
+		if protectedStatus != StatusReserved {
+			t.Fatalf(
+				"outbox-protected usage status = %q, want %q",
+				protectedStatus,
+				StatusReserved,
+			)
+		}
+		if _, err := service.Release(ctx, fresh.reservation.ID); err != nil {
+			t.Fatal(err)
+		}
+		service.now = func() time.Time { return baseNow }
+	})
+
+	t.Run("pending settlement delays period rollover without changing state", func(t *testing.T) {
+		resetEntitlement(t, ctx, database.Pool, ws.ID, baseNow, true, 5)
+		crossing, err := service.Reserve(
+			ctx,
+			reserveCommand(ws.ID, "pending-cross-period", "c"),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		insertPendingSettlement(
+			t,
+			ctx,
+			database.Pool,
+			user.ID,
+			crossing.ID,
+			"succeeded",
+		)
+
+		periodStart := baseNow.Add(-2 * time.Hour)
+		periodEnd := baseNow.Add(-time.Hour)
+		if _, err := database.Pool.Exec(ctx, `
+			UPDATE workspace_entitlements
+			   SET period_start = $2,
+			       period_end = $3,
+			       managed_embedding_units_reserved = 1,
+			       managed_embedding_units_consumed = 4
+			 WHERE workspace_id = $1
+		`, ws.ID, periodStart, periodEnd); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.Pool.Exec(ctx, `
+			UPDATE managed_embedding_usage
+			   SET period_start = $1,
+			       period_end = $2,
+			       updated_at = $1
+			 WHERE id = $3
+		`, periodStart, periodEnd, crossing.ID); err != nil {
+			t.Fatal(err)
+		}
+		service.now = func() time.Time { return baseNow }
+
+		if _, err := service.ReconcileStale(ctx); err != nil {
+			t.Fatalf("stale reconcile with pending settlement: %v", err)
+		}
+		if _, err := service.Summary(ctx, ws.ID); !errors.Is(err, ErrSettlementPending) ||
+			!errors.Is(err, ErrEntitlementUnavailable) {
+			t.Fatalf(
+				"Summary() error = %v, want settlement pending and entitlement unavailable",
+				err,
+			)
+		}
+		if _, err := service.Reserve(
+			ctx,
+			reserveCommand(ws.ID, "blocked-period-reserve", "d"),
+		); !errors.Is(err, ErrSettlementPending) ||
+			!errors.Is(err, ErrEntitlementUnavailable) {
+			t.Fatalf(
+				"Reserve() error = %v, want settlement pending and entitlement unavailable",
+				err,
+			)
+		}
+
+		var (
+			gotPeriodStart time.Time
+			gotPeriodEnd   time.Time
+			gotReserved    int64
+			gotConsumed    int64
+			gotStatus      string
+		)
+		if err := database.Pool.QueryRow(ctx, `
+			SELECT entitlement.period_start,
+			       entitlement.period_end,
+			       entitlement.managed_embedding_units_reserved,
+			       entitlement.managed_embedding_units_consumed,
+			       usage.status
+			  FROM workspace_entitlements AS entitlement
+			  JOIN managed_embedding_usage AS usage
+			    ON usage.workspace_id = entitlement.workspace_id
+			 WHERE entitlement.workspace_id = $1
+			   AND usage.id = $2
+		`, ws.ID, crossing.ID).Scan(
+			&gotPeriodStart,
+			&gotPeriodEnd,
+			&gotReserved,
+			&gotConsumed,
+			&gotStatus,
+		); err != nil {
+			t.Fatal(err)
+		}
+		if !gotPeriodStart.Equal(periodStart) ||
+			!gotPeriodEnd.Equal(periodEnd) ||
+			gotReserved != 1 ||
+			gotConsumed != 4 ||
+			gotStatus != StatusReserved {
+			t.Fatalf(
+				"pending rollover changed state: period=%s..%s reserved=%d consumed=%d status=%q",
+				gotPeriodStart,
+				gotPeriodEnd,
+				gotReserved,
+				gotConsumed,
+				gotStatus,
+			)
+		}
+		assertUsageCount(t, ctx, database.Pool, ws.ID, 1)
+	})
+
 	t.Run("summary atomically rolls period and freezes crossing request", func(t *testing.T) {
 		resetEntitlement(t, ctx, database.Pool, ws.ID, baseNow, true, 5)
 		crossing, err := service.Reserve(
@@ -515,4 +715,40 @@ func assertUsageCount(
 	if got != want {
 		t.Fatalf("usage count = %d, want %d", got, want)
 	}
+}
+
+func insertPendingSettlement(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	userID uuid.UUID,
+	usageID uuid.UUID,
+	outcome string,
+) uuid.UUID {
+	t.Helper()
+	fileID := uuid.New()
+	contentSHA256 := strings.Repeat("f", 64)
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO files (
+		    id, user_id, name, path, size, sha256, mime, storage_key,
+		    index_status
+		) VALUES ($1,$2,'entitlement-outbox.txt','/',1,$3,'text/plain',$4,'done')
+	`, fileID, userID, contentSHA256, "entitlement-outbox/"+fileID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO managed_ai_stage_settlement_outbox (
+		    usage_id,
+		    file_id,
+		    content_sha256,
+		    profile_id,
+		    profile_revision,
+		    pipeline_revision,
+		    stage,
+		    outcome
+		) VALUES ($1,$2,$3,'idealab-quality-v1','test-v1','test-pipeline-v1','embedding',$4)
+	`, usageID, fileID, contentSHA256, outcome); err != nil {
+		t.Fatal(err)
+	}
+	return fileID
 }

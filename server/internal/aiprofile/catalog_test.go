@@ -10,42 +10,69 @@ import (
 
 func TestCatalogContainsPinnedLocalAndManagedProfiles(t *testing.T) {
 	profiles := Catalog()
-	if len(profiles) != 2 {
-		t.Fatalf("catalog length = %d, want 2", len(profiles))
+	if len(profiles) != 4 {
+		t.Fatalf("catalog length = %d, want 4", len(profiles))
 	}
 
-	local, ok := Find(LocalFastV1)
+	legacyLocal, ok := Find(LocalFastV1)
 	if !ok {
 		t.Fatalf("Find(%q) did not return the local profile", LocalFastV1)
 	}
+	if legacyLocal.Revision != "2026-07-29" ||
+		legacyLocal.PipelineRevision != "file-enrichment-v1" ||
+		legacyLocal.VisualEmbedding != (Stage{
+			Enabled:    true,
+			Provider:   "clip:ViT-B-32",
+			Dimensions: visualEmbeddingDimension,
+		}) {
+		t.Fatalf("published local V1 changed = %#v", legacyLocal)
+	}
+
+	legacyQuality, ok := Find(IdealabQualityV1)
+	if !ok {
+		t.Fatalf("Find(%q) did not return the managed profile", IdealabQualityV1)
+	}
+	if legacyQuality.Revision != "2026-07-29" ||
+		legacyQuality.PipelineRevision != "file-enrichment-v1" ||
+		legacyQuality.Embedding.Provider != "openai:text-embedding-3-large" ||
+		legacyQuality.LLM.Provider != "openai:qwen3.7-max-2026-06-08" ||
+		!legacyQuality.VisualEmbedding.Enabled {
+		t.Fatalf("published managed V1 changed = %#v", legacyQuality)
+	}
+
+	local, ok := Find(LocalFastV2)
+	if !ok {
+		t.Fatalf("Find(%q) did not return the current local profile", LocalFastV2)
+	}
 	if local.DataEgress != DataEgressLocalOnly ||
+		local.Revision != "2026-07-30.1" ||
+		local.PipelineRevision != "file-enrichment-v2" ||
 		local.Embedding != (Stage{
 			Enabled:    true,
 			Provider:   "ollama:qwen3-embedding:0.6b",
 			Dimensions: textEmbeddingDimension,
 		}) ||
-		local.VisualEmbedding != (Stage{
-			Enabled:    true,
-			Provider:   "clip:ViT-B-32",
-			Dimensions: visualEmbeddingDimension,
-		}) {
+		local.VisualEmbedding != (Stage{}) {
 		t.Fatalf("local profile = %#v", local)
 	}
 	if local.LLM.Enabled || local.VLM.Enabled || local.ASR.Enabled || local.Rerank.Enabled {
 		t.Fatalf("local optional stages must be explicitly disabled: %#v", local)
 	}
 
-	quality, ok := Find(IdealabQualityV1)
+	quality, ok := Find(IdealabQualityV2)
 	if !ok {
-		t.Fatalf("Find(%q) did not return the managed profile", IdealabQualityV1)
+		t.Fatalf("Find(%q) did not return the current managed profile", IdealabQualityV2)
 	}
 	if quality.DataEgress != DataEgressManagedIdealab ||
+		quality.Revision != "2026-07-30.1" ||
+		quality.PipelineRevision != "file-enrichment-v2" ||
 		quality.Embedding != (Stage{
 			Enabled:    true,
-			Provider:   "openai:text-embedding-3-large",
+			Provider:   "idealab:text-embedding-3-large",
 			Dimensions: textEmbeddingDimension,
 		}) ||
-		!quality.LLM.Enabled || quality.LLM.Provider != "openai:qwen3.7-max-2026-06-08" ||
+		quality.VisualEmbedding.Enabled ||
+		!quality.LLM.Enabled || quality.LLM.Provider != "idealab:qwen3.7-max-2026-06-08" ||
 		quality.VLM.Enabled || quality.VLM.Provider != "" ||
 		quality.Rerank.Enabled || quality.Rerank.Provider != "" {
 		t.Fatalf("managed profile = %#v", quality)
@@ -74,7 +101,7 @@ func TestCatalogContainsPinnedLocalAndManagedProfiles(t *testing.T) {
 }
 
 func TestValidateSelectionRequiresAnExactCompiledSnapshot(t *testing.T) {
-	definition, ok := Find(IdealabQualityV1)
+	definition, ok := Find(IdealabQualityV2)
 	if !ok {
 		t.Fatal("quality profile missing")
 	}
@@ -82,9 +109,21 @@ func TestValidateSelectionRequiresAnExactCompiledSnapshot(t *testing.T) {
 	if err := ValidateSelection(&selection); err != nil {
 		t.Fatalf("ValidateSelection() error = %v", err)
 	}
-	selection.Embedding.Provider = "openai:unapproved-same-dimension-model"
+	selection.Embedding.Provider = "idealab:unapproved-same-dimension-model"
 	if err := ValidateSelection(&selection); !errors.Is(err, ErrInvalidSelection) {
 		t.Fatalf("ValidateSelection() error = %v, want ErrInvalidSelection", err)
+	}
+
+	staleProfile := selectionFromDefinition(definition, uuid.New(), uuid.New(), time.Now())
+	staleProfile.ProfileRevision = "2026-07-29"
+	if err := ValidateSelection(&staleProfile); !errors.Is(err, ErrInvalidSelection) {
+		t.Fatalf("stale profile revision error = %v, want ErrInvalidSelection", err)
+	}
+
+	stalePipeline := selectionFromDefinition(definition, uuid.New(), uuid.New(), time.Now())
+	stalePipeline.PipelineRevision = "file-enrichment-v1"
+	if err := ValidateSelection(&stalePipeline); !errors.Is(err, ErrInvalidSelection) {
+		t.Fatalf("stale pipeline revision error = %v, want ErrInvalidSelection", err)
 	}
 }
 
@@ -135,7 +174,7 @@ func TestDefinitionValidateRejectsUnsafeOrAmbiguousConfiguration(t *testing.T) {
 		{
 			name: "managed local stage",
 			mutate: func(profile *Definition) {
-				profile.Embedding.Provider = "openai:text-embedding-3-large"
+				profile.Embedding.Provider = "idealab:text-embedding-3-large"
 			},
 		},
 		{

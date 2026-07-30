@@ -50,7 +50,15 @@ def _post_json(
 ) -> requests.Response:
     url = base_url.rstrip("/") + path
     try:
-        resp = requests.post(url, json=payload, timeout=timeout, stream=stream)
+        # A local-only profile must not let a loopback Ollama endpoint redirect
+        # source content to another host.
+        resp = requests.post(
+            url,
+            json=payload,
+            timeout=timeout,
+            stream=stream,
+            allow_redirects=False,
+        )
     except requests.RequestException as exc:
         raise ProviderError(f"ollama: HTTP request to {url} failed: {exc}") from exc
     if resp.status_code >= 400:

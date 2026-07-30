@@ -35,6 +35,11 @@ class _BaseOpenAI:
         self._base_url = (base_url or settings.openai_base_url or "https://api.openai.com").rstrip(
             "/"
         )
+        # Preserve the historical private/BYOM behavior, but never let the
+        # platform-managed V1 binding redirect source payloads to a second
+        # origin. Requests may strip Authorization on a cross-host redirect,
+        # but a 307/308 can still replay the POST body itself.
+        self._allow_redirects = not settings.openai_managed_binding
         if not self._api_key:
             raise ProviderError("OPENAI_API_KEY not set; export it before using openai:* providers")
 
@@ -49,9 +54,15 @@ class _BaseOpenAI:
                 },
                 json=payload,
                 timeout=timeout,
+                allow_redirects=self._allow_redirects,
             )
         except requests.RequestException as exc:
             raise ProviderError(f"openai network error: {exc}") from exc
+        if 300 <= resp.status_code < 400:
+            # In managed mode redirects are intentionally not followed. Treat
+            # the redirect response itself as a provider failure rather than
+            # trying to parse its (usually empty) body as successful JSON.
+            raise ProviderError(f"openai {path} HTTP {resp.status_code}")
         if not resp.ok:
             # Trim long error bodies for log readability.
             body = resp.text

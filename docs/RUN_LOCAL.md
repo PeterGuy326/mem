@@ -49,14 +49,14 @@ Web 浏览器验收及其通过标准统一见 [TESTING.md](TESTING.md)。
      > `dev_up.sh` 启动 worker 前也会自动跑一次 `uv sync --extra clip`，所以
      > 平时直接 `bash scripts/dev_up.sh` 即可，无需手动 sync。
      > CLIP 走 CPU，ViT-B-32 权重约 600MB。它必须在要启用图搜图的部署中单独
-     > 预置/缓存；`profile select local-fast-v1` 不会安装、下载或 probe CLIP，
+     > 预置/缓存；`profile select local-fast-v2` 不会安装、下载或 probe CLIP，
      > 它也不是本地文本 profile 激活的前置条件。
    - memd 二进制（`dev_up.sh` 会在缺失时自动 `go build`，也可手动）：
      ```bash
      make build-memd build-mem   # -> bin/memd, bin/mem
      ```
 
-2. **Ollama（`local-fast-v1` 的明确前置条件）**：要验证文件语义检索时，需在
+2. **Ollama（`local-fast-v2` 的明确前置条件）**：要验证文件语义检索时，需在
    `http://localhost:11434` 运行。工作区的本地快速档固定使用
    `ollama:qwen3-embedding:0.6b`，并要求 Worker 取得**恰好 768 维**文本向量；
    `mem profile select` 不会下载模型，也不会把缺失模型换成其他默认模型。先由操作者
@@ -78,19 +78,20 @@ Web 浏览器验收及其通过标准统一见 [TESTING.md](TESTING.md)。
    目录中的文本 embedding profile（包括适用时的 `nomic-embed-text`）必须通过
    768 维 probe，对上 schema `embeddings_text vector(768)`，不要绕过目录流程
    直接把未验证模型设为默认值。
-   - `local-fast-v1` 有意关闭 LLM、VLM、ASR 和 rerank；它不会继承
+   - `local-fast-v2` 有意关闭 visual embedding、LLM、VLM、ASR 和 rerank；它不会继承
      `MEM_DEFAULT_LLM`、`MEM_DEFAULT_VLM` 或任何全局云模型。这样本地档只走固定的
-     本地文本 embedding 与 CLIP 视觉 embedding；没有启用的富化阶段不会被某个默认
-     模型悄悄补上。旧的、未选择 workspace profile 的兼容路径仍可另行显式安装
-     `ollama pull qwen2.5:7b` 等模型。
-   - 视觉模型（minicpm-v）**可选缺失**：影响的是 caption 文本，不影响图搜图本身。
-     图片的视觉向量由 **CLIP**（`clip:ViT-B-32`，见下）产出，与 Ollama 无关。
-   - **图搜图 = CLIP（可选，独立于 profile 激活）**：装了 `--extra clip` 且已预置
+     本地文本 embedding；没有启用的阶段不会被某个默认模型悄悄补上。图片和音频
+     MIME 会在 dispatch 前被该 profile 拒绝。旧的、未选择 workspace profile 的
+     兼容路径仍可另行显式安装 `ollama pull qwen2.5:7b` 等模型。
+   - **旧兼容路径的图搜图 = CLIP（可选）**：未选择 workspace profile 时，装了
+     `--extra clip` 且已预置
      CLIP 权重后，图片入库时由 CLIP image-tower
      编码成 512 维视觉向量写进 `embeddings_visual`，搜索时 query 文本由 CLIP
      text-tower 编码到同一空间做 ANN——这才是"以文搜图"。若 CLIP 没装，图片
      仍会保留 caption / EXIF 等元数据，但不会伪造不兼容的视觉向量；
-     `embeddings_visual` 为空时，图搜图不会返回该图片。
+     `embeddings_visual` 为空时，图搜图不会返回该图片。`local-fast-v2` 不会触发
+     这条路径；未来必须先把 CLIP 纳入显式安装、digest、磁盘和离线缓存校验，才能
+     在新的 profile revision 中启用。
    - **中文质量边界**：当前默认 `clip:ViT-B-32:openai` 是已经跑通的英文基线，
      不是已达标的中文模型。“草地上的金毛”在固定三图集上尚未稳定命中金毛；
      不要把中文命令能执行误写成中文召回已验收。候选多语言模型必须先通过
@@ -116,13 +117,13 @@ export MEM_TOKEN=$(curl -s -X POST http://localhost:8787/v1/auth/login \
   -d '{"email":"demo@mem.local","password":"demo-password-change-me"}' | jq -r .token)
 
 # 工作区 profile 只允许选择服务端编译并启用的 ID；不会接收 URL、模型名或 key。
-# 本地部署默认只暴露 local-fast-v1。
+# 本地部署默认只暴露 local-fast-v2。
 bin/mem --server http://localhost:8787 profile list
 bin/mem --server http://localhost:8787 profile status
 
 # 这会对 ollama:qwen3-embedding:0.6b 做 Worker 端 768 维 probe；
 # 不会下载 artifact，也不会回退到 MEM_DEFAULT_EMBEDDING。
-bin/mem --server http://localhost:8787 profile select local-fast-v1
+bin/mem --server http://localhost:8787 profile select local-fast-v2
 
 # 文本搜索（文档语义检索）
 bin/mem --server http://localhost:8787 search "a dog on a meadow" --format json
@@ -198,11 +199,10 @@ curl -i -X POST http://localhost:8787/v1/memories \
 # 首次为 201/replayed:false；原请求重试为 200/replayed:true；
 # 同 key 修改归一化后的 payload 为 409/idempotency_conflict。
 
-# 图搜图（以文搜图，走 CLIP 视觉空间）：
-#   --route visual 只搜图片；--route auto（默认）text+visual 并行融合
-bin/mem put scripts/demo_data/images/golden_retriever_grass.jpg   # 先灌示例照片
-bin/mem search "golden retriever on grass" --route visual          # 金毛排首位
-bin/mem search "a cat" --route visual
+# 当前 workspace 已选择 local-fast-v2，它会在 dispatch 前拒绝图片和 visual
+# route。不要在这里把旧 CLIP 兼容路径误当成本地 profile 的能力；若要单独
+# 验证旧 CLIP 路径，请使用另一个未选择 workspace profile 的空 workspace，
+# 显式预置 CLIP 权重，并按上文“旧兼容路径的图搜图”边界执行。
 
 # 为外部 Agent 召回带出处的上下文（mem 不生成答案）
 curl -s -X POST http://localhost:8787/v1/context \
@@ -221,7 +221,7 @@ bash scripts/dev_down.sh
 
 ### 在本机验证 SaaS 的 Idealab 质量档
 
-`idealab-quality-v1` 只能在 `saas` 模式启用。它不是给 `local-fast-v1` 加一个
+`idealab-quality-v2` 只能在 `saas` 模式启用。它不是给 `local-fast-v2` 加一个
 全局 key 的开关：配置必须在启动 Worker 与 memd 前同时存在。`dev_up.sh` 会保留已在
 运行的进程，因此先停掉旧栈；把 Idealab 的 OpenAI-compatible endpoint 和 API key
 通过终端安全注入/密钥管理提供给 Worker，**不要**把实际 key 写进仓库或示例文件。
@@ -230,25 +230,47 @@ bash scripts/dev_down.sh
 bash scripts/dev_down.sh
 
 export MEM_DEPLOYMENT_MODE=saas
-export MEM_AI_PROFILES=local-fast-v1,idealab-quality-v1
-export MEM_MANAGED_EMBEDDING_PROVIDER=openai:text-embedding-3-large
-export OPENAI_BASE_URL='https://<idealab-openai-compatible-endpoint>'
-# 在当前进程环境中安全注入 OPENAI_API_KEY；这里不展示真实值。
+# 升级环境保留 local-fast-v1，避免已有 V1 workspace 被运行时 allowlist 禁用。
+export MEM_AI_PROFILES=local-fast-v1,local-fast-v2,idealab-quality-v2
+export MEM_MANAGED_EMBEDDING_PROVIDER=idealab:text-embedding-3-large
+export MEM_MANAGED_EMBEDDING_RESERVATION_TTL=10m
+export MEM_WORKER_GRPC=localhost:50051
+export MEM_WORKER_AUTH_MODE=required
+export MEM_WORKER_AUTH_KEY_ID=memd-local-test
+export MEM_WORKER_AUTH_KEY_B64="$(openssl rand -base64 32)"
+export MEM_WORKER_AUTH_REPLAY_REDIS_URL=redis://localhost:6479/0
+export IDEALAB_BASE_URL='https://<idealab-openai-compatible-endpoint>'
+# 在当前进程环境中安全注入 IDEALAB_API_KEY；这里不展示真实值。
 
+# SaaS Worker 防重放需要所有副本共享 Redis；本机验收可启动 compose Redis。
+docker compose up -d redis
 bash scripts/dev_up.sh
 
 # 使用有权限的 workspace token 登录后：
 bin/mem --server http://localhost:8787 profile list
-bin/mem --server http://localhost:8787 profile select idealab-quality-v1
+bin/mem --server http://localhost:8787 profile select idealab-quality-v2
 ```
 
-选择会先验证固定的 `openai:text-embedding-3-large` 768 维 contract。缺 key、endpoint
+选择会先验证固定的 `idealab:text-embedding-3-large` 768 维 contract。缺 key、endpoint
 不可用或维度不匹配都不会触发本地/其他云模型回退；受托管 entitlement 保护的语义请求
 仍需有可用 entitlement。索引或搜索只有已声明且成功的阶段才会产生输出；文件可带
 `partial` 状态，`context --source all` 可保留独立的结构化记忆 evidence 并附带警告。
+SaaS 启动前会做签名的 exact-provider readiness：同一 32-byte key、Redis 防重放和
+Idealab binding 任一不匹配都会拒绝启动。每个成功响应也必须带可验证的 response
+MAC，托管文件在外发前必须与请求里的 SHA-256 相符。HMAC 不加密链路；50051 仍只能
+放在私网/NetworkPolicy 后，并优先配 TLS/mTLS。未签名 HealthCheck 只代表进程存活。
+通用 `OPENAI_*` 配置不能满足质量档；当前质量档接收文本与
+`application/pdf`，但只有带文本层的 PDF 会产生 embedding/LLM 输出。扫描 PDF
+当前没有 OCR，并会释放两个未调用阶段；图片和音频会在 Worker dispatch 前被拒绝。
 质量档的模型固定及其“不回退”是产品路由保证，不是对任何数据集效果的 benchmark
 承诺。更完整的托管配置和计费边界见
 [MANAGED_EMBEDDINGS.md](MANAGED_EMBEDDINGS.md)。
+
+如果同一实例仍有已持久化的 `idealab-quality-v1` workspace，把
+`idealab-quality-v1` 也保留在 `MEM_AI_PROFILES`，并在 memd 与 Worker 设置
+`MEM_OPENAI_MANAGED_BINDING=true`，同时仅向 Worker 注入该 V1 的
+`OPENAI_BASE_URL`/`OPENAI_API_KEY`。memd 会对 V1、V2 两个 exact binding
+分别做签名 readiness；V1 仍不会出现在列表里，也不能被新选择。
 
 ### Workspace 迁移资源保护
 
@@ -279,10 +301,15 @@ memd 不会递归删除所配置的临时目录。
 证明与目标 profile 使用同一个 embedding provider 时选择 profile。`legacy:unknown`
 或混合 provider 的语料不会被 768 维这个共同尺寸“猜成兼容”。
 
-从 `local-fast-v1` 切到付费档（或反向切换）不是原地改一个 provider：必须创建新的
+从 `local-fast-v2` 切到付费档（或反向切换）不是原地改一个 provider：必须创建新的
 index generation，使用新 profile 全量重建，并在新 generation 完整后原子激活。当前
 服务会拒绝直接覆盖不兼容的既有语料；不要用旧的 `mem provider reindex` 把一个已选择
 的 profile 改成任意模型。这样查询不会在同一向量空间中混入不同模型的结果。
+
+同理，已发布的 `local-fast-v1@2026-07-29` 虽与 V2 使用相同文本 embedding，
+其 MIME、CLIP 和 pipeline 契约不同；有任何既有语料时也不能直接切 V2。V1 精确
+快照只用于升级后的历史 workspace 继续运行，不会出现在新选择列表中。空 workspace
+可以选择 V2；非空 workspace 要等待 versioned generation rebuild。
 
 ## Web 前端接真后端
 
@@ -324,28 +351,16 @@ npm run build      # 产物在 web/dist/
   不再依赖 worker 默认值碰巧是 CLIP。当前不允许在线覆盖 visual provider，
   避免索引与查询进入不同向量空间；待 versioned index generation 落地后再开放。
 
-## 放自己的照片（图搜图）
+## 图片检索当前边界
 
-```bash
-export MEM_TOKEN=$(curl -s -X POST http://localhost:8787/v1/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"demo@mem.local","password":"demo-password-change-me"}' | jq -r .token)
+本页前面的日常流程已选择 `local-fast-v2`；当前两个固定 profile 都只允许
+文本/PDF，明确拒绝 `image/*`，因此不能在同一 workspace 用它们验收图搜图。
 
-# 单张
-bin/mem put ~/Pictures/your_photo.jpg
-# 整个目录
-bin/mem put ~/Pictures --recursive
-
-# 等 index_status=done 后，以文搜图：
-bin/mem search "a golden retriever standing on green grass" --route visual
-bin/mem search "snowy mountain at sunset" --route visual
-```
-
-`scripts/demo_data/images/` 下自带 3 张开放许可示例照片（Wikimedia Commons：
-金毛犬 / 猫 / 河流风景），可直接 `bin/mem put` 进去验证图搜图。换成你自己的照片
-只需放进任意目录再 `put` 即可。默认 checkpoint 的英文描述能力已通过这组三图
-基线；中文查询仍受上面的质量边界约束。纯噪声或占位图本身也无法形成有意义的
-语义召回。
+旧版 visual/CLIP 路由仍只保留给 `MEM_DEPLOYMENT_MODE=private`、且从未选择
+AI profile 的私有 BYOM workspace。
+它必须使用隔离的新 workspace/数据库验证，不能作为
+`local-fast-v2` 或 `idealab-quality-v2` 的多模态能力证据。图片、音频和视频
+进入固定 profile 目录前，还需要独立的模型契约、计量阶段和真实召回评测。
 
 ## 常见问题排查
 

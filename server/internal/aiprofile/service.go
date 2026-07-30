@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -12,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/PeterGuy326/mem/server/internal/indexmeta"
+	"github.com/PeterGuy326/mem/server/internal/workspacelock"
 )
 
 var (
@@ -130,10 +132,11 @@ type Service struct {
 	now        func() time.Time
 }
 
-// New constructs a profile selection service.  Passing no enabled IDs enables
-// every compiled profile; deployments that need a tighter policy can pass the
-// exact allowlisted IDs.  A nil probe intentionally leaves Select fail-closed
-// until production wires a Worker adapter.
+// New constructs a profile selection service. Passing no enabled IDs enables
+// every compiled snapshot for persisted-resolution compatibility; deprecated
+// snapshots still remain hidden and non-selectable. Deployments that need a
+// tighter runtime policy can pass exact IDs. A nil probe intentionally leaves
+// Select fail-closed until production wires a Worker adapter.
 func New(pool *pgxpool.Pool, probe EmbeddingProbe, enabledIDs ...string) *Service {
 	var store selectionStore
 	if pool != nil {
@@ -157,15 +160,16 @@ func (s *Service) SetManagedProbeUsage(usage ManagedProbeUsage) {
 	s.probeUsage = usage
 }
 
-// List returns the enabled, server-allowlisted definitions in stable catalog
-// order.  Returned definitions are defensive copies.
+// List returns selectable, server-allowlisted definitions in stable catalog
+// order. Immutable deprecated definitions remain available only for exact
+// persisted-selection validation and are intentionally not advertised.
 func (s *Service) List() []Definition {
 	if s == nil {
 		return []Definition{}
 	}
 	out := make([]Definition, 0, len(compiledCatalog))
 	for _, definition := range compiledCatalog {
-		if s.isEnabled(definition.ID) {
+		if s.isEnabled(definition.ID) && !isDeprecatedProfileID(definition.ID) {
 			out = append(out, cloneDefinition(definition))
 		}
 	}
@@ -182,6 +186,9 @@ func (s *Service) Get(ctx context.Context, workspaceID uuid.UUID) (*Selection, e
 	}
 	selection, err := s.store.get(ctx, workspaceID)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.validateEnabledSelection(selection); err != nil {
 		return nil, err
 	}
 	return cloneSelection(selection), nil
@@ -202,7 +209,24 @@ func (s *Service) ResolveForOwner(ctx context.Context, ownerID uuid.UUID) (*Sele
 	if err != nil {
 		return nil, err
 	}
+	if err := s.validateEnabledSelection(selection); err != nil {
+		return nil, err
+	}
 	return cloneSelection(selection), nil
+}
+
+// validateEnabledSelection re-applies both immutable catalog validation and
+// the deployment's current operator allowlist whenever a persisted selection
+// is read. This makes removing a profile from MEM_AI_PROFILES an immediate,
+// fail-closed routing boundary rather than affecting only future selections.
+func (s *Service) validateEnabledSelection(selection *Selection) error {
+	if err := ValidateSelection(selection); err != nil {
+		return err
+	}
+	if !s.isEnabled(selection.ProfileID) {
+		return ErrProfileDisabled
+	}
+	return nil
 }
 
 // Select verifies the exact catalog embedding contract before atomically
@@ -227,60 +251,90 @@ func (s *Service) Select(
 	if err != nil {
 		return nil, err
 	}
-	ownerID, err := s.store.workspaceOwner(ctx, workspaceID)
+	var selected *Selection
+	err = s.store.withProfileLock(
+		ctx,
+		workspaceID,
+		func(ownerID uuid.UUID, locked selectionSnapshotStore) error {
+			if ownerID == uuid.Nil {
+				return ErrWorkspaceNotFound
+			}
+			if err := s.requireCompatibleCorpus(
+				ctx,
+				locked,
+				workspaceID,
+				ownerID,
+				definition,
+			); err != nil {
+				return err
+			}
+			probeReservation, err := s.prepareManagedProbe(
+				ctx,
+				workspaceID,
+				definition,
+			)
+			if err != nil {
+				return err
+			}
+			if probeReservation != nil && probeReservation.HasReplay() {
+				// A completed reservation is durable evidence that this exact
+				// workspace/profile/revision probe already returned the required
+				// dimensions. Never duplicate the paid provider call on reselect.
+				selected, err = s.saveSelection(
+					ctx,
+					locked,
+					definition,
+					workspaceID,
+					actorID,
+				)
+				return err
+			}
+			completed, probeErr := s.probeEmbedding(ctx, definition.Embedding)
+			if probeReservation != nil {
+				if probeErr != nil {
+					// Do not finalize a wrong-dimension result as a replayable
+					// success. Retain it conservatively until the managed-usage
+					// reconciler/operator resolves the outcome.
+					if err := markManagedProbeIndeterminate(
+						ctx,
+						probeReservation,
+					); err != nil {
+						return ErrManagedUsageUnavailable
+					}
+				} else if completed {
+					if err := finalizeManagedProbe(ctx, probeReservation); err != nil {
+						_ = markManagedProbeIndeterminate(ctx, probeReservation)
+						return ErrManagedUsageUnavailable
+					}
+				} else if err := markManagedProbeIndeterminate(
+					ctx,
+					probeReservation,
+				); err != nil {
+					return ErrManagedUsageUnavailable
+				}
+			}
+			if probeErr != nil {
+				return probeErr
+			}
+			selected, err = s.saveSelection(
+				ctx,
+				locked,
+				definition,
+				workspaceID,
+				actorID,
+			)
+			return err
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
-	if ownerID == uuid.Nil {
-		return nil, ErrWorkspaceNotFound
-	}
-
-	// The lock is keyed by the resource owner because indexing has always
-	// used that identity for files and corpus provenance. Hold it across the
-	// compatibility gate, paid probe, and snapshot upsert so no in-process
-	// index job can begin between validation and activation.
-	unlockSwitch := indexmeta.LockProviderSwitch(ownerID)
-	defer unlockSwitch()
-	if err := s.requireCompatibleCorpus(ctx, ownerID, definition.Embedding.Provider); err != nil {
-		return nil, err
-	}
-	probeReservation, err := s.prepareManagedProbe(ctx, workspaceID, definition)
-	if err != nil {
-		return nil, err
-	}
-	if probeReservation != nil && probeReservation.HasReplay() {
-		// A completed reservation is durable evidence that this exact
-		// workspace/profile/revision probe already returned the required
-		// dimensions. Never duplicate the paid provider call on reselect.
-		return s.saveSelection(ctx, definition, workspaceID, actorID)
-	}
-	completed, probeErr := s.probeEmbedding(ctx, definition.Embedding)
-	if probeReservation != nil {
-		if probeErr != nil {
-			// Do not finalize a wrong-dimension result as a replayable success:
-			// a later selection must never mistake that failed contract check for
-			// proof that 768 dimensions were returned. Retain it conservatively
-			// until the managed-usage reconciler/operator resolves the outcome.
-			if err := markManagedProbeIndeterminate(ctx, probeReservation); err != nil {
-				return nil, ErrManagedUsageUnavailable
-			}
-		} else if completed {
-			if err := finalizeManagedProbe(ctx, probeReservation); err != nil {
-				_ = markManagedProbeIndeterminate(ctx, probeReservation)
-				return nil, ErrManagedUsageUnavailable
-			}
-		} else if err := markManagedProbeIndeterminate(ctx, probeReservation); err != nil {
-			return nil, ErrManagedUsageUnavailable
-		}
-	}
-	if probeErr != nil {
-		return nil, probeErr
-	}
-	return s.saveSelection(ctx, definition, workspaceID, actorID)
+	return cloneSelection(selected), nil
 }
 
 func (s *Service) saveSelection(
 	ctx context.Context,
+	store selectionSnapshotStore,
 	definition Definition,
 	workspaceID, actorID uuid.UUID,
 ) (*Selection, error) {
@@ -289,7 +343,7 @@ func (s *Service) saveSelection(
 		now = s.now().UTC()
 	}
 	snapshot := selectionFromDefinition(definition, workspaceID, actorID, now)
-	selection, err := s.store.save(ctx, snapshot)
+	selection, err := store.save(ctx, snapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -302,6 +356,9 @@ func (s *Service) enabledDefinition(profileID string) (Definition, error) {
 		return Definition{}, ErrUnknownProfile
 	}
 	if s == nil || !s.isEnabled(profileID) {
+		return Definition{}, ErrProfileDisabled
+	}
+	if isDeprecatedProfileID(profileID) {
 		return Definition{}, ErrProfileDisabled
 	}
 	if err := definition.Validate(); err != nil {
@@ -388,24 +445,51 @@ func markManagedProbeIndeterminate(ctx context.Context, reservation ManagedProbe
 // enough: provider/model identity defines the vector space.
 func (s *Service) requireCompatibleCorpus(
 	ctx context.Context,
+	store selectionSnapshotStore,
+	workspaceID,
 	ownerID uuid.UUID,
-	requestedEmbeddingProvider string,
+	requested Definition,
 ) error {
-	inFlight, err := s.store.hasIndexingInFlight(ctx, ownerID)
+	inFlight, err := store.hasIndexingInFlight(ctx, ownerID)
 	if err != nil {
 		return fmt.Errorf("workspace AI profile indexing state: %w", err)
 	}
 	if inFlight {
 		return ErrProfileIndexingInFlight
 	}
-	corpusProvider, hasCorpus, err := s.store.textCorpusProvider(ctx, ownerID)
+	corpusProvider, hasTextCorpus, err := store.textCorpusProvider(ctx, ownerID)
 	if err != nil {
 		if errors.Is(err, indexmeta.ErrUnknownProvider) || errors.Is(err, indexmeta.ErrMixedProviders) {
 			return ErrProfileCorpusIdentityUnknown
 		}
 		return fmt.Errorf("workspace AI profile corpus identity: %w", err)
 	}
-	if hasCorpus && corpusProvider != requestedEmbeddingProvider {
+	if hasTextCorpus && corpusProvider != requested.Embedding.Provider {
+		return ErrProfileCorpusMismatch
+	}
+	hasDerivedCorpus, err := store.hasDerivedCorpus(ctx, ownerID)
+	if err != nil {
+		return fmt.Errorf("workspace AI profile derived corpus: %w", err)
+	}
+	if !hasTextCorpus && !hasDerivedCorpus {
+		return nil
+	}
+	// Matching text-provider names are insufficient when the pipeline, MIME
+	// boundary, visual/face space, or profile-derived annotations changed.
+	// Without a versioned index generation, any derived corpus may be reused
+	// only by the exact snapshot that created it. This also blocks a
+	// visual-only LocalFastV1 corpus from switching to text-only V2.
+	current, err := store.get(ctx, workspaceID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return ErrProfileCorpusIdentityUnknown
+		}
+		return fmt.Errorf("workspace AI profile active snapshot: %w", err)
+	}
+	if err := ValidateSelection(current); err != nil {
+		return ErrProfileCorpusIdentityUnknown
+	}
+	if requested.ProfileSnapshotMismatch(current) {
 		return ErrProfileCorpusMismatch
 	}
 	return nil
@@ -486,6 +570,21 @@ func ValidateSelection(selection *Selection) error {
 	return nil
 }
 
+// SelectionForResultTx loads the active immutable snapshot through an
+// existing result transaction. The caller must first hold
+// workspacelock.ForAIProfileCoordination for the same workspace; reading
+// without that boundary would reintroduce a check/commit race with Select.
+func SelectionForResultTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID uuid.UUID,
+) (*Selection, error) {
+	if tx == nil || workspaceID == uuid.Nil {
+		return nil, ErrStoreUnavailable
+	}
+	return getSelection(ctx, tx, workspaceID)
+}
+
 func (d Definition) ProfileSnapshotMismatch(selection *Selection) bool {
 	if selection == nil {
 		return true
@@ -511,16 +610,32 @@ func slicesClone(values []string) []string {
 	return out
 }
 
-type selectionStore interface {
+type selectionSnapshotStore interface {
 	get(context.Context, uuid.UUID) (*Selection, error)
-	resolveForOwner(context.Context, uuid.UUID) (*Selection, error)
 	save(context.Context, Selection) (*Selection, error)
-	workspaceOwner(context.Context, uuid.UUID) (uuid.UUID, error)
 	hasIndexingInFlight(context.Context, uuid.UUID) (bool, error)
 	textCorpusProvider(context.Context, uuid.UUID) (string, bool, error)
+	hasDerivedCorpus(context.Context, uuid.UUID) (bool, error)
+}
+
+type selectionStore interface {
+	selectionSnapshotStore
+	resolveForOwner(context.Context, uuid.UUID) (*Selection, error)
+	withProfileLock(
+		context.Context,
+		uuid.UUID,
+		func(uuid.UUID, selectionSnapshotStore) error,
+	) error
 }
 
 type postgresStore struct{ pool *pgxpool.Pool }
+
+type postgresLockedSelectionStore struct{ tx pgx.Tx }
+
+type selectionQueryer interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
 
 const selectionColumns = `
 	workspace_id,
@@ -545,7 +660,25 @@ func (s *postgresStore) get(ctx context.Context, workspaceID uuid.UUID) (*Select
 	if s == nil || s.pool == nil {
 		return nil, ErrStoreUnavailable
 	}
-	return scanSelection(s.pool.QueryRow(ctx,
+	return getSelection(ctx, s.pool, workspaceID)
+}
+
+func (s *postgresLockedSelectionStore) get(
+	ctx context.Context,
+	workspaceID uuid.UUID,
+) (*Selection, error) {
+	if s == nil || s.tx == nil {
+		return nil, ErrStoreUnavailable
+	}
+	return getSelection(ctx, s.tx, workspaceID)
+}
+
+func getSelection(
+	ctx context.Context,
+	queryer selectionQueryer,
+	workspaceID uuid.UUID,
+) (*Selection, error) {
+	return scanSelection(queryer.QueryRow(ctx,
 		`SELECT `+selectionColumns+`
 		   FROM workspace_ai_profiles
 		  WHERE workspace_id = $1`, workspaceID))
@@ -562,11 +695,64 @@ func (s *postgresStore) resolveForOwner(ctx context.Context, ownerID uuid.UUID) 
 		  WHERE w.resource_owner_user_id = $1`, ownerID))
 }
 
+func (s *postgresStore) withProfileLock(
+	ctx context.Context,
+	workspaceID uuid.UUID,
+	fn func(uuid.UUID, selectionSnapshotStore) error,
+) error {
+	if s == nil || s.pool == nil || fn == nil {
+		return ErrStoreUnavailable
+	}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("%w: begin profile selection: %v", ErrStoreUnavailable, err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	ownerID, err := workspacelock.ForAIProfileCoordination(
+		ctx,
+		tx,
+		workspaceID,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrWorkspaceNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrStoreUnavailable, err)
+	}
+	locked := &postgresLockedSelectionStore{tx: tx}
+	if err := fn(ownerID, locked); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("%w: commit profile selection: %v", ErrStoreUnavailable, err)
+	}
+	return nil
+}
+
 func (s *postgresStore) save(ctx context.Context, selection Selection) (*Selection, error) {
 	if s == nil || s.pool == nil {
 		return nil, ErrStoreUnavailable
 	}
-	return scanSelection(s.pool.QueryRow(ctx, `
+	return saveSelectionSnapshot(ctx, s.pool, selection)
+}
+
+func (s *postgresLockedSelectionStore) save(
+	ctx context.Context,
+	selection Selection,
+) (*Selection, error) {
+	if s == nil || s.tx == nil {
+		return nil, ErrStoreUnavailable
+	}
+	return saveSelectionSnapshot(ctx, s.tx, selection)
+}
+
+func saveSelectionSnapshot(
+	ctx context.Context,
+	queryer selectionQueryer,
+	selection Selection,
+) (*Selection, error) {
+	return scanSelection(queryer.QueryRow(ctx, `
 		INSERT INTO workspace_ai_profiles (
 			workspace_id,
 			profile_id,
@@ -627,29 +813,30 @@ func (s *postgresStore) save(ctx context.Context, selection Selection) (*Selecti
 	))
 }
 
-func (s *postgresStore) workspaceOwner(ctx context.Context, workspaceID uuid.UUID) (uuid.UUID, error) {
-	if s == nil || s.pool == nil {
-		return uuid.Nil, ErrStoreUnavailable
-	}
-	var ownerID uuid.UUID
-	err := s.pool.QueryRow(ctx,
-		`SELECT resource_owner_user_id FROM workspaces WHERE id = $1`, workspaceID,
-	).Scan(&ownerID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, ErrWorkspaceNotFound
-	}
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("workspace AI profile workspace lookup: %w", err)
-	}
-	return ownerID, nil
-}
-
 func (s *postgresStore) hasIndexingInFlight(ctx context.Context, ownerID uuid.UUID) (bool, error) {
 	if s == nil || s.pool == nil {
 		return false, ErrStoreUnavailable
 	}
+	return hasIndexingInFlight(ctx, s.pool, ownerID)
+}
+
+func (s *postgresLockedSelectionStore) hasIndexingInFlight(
+	ctx context.Context,
+	ownerID uuid.UUID,
+) (bool, error) {
+	if s == nil || s.tx == nil {
+		return false, ErrStoreUnavailable
+	}
+	return hasIndexingInFlight(ctx, s.tx, ownerID)
+}
+
+func hasIndexingInFlight(
+	ctx context.Context,
+	queryer selectionQueryer,
+	ownerID uuid.UUID,
+) (bool, error) {
 	var exists bool
-	err := s.pool.QueryRow(ctx, `
+	err := queryer.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM files
 			 WHERE user_id = $1
@@ -669,7 +856,117 @@ func (s *postgresStore) textCorpusProvider(
 	if s == nil || s.pool == nil {
 		return "", false, ErrStoreUnavailable
 	}
-	return indexmeta.TextProvider(ctx, s.pool, ownerID)
+	return textCorpusProvider(ctx, s.pool, ownerID)
+}
+
+func (s *postgresLockedSelectionStore) textCorpusProvider(
+	ctx context.Context,
+	ownerID uuid.UUID,
+) (string, bool, error) {
+	if s == nil || s.tx == nil {
+		return "", false, ErrStoreUnavailable
+	}
+	return textCorpusProvider(ctx, s.tx, ownerID)
+}
+
+func textCorpusProvider(
+	ctx context.Context,
+	queryer selectionQueryer,
+	ownerID uuid.UUID,
+) (string, bool, error) {
+	rows, err := queryer.Query(ctx, `
+		SELECT DISTINCT e.provider
+		  FROM embeddings_text AS e
+		  JOIN files AS f ON f.id = e.file_id
+		 WHERE f.user_id = $1
+		 LIMIT 2
+	`, ownerID)
+	if err != nil {
+		return "", false, fmt.Errorf("query text corpus provider: %w", err)
+	}
+	defer rows.Close()
+
+	providers := make([]string, 0, 2)
+	for rows.Next() {
+		var provider string
+		if err := rows.Scan(&provider); err != nil {
+			return "", false, fmt.Errorf("scan text corpus provider: %w", err)
+		}
+		providers = append(providers, strings.TrimSpace(provider))
+	}
+	if err := rows.Err(); err != nil {
+		return "", false, err
+	}
+	if len(providers) == 0 {
+		return "", false, nil
+	}
+	if len(providers) > 1 {
+		return "", true, indexmeta.ErrMixedProviders
+	}
+	if providers[0] == "" || providers[0] == indexmeta.LegacyUnknownProvider {
+		return "", true, indexmeta.ErrUnknownProvider
+	}
+	return providers[0], true, nil
+}
+
+func (s *postgresStore) hasDerivedCorpus(
+	ctx context.Context,
+	ownerID uuid.UUID,
+) (bool, error) {
+	if s == nil || s.pool == nil {
+		return false, ErrStoreUnavailable
+	}
+	return hasDerivedCorpus(ctx, s.pool, ownerID)
+}
+
+func (s *postgresLockedSelectionStore) hasDerivedCorpus(
+	ctx context.Context,
+	ownerID uuid.UUID,
+) (bool, error) {
+	if s == nil || s.tx == nil {
+		return false, ErrStoreUnavailable
+	}
+	return hasDerivedCorpus(ctx, s.tx, ownerID)
+}
+
+func hasDerivedCorpus(
+	ctx context.Context,
+	queryer selectionQueryer,
+	ownerID uuid.UUID,
+) (bool, error) {
+	var exists bool
+	err := queryer.QueryRow(ctx, `
+		SELECT
+		    EXISTS (
+		        SELECT 1
+		          FROM embeddings_text AS derived
+		          JOIN files AS file ON file.id = derived.file_id
+		         WHERE file.user_id = $1
+		    )
+		    OR EXISTS (
+		        SELECT 1
+		          FROM embeddings_visual AS derived
+		          JOIN files AS file ON file.id = derived.file_id
+		         WHERE file.user_id = $1
+		    )
+		    OR EXISTS (
+		        SELECT 1
+		          FROM embeddings_face AS derived
+		          JOIN files AS file ON file.id = derived.file_id
+		         WHERE file.user_id = $1
+		    )
+		    OR EXISTS (
+		        SELECT 1
+		          FROM file_annotations AS derived
+		          JOIN files AS file ON file.id = derived.file_id
+		         WHERE file.user_id = $1
+		           AND derived.source = 'model'
+		    )
+	`, ownerID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("query profile-derived corpus: %w", err)
+	}
+	return exists, nil
 }
 
 func optionalProvider(stage Stage) any {

@@ -106,13 +106,8 @@ func run() error {
 		if err := entitlementSvc.Ready(ctx); err != nil {
 			return fmt.Errorf("entitlement readiness: %w", err)
 		}
-		reconciled, err := entitlementSvc.ReconcileStale(ctx)
-		if err != nil {
-			return fmt.Errorf("reconcile managed embedding reservations: %w", err)
-		}
 		logger.Info("managed embedding entitlement ready",
-			"provider", cfg.ManagedEmbeddingProvider,
-			"reconciled_reservations", reconciled,
+			"providers", cfg.ManagedEmbeddingProviders,
 		)
 	}
 	folderSvc := folder.New(database.Pool)
@@ -137,12 +132,42 @@ func run() error {
 
 	// AI worker client. Empty MEM_WORKER_GRPC disables AI indexing entirely
 	// (upload still works, files stay in index_status='pending').
-	workerCli := workerclient.New(cfg.WorkerGRPC, cfg.S3Bucket)
+	workerOptions := make([]workerclient.Option, 0, 2)
+	if cfg.WorkerAuthKeyID != "" {
+		workerOptions = append(
+			workerOptions,
+			workerclient.WithHMACAuth(cfg.WorkerAuthKeyID, cfg.WorkerAuthKey),
+		)
+	}
+	workerOptions = append(
+		workerOptions,
+		workerclient.WithManagedOpenAIBinding(cfg.LegacyOpenAIManagedBinding),
+	)
+	workerCli := workerclient.New(cfg.WorkerGRPC, cfg.S3Bucket, workerOptions...)
 	defer workerCli.Close()
 	if cfg.WorkerGRPC == "" {
 		logger.Warn("worker disabled — MEM_WORKER_GRPC unset; AI indexing skipped")
 	} else {
 		logger.Info("worker client ready", "addr", cfg.WorkerGRPC)
+	}
+	if cfg.DeploymentMode == "saas" {
+		for _, providerSpec := range cfg.ManagedEmbeddingProviders {
+			readyCtx, readyCancel := context.WithTimeout(ctx, 10*time.Second)
+			err := workerCli.ReadyAuthenticated(readyCtx, providerSpec)
+			readyCancel()
+			if err != nil {
+				return fmt.Errorf(
+					"authenticated Worker readiness for %s: %w",
+					providerSpec,
+					err,
+				)
+			}
+		}
+		logger.Info(
+			"authenticated Worker readiness verified",
+			"providers",
+			cfg.ManagedEmbeddingProviders,
+		)
 	}
 	profileSvc := aiprofile.New(database.Pool, workerCli, cfg.AIProfiles...)
 	var managedUsageSvc *managedusage.Service
@@ -208,20 +233,22 @@ func run() error {
 			chan struct{},
 			cfg.WorkspaceTransferMaxConcurrent,
 		),
-		WorkspaceTransferTmpDir:  workspaceTransferTmpDir,
-		DeploymentMode:           cfg.DeploymentMode,
-		ManagedEmbeddingProvider: cfg.ManagedEmbeddingProvider,
-		Entitlements:             entitlementSvc,
-		RegistrationMode:         cfg.RegistrationMode,
-		SessionTTL:               cfg.SessionTTL,
-		CORSOrigins:              cfg.CORSOrigins,
-		Log:                      logger,
+		WorkspaceTransferTmpDir:   workspaceTransferTmpDir,
+		DeploymentMode:            cfg.DeploymentMode,
+		ManagedEmbeddingProvider:  cfg.ManagedEmbeddingProvider,
+		ManagedEmbeddingProviders: cfg.ManagedEmbeddingProviders,
+		Entitlements:              entitlementSvc,
+		RegistrationMode:          cfg.RegistrationMode,
+		SessionTTL:                cfg.SessionTTL,
+		CORSOrigins:               cfg.CORSOrigins,
+		Log:                       logger,
 	}
 
 	if cfg.DeploymentMode == "saas" {
 		go reconcileManagedEmbeddingReservations(
 			ctx,
 			entitlementSvc,
+			idxSvc,
 			cfg.ManagedEmbeddingReservationTTL,
 			logger,
 		)
@@ -284,6 +311,7 @@ func workspaceTransferBundleLimits() workspacebundle.Limits {
 func reconcileManagedEmbeddingReservations(
 	ctx context.Context,
 	service *entitlement.Service,
+	indexerService *indexer.Service,
 	reservationTTL time.Duration,
 	logger *slog.Logger,
 ) {
@@ -293,25 +321,54 @@ func reconcileManagedEmbeddingReservations(
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	reconcile := func() {
+		reconcileCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		defer cancel()
+
+		// Drain the transactional stage-settlement outbox first. Otherwise the
+		// generic stale-reservation reconciler could classify a durable
+		// post-commit result as indeterminate before its known outcome is
+		// applied.
+		const settlementBatchSize = 100
+		totalSettled := 0
+		for {
+			settled, err := indexerService.ReconcileManagedUsageSettlements(
+				reconcileCtx,
+				settlementBatchSize,
+			)
+			totalSettled += settled
+			if err != nil {
+				logger.Error("managed AI settlement outbox reconcile failed", "err", err)
+				return
+			}
+			if settled < settlementBatchSize {
+				break
+			}
+		}
+		if totalSettled > 0 {
+			logger.Info("managed AI settlement outbox reconciled", "count", totalSettled)
+		}
+
+		reconciled, err := service.ReconcileStale(reconcileCtx)
+		if err != nil {
+			logger.Error("managed embedding reservation reconcile failed", "err", err)
+			return
+		}
+		if reconciled > 0 {
+			logger.Warn(
+				"managed embedding reservations marked indeterminate",
+				"count",
+				reconciled,
+			)
+		}
+	}
+	reconcile()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			reconcileCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			count, err := service.ReconcileStale(reconcileCtx)
-			cancel()
-			if err != nil {
-				logger.Error("managed embedding reservation reconcile failed", "err", err)
-				continue
-			}
-			if count > 0 {
-				logger.Warn(
-					"managed embedding reservations marked indeterminate",
-					"count",
-					count,
-				)
-			}
+			reconcile()
 		}
 	}
 }

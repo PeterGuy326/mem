@@ -156,7 +156,7 @@ func (s *Server) managedSearcher(
 	if s.DeploymentMode != "saas" {
 		return s.Search, nil, nil
 	}
-	if strings.TrimSpace(s.ManagedEmbeddingProvider) == "" ||
+	if !s.hasManagedEmbeddingProviders() ||
 		s.Entitlements == nil ||
 		s.Search == nil {
 		return nil, nil, entitlement.ErrEntitlementUnavailable
@@ -169,7 +169,7 @@ func (s *Server) managedSearcher(
 	if err != nil {
 		return nil, nil, errManagedProviderUnavailable
 	}
-	if !entitlement.IsManagedProvider(s.ManagedEmbeddingProvider, spec) {
+	if !s.isManagedEmbeddingProvider(spec) {
 		return s.Search, nil, nil
 	}
 	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
@@ -249,7 +249,7 @@ func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if strings.TrimSpace(s.ManagedEmbeddingProvider) == "" ||
+	if !s.hasManagedEmbeddingProviders() ||
 		s.Entitlements == nil {
 		writeError(
 			w,
@@ -290,7 +290,7 @@ func (s *Server) handleEntitlementSummary(w http.ResponseWriter, r *http.Request
 		})
 		return
 	}
-	if s.Entitlements == nil || strings.TrimSpace(s.ManagedEmbeddingProvider) == "" {
+	if s.Entitlements == nil || !s.hasManagedEmbeddingProviders() {
 		writeError(w, http.StatusServiceUnavailable, "entitlement_unavailable",
 			"saas entitlement store is unavailable")
 		return
@@ -310,6 +310,29 @@ func (s *Server) handleEntitlementSummary(w http.ResponseWriter, r *http.Request
 		"upgrade_required":  !summary.Qualifying,
 		"managed_embedding": summary,
 	})
+}
+
+func (s *Server) hasManagedEmbeddingProviders() bool {
+	if len(s.ManagedEmbeddingProviders) > 0 {
+		for _, spec := range s.ManagedEmbeddingProviders {
+			if strings.TrimSpace(spec) != "" {
+				return true
+			}
+		}
+	}
+	return strings.TrimSpace(s.ManagedEmbeddingProvider) != ""
+}
+
+func (s *Server) isManagedEmbeddingProvider(resolved string) bool {
+	if len(s.ManagedEmbeddingProviders) > 0 {
+		for _, configured := range s.ManagedEmbeddingProviders {
+			if entitlement.IsManagedProvider(configured, resolved) {
+				return true
+			}
+		}
+		return false
+	}
+	return entitlement.IsManagedProvider(s.ManagedEmbeddingProvider, resolved)
 }
 
 func setManagedUsageHeaders(

@@ -16,14 +16,23 @@ import (
 )
 
 const (
-	// LocalFastV1 is the privacy-preserving local profile.  Optional
-	// generative stages are explicitly disabled rather than left to Worker
-	// environment defaults.
+	// LocalFastV1 is the deprecated, already-published local snapshot retained
+	// only for exact persisted-selection compatibility.
 	LocalFastV1 = "local-fast-v1"
 
-	// IdealabQualityV1 is the pinned managed-quality profile.  It must never
-	// be selected through an arbitrary provider/model API path.
+	// IdealabQualityV1 is the deprecated, already-published managed snapshot
+	// retained only for exact persisted-selection compatibility.
 	IdealabQualityV1 = "idealab-quality-v1"
+
+	// LocalFastV2 is the current local text/PDF-only profile. V1 remains in
+	// the catalog unchanged so an already-persisted selection is never
+	// silently reinterpreted as a different pipeline.
+	LocalFastV2 = "local-fast-v2"
+
+	// IdealabQualityV2 is the current dedicated Idealab text/PDF profile. V1
+	// keeps its published OpenAI-compatible snapshot until a versioned index
+	// generation can rebuild existing corpora safely.
+	IdealabQualityV2 = "idealab-quality-v2"
 
 	// DataEgressLocalOnly means no stage in the profile is permitted to send
 	// source material or embeddings to a managed provider.
@@ -131,7 +140,7 @@ func (d Definition) Validate() error {
 	if err := validateStage(d.Embedding, true, textEmbeddingDimension); err != nil {
 		return err
 	}
-	if err := validateStage(d.VisualEmbedding, true, visualEmbeddingDimension); err != nil {
+	if err := validateStage(d.VisualEmbedding, false, visualEmbeddingDimension); err != nil {
 		return err
 	}
 	for _, stage := range []Stage{d.LLM, d.VLM, d.ASR, d.Rerank} {
@@ -150,6 +159,20 @@ func (d Definition) Validate() error {
 		} {
 			if stage.Enabled && !isLocalProvider(stage.Provider) {
 				return fmt.Errorf("%w: local profile has managed provider", ErrInvalidDefinition)
+			}
+		}
+	} else {
+		for _, stage := range []Stage{
+			d.Embedding,
+			d.VisualEmbedding,
+			d.LLM,
+			d.VLM,
+			d.ASR,
+			d.Rerank,
+		} {
+			if stage.Enabled && !isLocalProvider(stage.Provider) &&
+				!isBoundManagedProvider(d.ID, stage.Provider) {
+				return fmt.Errorf("%w: managed profile has an unbound provider", ErrInvalidDefinition)
 			}
 		}
 	}
@@ -225,6 +248,32 @@ func isLocalProvider(spec string) bool {
 	}
 }
 
+func isIdealabProvider(spec string) bool {
+	vendor, _, ok := strings.Cut(spec, ":")
+	return ok && vendor == "idealab"
+}
+
+func isBoundManagedProvider(profileID, spec string) bool {
+	if isIdealabProvider(spec) {
+		return true
+	}
+	if profileID != IdealabQualityV1 {
+		return false
+	}
+	// These two values are the already-published V1 snapshot. Keep this
+	// exception exact; every new managed profile must use the dedicated
+	// idealab namespace.
+	return spec == "openai:text-embedding-3-large" ||
+		spec == "openai:qwen3.7-max-2026-06-08"
+}
+
+// isDeprecatedProfileID identifies immutable snapshots retained solely so an
+// already-persisted workspace selection can continue to execute. Deprecated
+// profiles are never advertised or accepted for a new selection.
+func isDeprecatedProfileID(id string) bool {
+	return id == LocalFastV1 || id == IdealabQualityV1
+}
+
 var compiledCatalog = func() []Definition {
 	profiles := []Definition{
 		{
@@ -293,6 +342,56 @@ var compiledCatalog = func() []Definition {
 			// Idealab currently has no verified qwen3 rerank API contract. Keep
 			// this stage explicitly disabled rather than issuing a guessed
 			// endpoint request or silently substituting another reranker.
+			Rerank: Stage{},
+		},
+		{
+			ID:               LocalFastV2,
+			Revision:         "2026-07-30.1",
+			PipelineRevision: "file-enrichment-v2",
+			DataEgress:       DataEgressLocalOnly,
+			AllowedMIMETypes: []string{
+				"text/*", "application/pdf",
+				"application/json", "application/xml", "application/yaml",
+				"application/x-yaml", "application/javascript", "application/typescript",
+				"application/x-sh", "application/x-python", "application/x-toml",
+			},
+			Embedding: Stage{
+				Enabled:    true,
+				Provider:   "ollama:qwen3-embedding:0.6b",
+				Dimensions: textEmbeddingDimension,
+			},
+			// Visual embedding stays disabled until the explicit model catalog
+			// owns CLIP installation, integrity, disk, and offline-cache probes.
+			// open_clip may otherwise download weights during the first request.
+			VisualEmbedding: Stage{},
+			LLM:             Stage{},
+			VLM:             Stage{},
+			ASR:             Stage{},
+			Rerank:          Stage{},
+		},
+		{
+			ID:               IdealabQualityV2,
+			Revision:         "2026-07-30.1",
+			PipelineRevision: "file-enrichment-v2",
+			DataEgress:       DataEgressManagedIdealab,
+			AllowedMIMETypes: []string{
+				"text/*", "application/pdf",
+				"application/json", "application/xml", "application/yaml",
+				"application/x-yaml", "application/javascript", "application/typescript",
+				"application/x-sh", "application/x-python", "application/x-toml",
+			},
+			Embedding: Stage{
+				Enabled:    true,
+				Provider:   "idealab:text-embedding-3-large",
+				Dimensions: textEmbeddingDimension,
+			},
+			VisualEmbedding: Stage{},
+			LLM: Stage{
+				Enabled:  true,
+				Provider: "idealab:qwen3.7-max-2026-06-08",
+			},
+			VLM:    Stage{},
+			ASR:    Stage{},
 			Rerank: Stage{},
 		},
 	}

@@ -27,12 +27,17 @@ import (
 const (
 	// Contract identifies the canonical, hashed reservation identity. Bump it
 	// if any field or its meaning changes so old and new calls cannot collide.
-	Contract = "mem.managed-ai-usage/v1"
+	Contract = "mem.managed-ai-usage/v2"
 
 	// Every exact managed stage currently consumes one unit. Keeping the value
 	// server-owned prevents a caller from choosing an arbitrary billable unit
 	// count through an indexing or worker options payload.
 	unitsPerStage int64 = 1
+
+	// maxReleasedReservationHops bounds the amount of historical audit state a
+	// single retry may walk. A released reservation is terminal, so every hop
+	// derives a fresh key instead of rewriting or deleting that record.
+	maxReleasedReservationHops = 32
 )
 
 var (
@@ -58,6 +63,24 @@ var (
 	// ErrInvalidReservation protects the Worker boundary from a broken ledger
 	// adapter that claims a stage was reserved without a usable reservation.
 	ErrInvalidReservation = errors.New("invalid managed AI usage reservation")
+
+	// ErrReleasedRetryLimit fails closed when an abnormal amount of released
+	// history exists for one deterministic file stage.
+	ErrReleasedRetryLimit = errors.New("managed AI usage released retry limit exceeded")
+
+	// ErrInvalidOutcome rejects arbitrary outbox values before they reach the
+	// entitlement state machine.
+	ErrInvalidOutcome = errors.New("invalid managed AI usage outcome")
+)
+
+// Outcome is a terminal, receipt-derived result persisted by the settlement
+// outbox. No open/reserved state is accepted through SettleUsage.
+type Outcome string
+
+const (
+	OutcomeSucceeded     Outcome = "succeeded"
+	OutcomeNotInvoked    Outcome = "not_invoked"
+	OutcomeIndeterminate Outcome = "indeterminate"
 )
 
 // Stage identifies a bounded model-bearing capability. It deliberately uses
@@ -100,9 +123,10 @@ type Command struct {
 	WorkspaceID uuid.UUID
 	FileID      uuid.UUID
 
-	ContentSHA256   string
-	ProfileID       string
-	ProfileRevision string
+	ContentSHA256    string
+	ProfileID        string
+	ProfileRevision  string
+	PipelineRevision string
 
 	Stages []StageSpec
 }
@@ -115,6 +139,17 @@ type Ledger interface {
 	Finalize(context.Context, uuid.UUID, []entitlement.ReplayReference) (entitlement.Summary, error)
 	Release(context.Context, uuid.UUID) (entitlement.Summary, error)
 	MarkIndeterminate(context.Context, uuid.UUID) (entitlement.Summary, error)
+}
+
+// releasedReservationLookup is intentionally optional. The production
+// entitlement service implements it, while generic Ledger adapters retain
+// Reserve's strict ErrReleasedKey behavior and gain no retry-chain capability.
+type releasedReservationLookup interface {
+	LookupReservation(
+		context.Context,
+		entitlement.ReserveCommand,
+		entitlement.ReservationLookupOptions,
+	) (*entitlement.Reservation, error)
 }
 
 // Service performs all reserve decisions before its caller may invoke a
@@ -184,7 +219,7 @@ func (s *Service) Prepare(ctx context.Context, command Command) (*Handle, error)
 		if err != nil {
 			return nil, err
 		}
-		reservation, err := s.ledger.Reserve(ctx, reserve)
+		reservation, err := reserveFileStage(ctx, s.ledger, reserve)
 		if err != nil {
 			return releaseAfterPrepareFailure(ctx, handle, err)
 		}
@@ -197,8 +232,41 @@ func (s *Service) Prepare(ctx context.Context, command Command) (*Handle, error)
 			UsageID:      reservation.ID,
 			Replayed:     reservation.Replayed,
 		})
+		if reservation.Replayed {
+			// A succeeded stage is proof that this exact file invocation
+			// already ran. Do not reserve later stages that the caller is now
+			// forbidden to invoke; any earlier new siblings remain on the
+			// handle so the replay path can release them as not invoked.
+			return handle, nil
+		}
 	}
 	return handle, nil
+}
+
+// SettleUsage applies one closed outbox outcome by usage ID. Entitlement owns
+// idempotency for repeated transitions to the same terminal state, so a crash
+// after the ledger commit but before the outbox acknowledgement is safe to
+// retry.
+func (s *Service) SettleUsage(ctx context.Context, usageID uuid.UUID, outcome Outcome) error {
+	if s == nil || s.ledger == nil {
+		return ErrEntitlementUnavailable
+	}
+	if usageID == uuid.Nil {
+		return ErrInvalidReservation
+	}
+	switch outcome {
+	case OutcomeSucceeded:
+		_, err := s.ledger.Finalize(ctx, usageID, nil)
+		return err
+	case OutcomeNotInvoked:
+		_, err := s.ledger.Release(ctx, usageID)
+		return err
+	case OutcomeIndeterminate:
+		_, err := s.ledger.MarkIndeterminate(ctx, usageID)
+		return err
+	default:
+		return ErrInvalidOutcome
+	}
 }
 
 // PrepareEmbeddingProbe reserves the one managed embedding call made while a
@@ -324,6 +392,19 @@ func (h *Handle) Finalize(ctx context.Context) error {
 	})
 }
 
+// FinalizeStages records known successful completion only for the named
+// stages. A Worker receipt must prove each outcome; callers must not infer
+// success from the top-level Process status.
+func (h *Handle) FinalizeStages(ctx context.Context, stages []Stage) error {
+	if h == nil {
+		return ErrInvalidReservation
+	}
+	return h.transitionStages(ctx, stages, func(ctx context.Context, usageID uuid.UUID) error {
+		_, err := h.ledger.Finalize(ctx, usageID, nil)
+		return err
+	})
+}
+
 // ReleaseUninvoked releases every newly-reserved stage only when the caller
 // can prove that no Worker invocation began (for example, before dispatch or
 // after a reservation failure). It must never be used after a timeout or an
@@ -338,6 +419,18 @@ func (h *Handle) ReleaseUninvoked(ctx context.Context) error {
 	})
 }
 
+// ReleaseStagesNotInvoked releases only stages whose trusted Worker receipt
+// proves the provider call never began.
+func (h *Handle) ReleaseStagesNotInvoked(ctx context.Context, stages []Stage) error {
+	if h == nil {
+		return ErrInvalidReservation
+	}
+	return h.transitionStages(ctx, stages, func(ctx context.Context, usageID uuid.UUID) error {
+		_, err := h.ledger.Release(ctx, usageID)
+		return err
+	})
+}
+
 // MarkIndeterminate retains all newly-reserved units when a Worker/network
 // failure makes it impossible to prove whether a managed provider ran.
 func (h *Handle) MarkIndeterminate(ctx context.Context) error {
@@ -345,6 +438,18 @@ func (h *Handle) MarkIndeterminate(ctx context.Context) error {
 		return ErrInvalidReservation
 	}
 	return h.transitionAll(ctx, func(ctx context.Context, usageID uuid.UUID) error {
+		_, err := h.ledger.MarkIndeterminate(ctx, usageID)
+		return err
+	})
+}
+
+// MarkStagesIndeterminate retains only the named reservations when the Worker
+// cannot prove whether those provider calls completed.
+func (h *Handle) MarkStagesIndeterminate(ctx context.Context, stages []Stage) error {
+	if h == nil {
+		return ErrInvalidReservation
+	}
+	return h.transitionStages(ctx, stages, func(ctx context.Context, usageID uuid.UUID) error {
 		_, err := h.ledger.MarkIndeterminate(ctx, usageID)
 		return err
 	})
@@ -363,6 +468,53 @@ func (h *Handle) transitionAll(
 	}
 	var errs []error
 	for _, reservation := range pending {
+		if err := transition(ctx, reservation.UsageID); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		h.markSettled(reservation.UsageID)
+	}
+	return errors.Join(errs...)
+}
+
+func (h *Handle) transitionStages(
+	ctx context.Context,
+	stages []Stage,
+	transition func(context.Context, uuid.UUID) error,
+) error {
+	if len(stages) == 0 {
+		return nil
+	}
+	if h == nil {
+		return ErrInvalidReservation
+	}
+	if h.ledger == nil {
+		return ErrEntitlementUnavailable
+	}
+
+	pendingByStage := make(map[Stage]StageReservation)
+	for _, reservation := range h.pending() {
+		pendingByStage[reservation.Stage] = reservation
+	}
+	seen := make(map[Stage]struct{}, len(stages))
+	selected := make([]StageReservation, 0, len(stages))
+	for _, stage := range stages {
+		if !isKnownStage(stage) {
+			return ErrInvalidStage
+		}
+		if _, duplicate := seen[stage]; duplicate {
+			return ErrInvalidStage
+		}
+		seen[stage] = struct{}{}
+		reservation, ok := pendingByStage[stage]
+		if !ok {
+			return ErrInvalidStage
+		}
+		selected = append(selected, reservation)
+	}
+
+	var errs []error
+	for _, reservation := range selected {
 		if err := transition(ctx, reservation.UsageID); err != nil {
 			errs = append(errs, err)
 			continue
@@ -477,7 +629,8 @@ func validateCommand(command Command) (aiprofile.Definition, error) {
 		return aiprofile.Definition{}, ErrInvalidCommand
 	}
 	definition, ok := aiprofile.Find(command.ProfileID)
-	if !ok || command.ProfileRevision != definition.Revision {
+	if !ok || command.ProfileRevision != definition.Revision ||
+		command.PipelineRevision != definition.PipelineRevision {
 		return aiprofile.Definition{}, ErrInvalidProfile
 	}
 	return definition, nil
@@ -540,15 +693,16 @@ func profileStage(definition aiprofile.Definition, stage Stage) (aiprofile.Stage
 
 func reserveCommand(command Command, stage normalizedStage) (entitlement.ReserveCommand, error) {
 	identity, err := json.Marshal(reservationIdentity{
-		Contract:        Contract,
-		WorkspaceID:     command.WorkspaceID.String(),
-		FileID:          command.FileID.String(),
-		ContentSHA256:   command.ContentSHA256,
-		ProfileID:       command.ProfileID,
-		ProfileRevision: command.ProfileRevision,
-		Stage:           string(stage.Stage),
-		ProviderSpec:    stage.ProviderSpec,
-		Units:           unitsPerStage,
+		Contract:         Contract,
+		WorkspaceID:      command.WorkspaceID.String(),
+		FileID:           command.FileID.String(),
+		ContentSHA256:    command.ContentSHA256,
+		ProfileID:        command.ProfileID,
+		ProfileRevision:  command.ProfileRevision,
+		PipelineRevision: command.PipelineRevision,
+		Stage:            string(stage.Stage),
+		ProviderSpec:     stage.ProviderSpec,
+		Units:            unitsPerStage,
 	})
 	if err != nil {
 		// reservationIdentity contains only fixed scalar types, but fail closed
@@ -563,6 +717,62 @@ func reserveCommand(command Command, stage normalizedStage) (entitlement.Reserve
 		IdempotencyKey:     domainSHA256("mem/managed-ai-usage/idempotency/v1", identity),
 		RequestFingerprint: domainSHA256("mem/managed-ai-usage/fingerprint/v1", identity),
 	}, nil
+}
+
+func reserveFileStage(
+	ctx context.Context,
+	ledger Ledger,
+	command entitlement.ReserveCommand,
+) (*entitlement.Reservation, error) {
+	current := command
+	for range maxReleasedReservationHops {
+		reservation, err := ledger.Reserve(ctx, current)
+		if !errors.Is(err, entitlement.ErrReleasedKey) {
+			return reservation, err
+		}
+
+		lookup, ok := ledger.(releasedReservationLookup)
+		if !ok {
+			// Generic ledgers keep the entitlement contract unchanged: a
+			// released deterministic key is terminal unless the trusted
+			// coordinator has the explicit released-record capability.
+			return nil, err
+		}
+		released, lookupErr := lookup.LookupReservation(
+			ctx,
+			current,
+			entitlement.ReservationLookupOptions{IncludeReleased: true},
+		)
+		if lookupErr != nil {
+			return nil, lookupErr
+		}
+		if released == nil || released.ID == uuid.Nil ||
+			released.Status != entitlement.StatusReleased {
+			return nil, ErrInvalidReservation
+		}
+		current = chainedReserveCommand(current, released.ID)
+	}
+	return nil, ErrReleasedRetryLimit
+}
+
+func chainedReserveCommand(
+	command entitlement.ReserveCommand,
+	releasedID uuid.UUID,
+) entitlement.ReserveCommand {
+	identity := []byte(
+		command.IdempotencyKey + "\x00" +
+			command.RequestFingerprint + "\x00" +
+			releasedID.String(),
+	)
+	command.IdempotencyKey = domainSHA256(
+		"mem/managed-ai-usage/released-retry/idempotency/v1",
+		identity,
+	)
+	command.RequestFingerprint = domainSHA256(
+		"mem/managed-ai-usage/released-retry/fingerprint/v1",
+		identity,
+	)
+	return command
 }
 
 func profileProbeReserveCommand(
@@ -593,15 +803,16 @@ func profileProbeReserveCommand(
 }
 
 type reservationIdentity struct {
-	Contract        string `json:"contract"`
-	WorkspaceID     string `json:"workspace_id"`
-	FileID          string `json:"file_id"`
-	ContentSHA256   string `json:"content_sha256"`
-	ProfileID       string `json:"profile_id"`
-	ProfileRevision string `json:"profile_revision"`
-	Stage           string `json:"stage"`
-	ProviderSpec    string `json:"provider_spec"`
-	Units           int64  `json:"units"`
+	Contract         string `json:"contract"`
+	WorkspaceID      string `json:"workspace_id"`
+	FileID           string `json:"file_id"`
+	ContentSHA256    string `json:"content_sha256"`
+	ProfileID        string `json:"profile_id"`
+	ProfileRevision  string `json:"profile_revision"`
+	PipelineRevision string `json:"pipeline_revision"`
+	Stage            string `json:"stage"`
+	ProviderSpec     string `json:"provider_spec"`
+	Units            int64  `json:"units"`
 }
 
 type profileProbeIdentity struct {

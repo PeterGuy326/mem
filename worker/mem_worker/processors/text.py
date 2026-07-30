@@ -18,6 +18,13 @@ from collections.abc import Iterable
 
 from ..config import get_settings
 from ..logging import get_logger
+from ..managed_usage import (
+    INDETERMINATE,
+    NOT_INVOKED,
+    PROCESSOR_STAGES_KEY,
+    SUCCEEDED,
+    is_managed_provider,
+)
 from ..providers import (
     EmbeddingProvider,
     LLMProvider,
@@ -129,11 +136,24 @@ class TextProcessor:
 
     # ---- main entrypoint ----
 
+    def initial_managed_usage_stages(self) -> dict[str, str]:
+        """Return the closed pre-invocation receipt for delegated processors."""
+        managed_stages: dict[str, str] = {}
+        if self._embedding_enabled is True and is_managed_provider(self._embedding_spec):
+            managed_stages["embedding"] = NOT_INVOKED
+        if self._llm_enabled is True and is_managed_provider(self._llm_spec):
+            managed_stages["llm"] = NOT_INVOKED
+        return managed_stages
+
     def process(self, file: FileRef) -> ProcessResult:
         result = ProcessResult(processor=self.name)
+        managed_stages = self.initial_managed_usage_stages()
+        if managed_stages:
+            result.metadata[PROCESSOR_STAGES_KEY] = managed_stages
+
         text = _decode_text(file.data)
         if not text.strip():
-            result.metadata = {"decode_empty": True, "byte_length": len(file.data)}
+            result.metadata.update({"decode_empty": True, "byte_length": len(file.data)})
             return result
 
         settings = get_settings()
@@ -144,18 +164,22 @@ class TextProcessor:
                 overlap=settings.text_chunk_overlap,
             )
         )
-        result.metadata = {
-            "char_length": len(text),
-            "chunk_count": len(chunks),
-            "chunk_size": settings.text_chunk_size,
-            "chunk_overlap": settings.text_chunk_overlap,
-        }
+        result.metadata.update(
+            {
+                "char_length": len(text),
+                "chunk_count": len(chunks),
+                "chunk_size": settings.text_chunk_size,
+                "chunk_overlap": settings.text_chunk_overlap,
+            }
+        )
 
         # 1. Embeddings.
         if self._embedding_enabled is not False:
             try:
                 embedder = self._resolve_embedder()
                 if embedder is not None:
+                    if "embedding" in managed_stages:
+                        managed_stages["embedding"] = INDETERMINATE
                     vectors = embedder.embed_text(chunks)
                     if vectors:
                         if self._embedding_dimensions is not None and any(
@@ -173,6 +197,8 @@ class TextProcessor:
                                 for i, v in enumerate(vectors)
                             ],
                         )
+                        if "embedding" in managed_stages:
+                            managed_stages["embedding"] = SUCCEEDED
             except (ProviderError, NotImplementedError):
                 log.warning(
                     "text.embed_failed",
@@ -195,6 +221,8 @@ class TextProcessor:
                 llm = self._resolve_llm()
                 if llm is None:
                     return result
+                if "llm" in managed_stages:
+                    managed_stages["llm"] = INDETERMINATE
                 model_output = llm.complete(
                     [
                         Message(
@@ -210,6 +238,8 @@ class TextProcessor:
                         ),
                     ]
                 )
+                if "llm" in managed_stages:
+                    managed_stages["llm"] = SUCCEEDED
                 suggestions = structured_annotations(
                     model_output,
                     provider=getattr(llm, "name", ""),

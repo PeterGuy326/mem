@@ -6,8 +6,8 @@ import pytest
 
 from mem_worker.processors import (
     FileRef,
-    ProcessResult,
     ProcessorRegistry,
+    ProcessResult,
     default_registry,
 )
 from mem_worker.processors.registry import reset_default_registry
@@ -29,8 +29,20 @@ def test_register_and_find_exact_mime():
     reg = ProcessorRegistry()
     reg.register(FakeProc("pdf", ["application/pdf"]))
     assert reg.find("application/pdf").name == "pdf"
-    assert reg.find("application/PDF").name == "pdf"   # case-insensitive
+    assert reg.find("application/PDF").name == "pdf"  # case-insensitive
     assert reg.find("text/plain") is None
+
+
+@pytest.mark.parametrize(
+    ("mime", "want"),
+    [
+        ("application/json; charset=utf-8", "text"),
+        ("application/pdf; version=1.7", "pdf"),
+    ],
+)
+def test_default_registry_ignores_mime_parameters(mime, want):
+    reset_default_registry()
+    assert default_registry().find(mime).name == want
 
 
 def test_register_glob_pattern_matches():
@@ -99,10 +111,16 @@ def test_no_stub_processors():
     from mem_worker.processors.audio import AudioProcessor
     from mem_worker.processors.pdf import PDFProcessor
 
-    r = PDFProcessor().process(FileRef(
-        file_id="x", storage_uri="file:///dev/null", mime="application/pdf",
-        sha256="", user_id="u", data=b"%PDF-",
-    ))
+    r = PDFProcessor().process(
+        FileRef(
+            file_id="x",
+            storage_uri="file:///dev/null",
+            mime="application/pdf",
+            sha256="",
+            user_id="u",
+            data=b"%PDF-",
+        )
+    )
     assert r.metadata.get("stub") is not True
     assert "parse_error" in r.metadata or r.metadata.get("text_empty")
 
@@ -113,12 +131,19 @@ def test_no_stub_processors():
 
     class _BoomASR:
         name = "boom:asr"
+
         def transcribe(self, audio, **kw):
             raise ProviderError("cannot decode")
 
-    r = AudioProcessor(asr=_BoomASR()).process(FileRef(
-        file_id="x", storage_uri="file:///dev/null", mime="audio/mpeg",
-        sha256="", user_id="u", data=b"\xff\xfb",
-    ))
+    r = AudioProcessor(asr=_BoomASR()).process(
+        FileRef(
+            file_id="x",
+            storage_uri="file:///dev/null",
+            mime="audio/mpeg",
+            sha256="",
+            user_id="u",
+            data=b"\xff\xfb",
+        )
+    )
     assert r.metadata.get("stub") is not True
     assert "asr_error" in r.metadata

@@ -46,6 +46,12 @@ func ValidateLegacyProviderMutation(
 	if !safeProviderSpec(spec) {
 		return ErrInvalidProviderSpec
 	}
+	// The dedicated Idealab namespace is backed by a platform credential and
+	// is reachable only through an immutable, entitlement-gated profile.
+	// Private BYOM remains available through its existing provider namespaces.
+	if isIdealabProvider(spec) {
+		return ErrManagedProviderRequiresProfile
+	}
 	switch strings.TrimSpace(deploymentMode) {
 	case DeploymentPrivate:
 		return nil
@@ -62,7 +68,9 @@ func ValidateLegacyProviderMutation(
 // IsManagedCatalogProvider reports whether a concrete provider/model appears
 // in one of the compiled managed profiles.  It is useful for safe diagnostics
 // and future entitlement routing; it intentionally does not classify an
-// arbitrary OpenAI-compatible spec as a permissible managed call.
+// arbitrary OpenAI-compatible spec as a permissible managed call. The two
+// exact OpenAI-compatible V1 providers remain managed because that immutable
+// published snapshot can still be active in an existing workspace.
 func IsManagedCatalogProvider(spec string) bool {
 	for _, definition := range compiledCatalog {
 		if definition.DataEgress != DataEgressManagedIdealab {

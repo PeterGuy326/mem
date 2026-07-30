@@ -18,19 +18,43 @@ The server:
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
 import json
 import re
 import signal
 import sys
 from concurrent import futures
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import grpc
 
 from . import __version__
-from .config import get_settings
+from .auth import (
+    HEALTH_METHOD,
+    PROCESS_METHOD,
+    PROCESS_SCOPE,
+    READINESS_SCOPE_PREFIX,
+    AuthenticatedRequest,
+    AuthenticationUnavailableError,
+    RequestAuthenticationError,
+    RequestAuthenticator,
+)
+from .config import get_settings, is_loopback_ollama_url
 from .logging import configure_logging, get_logger
+from .managed_usage import (
+    CONTRACT as MANAGED_USAGE_CONTRACT,
+)
+from .managed_usage import (
+    INDETERMINATE,
+    NOT_INVOKED,
+    PROCESSOR_STAGES_KEY,
+    is_managed_provider,
+)
+from .managed_usage import (
+    OUTCOMES as MANAGED_USAGE_OUTCOMES,
+)
 from .processors import (
     AnnotationSuggestion,
     Entity,
@@ -55,6 +79,7 @@ _AI_PROFILE_FIELDS = {
     "id",
     "revision",
     "pipeline_revision",
+    "data_egress",
     "embedding",
     "visual_embedding",
     "llm",
@@ -66,6 +91,16 @@ _PROFILE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 _PROFILE_PROVIDER_SPEC = re.compile(
     r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}:[A-Za-z0-9][A-Za-z0-9._:+/-]{0,222}"
 )
+_CONTENT_SHA256 = re.compile(r"[0-9A-Fa-f]{64}")
+_PROFILE_DATA_EGRESS = {"local_only", "managed_idealab"}
+_LOCAL_PROFILE_VENDORS = {"ollama", "clip", "faster-whisper", "whisper"}
+_LEGACY_IDEALAB_PROFILE_ID = "idealab-quality-v1"
+_LEGACY_IDEALAB_PROFILE_REVISION = "2026-07-29"
+_LEGACY_IDEALAB_PIPELINE_REVISION = "file-enrichment-v1"
+_LEGACY_IDEALAB_PROVIDERS = {
+    "openai:text-embedding-3-large",
+    "openai:qwen3.7-max-2026-06-08",
+}
 # The current database schema is fixed at these dimensions. A profile with a
 # different vector space belongs to the versioned-generation migration work,
 # not a request-time override.
@@ -97,6 +132,7 @@ class AIProfile:
     id: str
     revision: str
     pipeline_revision: str
+    data_egress: str
     embedding: AIProfileStage
     visual_embedding: AIProfileStage
     llm: AIProfileStage
@@ -129,10 +165,11 @@ def parse_ai_profile(options: dict[str, Any]) -> AIProfile | None:
     if raw.get("contract") != AI_PROFILE_CONTRACT:
         raise AIProfileError("invalid ai_profile")
 
-    return AIProfile(
+    profile = AIProfile(
         id=_parse_profile_identifier(raw.get("id")),
         revision=_parse_profile_identifier(raw.get("revision")),
         pipeline_revision=_parse_profile_identifier(raw.get("pipeline_revision")),
+        data_egress=_parse_profile_data_egress(raw.get("data_egress")),
         embedding=_parse_profile_stage(
             raw.get("embedding"),
             dimensions=True,
@@ -148,10 +185,18 @@ def parse_ai_profile(options: dict[str, Any]) -> AIProfile | None:
         asr=_parse_profile_stage(raw.get("asr")),
         rerank=_parse_profile_stage(raw.get("rerank")),
     )
+    _validate_profile_egress(profile)
+    return profile
 
 
 def _parse_profile_identifier(value: Any) -> str:
     if not isinstance(value, str) or not _PROFILE_IDENTIFIER.fullmatch(value):
+        raise AIProfileError("invalid ai_profile")
+    return value
+
+
+def _parse_profile_data_egress(value: Any) -> str:
+    if not isinstance(value, str) or value not in _PROFILE_DATA_EGRESS:
         raise AIProfileError("invalid ai_profile")
     return value
 
@@ -192,19 +237,243 @@ def _parse_profile_stage(
 
 
 def _parse_profile_provider(value: Any) -> str:
-    if (
-        not isinstance(value, str)
-        or not _PROFILE_PROVIDER_SPEC.fullmatch(value)
-        or "://" in value
-    ):
+    if not isinstance(value, str) or not _PROFILE_PROVIDER_SPEC.fullmatch(value) or "://" in value:
         raise AIProfileError("invalid ai_profile")
     return value
 
 
-def _profile_metadata_json(profile: AIProfile | None) -> bytes:
+def _validate_profile_egress(profile: AIProfile) -> None:
+    stages = (
+        profile.embedding,
+        profile.visual_embedding,
+        profile.llm,
+        profile.vlm,
+        profile.asr,
+        profile.rerank,
+    )
+    vendors = {
+        stage.provider.partition(":")[0].lower()
+        for stage in stages
+        if stage.enabled and stage.provider is not None
+    }
+
+    if profile.data_egress == "local_only":
+        if not vendors.issubset(_LOCAL_PROFILE_VENDORS):
+            raise AIProfileError("invalid ai_profile")
+    elif not vendors.issubset(_LOCAL_PROFILE_VENDORS | {"idealab"}):
+        if not _is_published_legacy_idealab_profile(profile):
+            # A managed Idealab profile may retain fixed local stages such as
+            # CLIP, but every new managed/network vendor must use the dedicated
+            # binding. The one exact V1 exception preserves an already-published
+            # immutable snapshot until a versioned rebuild can replace it.
+            raise AIProfileError("invalid ai_profile")
+
+    if "ollama" in vendors and not is_loopback_ollama_url(get_settings().ollama_base_url):
+        raise AIProfileError("invalid ai_profile")
+
+
+def _is_published_legacy_idealab_profile(profile: AIProfile) -> bool:
+    if (
+        profile.id != _LEGACY_IDEALAB_PROFILE_ID
+        or profile.revision != _LEGACY_IDEALAB_PROFILE_REVISION
+        or profile.pipeline_revision != _LEGACY_IDEALAB_PIPELINE_REVISION
+    ):
+        return False
+    network_providers = {
+        stage.provider
+        for stage in (
+            profile.embedding,
+            profile.visual_embedding,
+            profile.llm,
+            profile.vlm,
+            profile.asr,
+            profile.rerank,
+        )
+        if stage.enabled
+        and stage.provider is not None
+        and stage.provider.partition(":")[0].lower() not in _LOCAL_PROFILE_VENDORS
+    }
+    if (
+        profile.embedding.provider != "openai:text-embedding-3-large"
+        or not profile.visual_embedding.enabled
+        or profile.visual_embedding.provider != "clip:ViT-B-32"
+        or profile.vlm.enabled
+        or profile.asr.enabled
+        or profile.rerank.enabled
+    ):
+        return False
+    # The persisted V1 indexing snapshot includes the managed LLM. Query-time
+    # projection deliberately disables every generative stage while retaining
+    # the exact profile identity, embedding, and local CLIP snapshot. These are
+    # the only two generic-openai combinations accepted for the published V1.
+    if profile.llm.enabled:
+        return (
+            profile.llm.provider == "openai:qwen3.7-max-2026-06-08"
+            and network_providers == _LEGACY_IDEALAB_PROVIDERS
+        )
+    return network_providers == {"openai:text-embedding-3-large"}
+
+
+def _managed_stages_for_request(profile: AIProfile | None, raw_mime: str) -> tuple[str, ...]:
+    """Return the exact managed stages reachable for one profiled request."""
+    if profile is None or profile.data_egress != "managed_idealab":
+        return ()
+
+    mime = raw_mime.partition(";")[0].strip().lower()
+    candidates: tuple[tuple[str, AIProfileStage], ...]
+    if (
+        mime.startswith("text/")
+        or mime == "application/pdf"
+        or mime
+        in {
+            "application/json",
+            "application/xml",
+            "application/yaml",
+            "application/x-yaml",
+            "application/javascript",
+            "application/typescript",
+            "application/x-sh",
+            "application/x-python",
+            "application/x-toml",
+        }
+    ):
+        candidates = (("embedding", profile.embedding), ("llm", profile.llm))
+    elif mime.startswith("image/"):
+        candidates = (
+            ("visual_embedding", profile.visual_embedding),
+            ("vlm", profile.vlm),
+        )
+    elif mime.startswith("audio/") and profile.asr.enabled:
+        candidates = (
+            ("asr", profile.asr),
+            ("embedding", profile.embedding),
+            ("llm", profile.llm),
+        )
+    else:
+        candidates = ()
+
+    return tuple(
+        name for name, stage in candidates if stage.enabled and is_managed_provider(stage.provider)
+    )
+
+
+def _managed_usage_receipt(
+    profile: AIProfile | None,
+    raw_mime: str,
+    observed: object | None = None,
+    *,
+    default: str = NOT_INVOKED,
+) -> dict[str, Any] | None:
+    expected = _managed_stages_for_request(profile, raw_mime)
+    if not expected:
+        return None
+
+    stages = {stage: default for stage in expected}
+    if observed is not None:
+        if (
+            not isinstance(observed, dict)
+            or set(observed) != set(expected)
+            or any(type(key) is not str for key in observed)
+            or any(
+                type(value) is not str or value not in MANAGED_USAGE_OUTCOMES
+                for value in observed.values()
+            )
+        ):
+            # A malformed internal receipt cannot release or finalize quota.
+            stages = {stage: INDETERMINATE for stage in expected}
+        else:
+            stages = dict(observed)
+    return {"contract": MANAGED_USAGE_CONTRACT, "stages": stages}
+
+
+def _profile_metadata_json(
+    profile: AIProfile | None,
+    raw_mime: str = "",
+    *,
+    managed_default: str = NOT_INVOKED,
+) -> bytes:
     if profile is None:
         return b""
-    return json.dumps({"ai_profile": profile.metadata()}).encode("utf-8")
+    metadata: dict[str, Any] = {"ai_profile": profile.metadata()}
+    receipt = _managed_usage_receipt(profile, raw_mime, default=managed_default)
+    if receipt is not None:
+        metadata["managed_usage"] = receipt
+    return json.dumps(metadata).encode("utf-8")
+
+
+def _legacy_options_use_managed_binding(options: dict[str, Any]) -> bool:
+    """Reserve every legacy ``*_provider`` field away from platform bindings.
+
+    This is unconditional, including on otherwise authenticated requests and
+    when an AI profile is also present.  A signed legacy override is still not
+    evidence of a profile selection or managed-usage reservation.
+
+    ``idealab:*`` is always dedicated. Hosted mode is profile-only for every
+    network vendor. ``openai:*`` remains valid private BYOM only while
+    ``MEM_OPENAI_MANAGED_BINDING`` is false; once that flag mounts the hosted V1
+    credential, the entire vendor namespace is profile-only in any mode.
+    """
+    settings = get_settings()
+    openai_is_managed = settings.openai_managed_binding
+    reject_network_vendor = settings.deployment_mode == "saas"
+    for key, value in options.items():
+        vendor = value.partition(":")[0].strip().lower() if isinstance(value, str) else ""
+        if (
+            isinstance(key, str)
+            and key.endswith("_provider")
+            and isinstance(value, str)
+            and value.strip()
+            and (
+                vendor == "idealab"
+                or (openai_is_managed and vendor == "openai")
+                or (reject_network_vendor and vendor not in _LOCAL_PROFILE_VENDORS)
+            )
+        ):
+            return True
+    return False
+
+
+def _legacy_request_uses_nonlocal_saas_ollama(options: dict[str, Any]) -> bool:
+    """Fail closed when a no-profile SaaS request could reach remote Ollama."""
+    settings = get_settings()
+    return (
+        "ai_profile" not in options
+        and settings.deployment_mode == "saas"
+        and not is_loopback_ollama_url(settings.ollama_base_url)
+    )
+
+
+def _profile_uses_idealab(profile: AIProfile) -> bool:
+    return any(
+        stage.enabled
+        and stage.provider is not None
+        and stage.provider.partition(":")[0].lower() == "idealab"
+        for stage in (
+            profile.embedding,
+            profile.visual_embedding,
+            profile.llm,
+            profile.vlm,
+            profile.asr,
+            profile.rerank,
+        )
+    )
+
+
+def _managed_profile_binding_vendor(profile: AIProfile) -> str | None:
+    if _is_published_legacy_idealab_profile(profile):
+        return "openai"
+    if _profile_uses_idealab(profile):
+        return "idealab"
+    return None
+
+
+def _valid_content_sha256(value: str) -> bool:
+    return bool(_CONTENT_SHA256.fullmatch(value))
+
+
+def _content_matches_sha256(data: bytes, expected: str) -> bool:
+    actual = hashlib.sha256(data).hexdigest()
+    return hmac.compare_digest(actual, expected.lower())
 
 
 def _load_pb():
@@ -232,9 +501,16 @@ def _load_pb():
 class ProcessorServicer:
     """Implements ProcessorService defined in proto/processor.proto."""
 
-    def __init__(self, pb, pbg):
+    def __init__(
+        self,
+        pb,
+        pbg,
+        *,
+        authenticator: RequestAuthenticator | None = None,
+    ):
         self._pb = pb
         self._pbg = pbg
+        self._authenticator = authenticator or RequestAuthenticator.from_settings(get_settings())
         self._registry = default_registry()
         log.info(
             "servicer.ready",
@@ -254,12 +530,103 @@ class ProcessorServicer:
 
     def HealthCheck(self, request, context):
         pb = self._pb
-        return pb.HealthCheckResponse(
+        # Unsigned HealthCheck remains the cheap liveness contract used by
+        # private/local deployments and orchestrators.  Presence of any auth
+        # metadata opts into the strict managed-readiness contract.
+        try:
+            signed = self._authenticator.has_auth_metadata(context)
+        except RequestAuthenticationError:
+            self._abort(
+                context,
+                grpc.StatusCode.UNAUTHENTICATED,
+                "request authentication failed",
+            )
+        if not signed:
+            return pb.HealthCheckResponse(
+                status=pb.HealthCheckResponse.SERVING,
+                version=__version__,
+            )
+
+        authenticated = self._authenticate(
+            request,
+            context,
+            method=HEALTH_METHOD,
+            scope=None,
+        )
+        provider_spec = authenticated.scope.removeprefix(READINESS_SCOPE_PREFIX)
+        try:
+            self._authenticator.managed_readiness_check(provider_spec)
+        except AuthenticationUnavailableError:
+            self._abort(
+                context,
+                grpc.StatusCode.UNAVAILABLE,
+                "managed Worker readiness is unavailable",
+            )
+        response = pb.HealthCheckResponse(
             status=pb.HealthCheckResponse.SERVING,
             version=__version__,
         )
+        self._set_response_proof(authenticated, response, context)
+        return response
 
     # ---- helpers ----
+
+    def _authenticate(
+        self,
+        request,
+        context,
+        *,
+        method: str,
+        scope: str | None,
+    ) -> AuthenticatedRequest | None:
+        try:
+            return self._authenticator.authenticate(
+                request,
+                context,
+                method=method,
+                scope=scope,
+            )
+        except RequestAuthenticationError:
+            self._abort(
+                context,
+                grpc.StatusCode.UNAUTHENTICATED,
+                "request authentication failed",
+            )
+        except AuthenticationUnavailableError:
+            self._abort(
+                context,
+                grpc.StatusCode.UNAVAILABLE,
+                "request authentication is unavailable",
+            )
+        raise AssertionError("gRPC abort unexpectedly returned")
+
+    def _set_response_proof(
+        self,
+        authenticated: AuthenticatedRequest | None,
+        response,
+        context,
+    ) -> None:
+        try:
+            self._authenticator.set_response_trailers(
+                authenticated,
+                response,
+                context,
+            )
+        except AuthenticationUnavailableError:
+            self._abort(
+                context,
+                grpc.StatusCode.UNAVAILABLE,
+                "response authentication is unavailable",
+            )
+
+    @staticmethod
+    def _abort(context, code: grpc.StatusCode, detail: str) -> None:
+        if context is None or not hasattr(context, "abort"):
+            if code == grpc.StatusCode.UNAVAILABLE:
+                raise AuthenticationUnavailableError(detail)
+            raise RequestAuthenticationError(detail)
+        context.abort(code, detail)
+        raise AssertionError("gRPC abort unexpectedly returned")
 
     def _pick_processor(
         self,
@@ -365,12 +732,33 @@ class ProcessorServicer:
     # ---- Process ----
 
     def Process(self, request, context):
+        # This is deliberately the first operation: an unauthenticated caller
+        # cannot make us log caller-controlled fields, parse JSON, fetch a URI,
+        # construct a provider, or spend local/managed compute.
+        authenticated = self._authenticate(
+            request,
+            context,
+            method=PROCESS_METHOD,
+            scope=PROCESS_SCOPE,
+        )
+        response = self._process_authenticated(
+            request,
+            authenticated=authenticated,
+        )
+        self._set_response_proof(authenticated, response, context)
+        return response
+
+    def _process_authenticated(
+        self,
+        request,
+        *,
+        authenticated: AuthenticatedRequest | None,
+    ):
         pb = self._pb
         log.info(
             "process.start",
             file_id=request.file_id,
             mime=request.mime,
-            storage_uri=request.storage_uri,
         )
 
         options: dict[str, Any] = {}
@@ -397,6 +785,16 @@ class ProcessorServicer:
                     error="invalid options_json",
                 )
 
+        if _legacy_options_use_managed_binding(
+            options
+        ) or _legacy_request_uses_nonlocal_saas_ollama(options):
+            # Never treat a valid transport signature as a substitute for the
+            # fixed AI-profile and usage-accounting contracts.
+            return pb.ProcessResponse(
+                status=pb.STATUS_FAILED,
+                error="legacy network provider is not permitted",
+            )
+
         try:
             ai_profile = parse_ai_profile(options)
         except AIProfileError:
@@ -408,6 +806,38 @@ class ProcessorServicer:
                 error="invalid ai_profile",
             )
 
+        if ai_profile is not None and ai_profile.data_egress == "managed_idealab":
+            if authenticated is None:
+                return pb.ProcessResponse(
+                    status=pb.STATUS_FAILED,
+                    error="managed AI profile authentication is required",
+                    metadata_json=_profile_metadata_json(
+                        ai_profile,
+                        request.mime,
+                    ),
+                )
+            binding_vendor = _managed_profile_binding_vendor(ai_profile)
+            if binding_vendor is None or not self._authenticator.managed_binding_configured(
+                binding_vendor
+            ):
+                return pb.ProcessResponse(
+                    status=pb.STATUS_FAILED,
+                    error="managed provider binding is unavailable",
+                    metadata_json=_profile_metadata_json(
+                        ai_profile,
+                        request.mime,
+                    ),
+                )
+            if not _valid_content_sha256(request.sha256):
+                return pb.ProcessResponse(
+                    status=pb.STATUS_FAILED,
+                    error="content integrity check failed",
+                    metadata_json=_profile_metadata_json(
+                        ai_profile,
+                        request.mime,
+                    ),
+                )
+
         # 1. Pick processor. If the caller supplied provider overrides via
         # options_json, build a per-request processor instance so we don't
         # mutate the singleton in the registry (concurrency-safe).
@@ -418,19 +848,38 @@ class ProcessorServicer:
                 status=pb.STATUS_SKIPPED,
                 processor="",
                 error=f"no processor for mime {request.mime!r}",
-                metadata_json=_profile_metadata_json(ai_profile),
+                metadata_json=_profile_metadata_json(ai_profile, request.mime),
             )
 
         # 2. Fetch bytes
         try:
             data = fetch_bytes(request.storage_uri)
-        except StorageError as exc:
-            log.error("process.fetch_failed", file_id=request.file_id, error=str(exc))
+        except StorageError:
+            log.error(
+                "process.fetch_failed",
+                file_id=request.file_id,
+                error="storage_unavailable",
+            )
             return pb.ProcessResponse(
                 status=pb.STATUS_FAILED,
                 processor=proc.name,
-                error=f"storage: {exc}",
-                metadata_json=_profile_metadata_json(ai_profile),
+                error="storage unavailable",
+                metadata_json=_profile_metadata_json(ai_profile, request.mime),
+            )
+
+        if (
+            ai_profile is not None
+            and ai_profile.data_egress == "managed_idealab"
+            and not _content_matches_sha256(data, request.sha256)
+        ):
+            return pb.ProcessResponse(
+                status=pb.STATUS_FAILED,
+                processor=proc.name,
+                error="content integrity check failed",
+                metadata_json=_profile_metadata_json(
+                    ai_profile,
+                    request.mime,
+                ),
             )
 
         # 3. Dispatch
@@ -452,7 +901,11 @@ class ProcessorServicer:
                 status=pb.STATUS_FAILED,
                 processor=proc.name,
                 error=str(exc),
-                metadata_json=_profile_metadata_json(ai_profile),
+                metadata_json=_profile_metadata_json(
+                    ai_profile,
+                    request.mime,
+                    managed_default=INDETERMINATE,
+                ),
             )
         except Exception as exc:  # noqa: BLE001 — never let one bad file kill the server
             log.exception("process.unexpected", file_id=request.file_id)
@@ -460,13 +913,26 @@ class ProcessorServicer:
                 status=pb.STATUS_FAILED,
                 processor=proc.name,
                 error=f"unexpected: {exc}",
-                metadata_json=_profile_metadata_json(ai_profile),
+                metadata_json=_profile_metadata_json(
+                    ai_profile,
+                    request.mime,
+                    managed_default=INDETERMINATE,
+                ),
             )
 
         if ai_profile is not None:
             # Override rather than merge any same-named processor metadata so
             # downstream consumers see only the server-resolved provenance.
             result.metadata["ai_profile"] = ai_profile.metadata()
+            observed = result.metadata.pop(PROCESSOR_STAGES_KEY, None)
+            receipt = _managed_usage_receipt(
+                ai_profile,
+                request.mime,
+                observed,
+                default=INDETERMINATE,
+            )
+            if receipt is not None:
+                result.metadata["managed_usage"] = receipt
 
         resp = _result_to_proto(result, pb)
         log.info(
@@ -575,12 +1041,16 @@ def _entity_to_proto(ent: Entity, pb: Any):
 # ---------------------------------------------------------------------------
 
 
-def serve(host: Optional[str] = None, port: Optional[int] = None) -> None:
+def serve(host: str | None = None, port: int | None = None) -> None:
     """Bind a grpc.Server and block forever."""
     configure_logging()
     settings = get_settings()
     host = host or settings.grpc_host
     port = port or settings.grpc_port
+    authenticator = RequestAuthenticator.from_settings(settings)
+    # Auth-required workers must not bind a port while their cross-replica
+    # replay decision is unavailable.
+    authenticator.startup_check()
 
     pb, pbg = _load_pb()
 
@@ -591,7 +1061,7 @@ def serve(host: Optional[str] = None, port: Optional[int] = None) -> None:
             ("grpc.max_receive_message_length", 64 * 1024 * 1024),
         ],
     )
-    servicer = ProcessorServicer(pb, pbg)
+    servicer = ProcessorServicer(pb, pbg, authenticator=authenticator)
     pbg.add_ProcessorServiceServicer_to_server(servicer, server)
 
     bind_addr = f"{host}:{port}"
@@ -620,7 +1090,7 @@ def serve(host: Optional[str] = None, port: Optional[int] = None) -> None:
     server.wait_for_termination()
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="mem-worker", description=__doc__)
     parser.add_argument("--host", default=None, help="gRPC bind host")
     parser.add_argument("--port", type=int, default=None, help="gRPC bind port")

@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import base64
 from functools import lru_cache
-from typing import Optional
 from urllib.parse import urlparse
 
 import requests
@@ -51,12 +50,13 @@ def fetch_bytes(uri: str, *, timeout: float = 30.0) -> bytes:
     if scheme == "data":
         return _fetch_data(uri)
 
-    raise StorageError(f"unsupported scheme {scheme!r} in {uri!r}")
+    raise StorageError("unsupported storage scheme")
 
 
 # ---------------------------------------------------------------------------
 # S3
 # ---------------------------------------------------------------------------
+
 
 @lru_cache(maxsize=1)
 def _s3_client():
@@ -65,7 +65,7 @@ def _s3_client():
         import boto3  # noqa: WPS433 — lazy import, boto3 is heavy
         from botocore.config import Config as BotoConfig
     except ImportError as exc:  # pragma: no cover — boto3 is a hard dep
-        raise StorageError(f"boto3 not installed: {exc}") from exc
+        raise StorageError("boto3 not installed") from exc
 
     s = get_settings()
     if not s.s3_endpoint:
@@ -83,11 +83,11 @@ def _s3_client():
 
 def _fetch_s3(bucket: str, key: str) -> bytes:
     if not bucket or not key:
-        raise StorageError(f"malformed s3 uri: bucket={bucket!r} key={key!r}")
+        raise StorageError("malformed s3 uri")
     try:
         resp = _s3_client().get_object(Bucket=bucket, Key=key)
     except Exception as exc:  # boto3 raises a zoo of ClientError types
-        raise StorageError(f"s3 get_object failed: {exc}") from exc
+        raise StorageError("s3 get_object failed") from exc
     body = resp.get("Body")
     if body is None:
         raise StorageError("s3 response missing Body")
@@ -98,6 +98,7 @@ def _fetch_s3(bucket: str, key: str) -> bytes:
 # file://
 # ---------------------------------------------------------------------------
 
+
 def _fetch_file(path: str) -> bytes:
     if not path:
         raise StorageError("empty file:// path")
@@ -105,25 +106,27 @@ def _fetch_file(path: str) -> bytes:
         with open(path, "rb") as fh:
             return fh.read()
     except OSError as exc:
-        raise StorageError(f"open {path}: {exc}") from exc
+        raise StorageError("file read failed") from exc
 
 
 # ---------------------------------------------------------------------------
 # http(s)://
 # ---------------------------------------------------------------------------
 
+
 def _fetch_http(uri: str, *, timeout: float) -> bytes:
     try:
         resp = requests.get(uri, timeout=timeout)
         resp.raise_for_status()
     except requests.RequestException as exc:
-        raise StorageError(f"http get {uri}: {exc}") from exc
+        raise StorageError("http fetch failed") from exc
     return resp.content
 
 
 # ---------------------------------------------------------------------------
 # data: (RFC 2397)
 # ---------------------------------------------------------------------------
+
 
 def _fetch_data(uri: str) -> bytes:
     """Decode a ``data:<mime>[;base64],<payload>`` URI.
@@ -133,12 +136,12 @@ def _fetch_data(uri: str) -> bytes:
     """
     head, _, payload = uri.partition(",")
     if not head.startswith("data:"):
-        raise StorageError(f"malformed data uri: {uri[:32]!r}")
+        raise StorageError("malformed data uri")
     if ";base64" in head:
         try:
             return base64.b64decode(payload)
         except (ValueError, base64.binascii.Error) as exc:
-            raise StorageError(f"data uri base64 decode failed: {exc}") from exc
+            raise StorageError("data uri base64 decode failed") from exc
     return payload.encode("utf-8")
 
 

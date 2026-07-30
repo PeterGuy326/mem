@@ -133,3 +133,22 @@ func TestIdempotencyDigestBindsWorkspaceAndOperation(t *testing.T) {
 		t.Fatal("idempotency digest must not be linkable across workspace/operation")
 	}
 }
+
+func TestStaleReservationReconcileQuerySupportsPreOutboxSchema(t *testing.T) {
+	legacy := staleReservationReconcileQuery(true, false)
+	if strings.Contains(legacy, "managed_ai_stage_settlement_outbox") {
+		t.Fatal("migration-16 reconcile query references the migration-17 outbox")
+	}
+	if !strings.Contains(legacy, "usage.workspace_id = $3") {
+		t.Fatal("workspace-scoped legacy reconcile query lost its workspace predicate")
+	}
+
+	current := staleReservationReconcileQuery(false, true)
+	if !strings.Contains(current, "managed_ai_stage_settlement_outbox") ||
+		!strings.Contains(current, "settlement.settled_at IS NULL") {
+		t.Fatal("migration-17 reconcile query does not protect pending settlements")
+	}
+	if strings.Contains(current, "usage.workspace_id = $3") {
+		t.Fatal("global reconcile query unexpectedly requires a workspace argument")
+	}
+}

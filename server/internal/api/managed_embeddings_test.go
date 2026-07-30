@@ -322,6 +322,67 @@ func TestManagedContextPlanFailurePreservesLexicalMemory(t *testing.T) {
 	}
 }
 
+func TestManagedSearcherClassifiesEveryConfiguredProfileGeneration(t *testing.T) {
+	const (
+		legacy  = "openai:text-embedding-3-large"
+		current = "idealab:text-embedding-3-large"
+	)
+	for _, test := range []struct {
+		name    string
+		spec    string
+		managed bool
+	}{
+		{name: "persisted V1", spec: legacy, managed: true},
+		{name: "current V2", spec: current, managed: true},
+		{name: "unconfigured provider", spec: "openai:text-embedding-3-small"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			searchFake := &managedSearchFake{spec: test.spec}
+			server := &Server{
+				Search:                    searchFake,
+				DeploymentMode:            "saas",
+				ManagedEmbeddingProvider:  current,
+				ManagedEmbeddingProviders: []string{current, legacy},
+				Entitlements:              &managedEntitlementFake{},
+			}
+			request := httptest.NewRequest(http.MethodPost, "/v1/search", nil)
+			request.Header.Set("Idempotency-Key", "profile-generation")
+			token := &auth.Token{ID: uuid.New()}
+			ws := &workspace.Workspace{ID: uuid.New()}
+			ctx := context.WithValue(request.Context(), ctxToken, token)
+			ctx = context.WithValue(ctx, ctxWorkspace, ws)
+
+			searcher, executor, err := server.managedSearcher(
+				request.WithContext(ctx),
+				"search.query",
+				map[string]string{"query": "migration"},
+				search.Query{UserID: uuid.New(), Route: search.RouteText},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.managed {
+				if executor == nil || searcher != executor ||
+					executor.providerSpec != test.spec {
+					t.Fatalf(
+						"managed route = searcher:%T executor:%+v",
+						searcher,
+						executor,
+					)
+				}
+				return
+			}
+			if executor != nil || searcher != searchFake {
+				t.Fatalf(
+					"unmanaged route = searcher:%T executor:%+v",
+					searcher,
+					executor,
+				)
+			}
+		})
+	}
+}
+
 func TestManagedProviderTimeoutIsRedactedAndIndeterminate(t *testing.T) {
 	searchFake := &managedSearchFake{searchErr: context.DeadlineExceeded}
 	usageFake := &managedEntitlementFake{

@@ -15,7 +15,7 @@ has no side effects (and tests can swap implementations cheaply).
 from __future__ import annotations
 
 import fnmatch
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 from ..logging import get_logger
 from .base import Processor
@@ -50,13 +50,14 @@ class ProcessorRegistry:
 
     # ---- lookup ----
 
-    def find(self, mime: str) -> Optional[Processor]:
+    def find(self, mime: str) -> Processor | None:
         """Return the first processor whose ``accepts`` matches ``mime``.
 
-        Matching is via ``fnmatch.fnmatchcase`` — MIME types are case-sensitive
-        by RFC, but in practice are always lower-case; we normalize anyway.
+        Matching is via ``fnmatch.fnmatchcase``.  Processor declarations match
+        media types, so transport parameters such as ``charset`` are removed
+        before lookup; media types are normalized to lower-case as well.
         """
-        mime_norm = (mime or "").strip().lower()
+        mime_norm = (mime or "").split(";", 1)[0].strip().lower()
         for proc in self._items:
             for pattern in proc.accepts:
                 if fnmatch.fnmatchcase(mime_norm, pattern.lower()):
@@ -74,7 +75,7 @@ class ProcessorRegistry:
 # Default registry
 # ---------------------------------------------------------------------------
 
-_default: Optional[ProcessorRegistry] = None
+_default: ProcessorRegistry | None = None
 
 
 def default_registry() -> ProcessorRegistry:
