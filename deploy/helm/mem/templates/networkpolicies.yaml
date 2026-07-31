@@ -1,0 +1,150 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "mem.fullname" . }}-default-deny
+  labels:
+    {{- include "mem.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "mem.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "mem.fullname" . }}-dns
+  labels:
+    {{- include "mem.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "mem.selectorLabels" . | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "mem.fullname" . }}-web
+  labels:
+    {{- include "mem.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "mem.componentLabels" (dict "root" . "component" "web") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "mem.componentLabels" (dict "root" . "component" "memd") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "mem.fullname" . }}-memd
+  labels:
+    {{- include "mem.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "mem.componentLabels" (dict "root" . "component" "memd") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "mem.componentLabels" (dict "root" . "component" "web") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    {{- if .Values.worker.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "mem.componentLabels" (dict "root" . "component" "worker") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 50051
+    {{- end }}
+    - to:
+        {{- range .Values.networkPolicy.externalEgressCIDRs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        {{- toYaml .Values.networkPolicy.externalEgressPorts | nindent 8 }}
+{{- if .Values.worker.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "mem.fullname" . }}-worker
+  labels:
+    {{- include "mem.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "mem.componentLabels" (dict "root" . "component" "worker") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "mem.componentLabels" (dict "root" . "component" "memd") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 50051
+  egress:
+    - to:
+        {{- range .Values.networkPolicy.externalEgressCIDRs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        {{- toYaml .Values.networkPolicy.externalEgressPorts | nindent 8 }}
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "mem.fullname" . }}-migration
+  labels:
+    {{- include "mem.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "mem.componentLabels" (dict "root" . "component" "migration") | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        {{- range .Values.networkPolicy.externalEgressCIDRs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        {{- toYaml .Values.networkPolicy.externalEgressPorts | nindent 8 }}
+{{- end }}

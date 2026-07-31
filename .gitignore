@@ -70,6 +70,8 @@ web/.turbo/
 
 # === Docker ===
 .docker-data/
+deploy/compose/.env
+deploy/compose/backups/
 
 # === Misc ===
 node_modules/

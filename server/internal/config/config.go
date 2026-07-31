@@ -33,6 +33,12 @@ type Config struct {
 	// HTTP
 	HTTPAddr string // e.g. ":8787"
 
+	// Runtime profile controls deployment-only safety checks. Development
+	// preserves the local defaults; production rejects those defaults and
+	// requires an explicit operator configuration.
+	RuntimeProfile string // development|production
+	AutoMigrate    bool
+
 	// PostgreSQL (with pgvector)
 	DBURL string
 
@@ -86,8 +92,10 @@ type Config struct {
 // required values are missing or malformed.
 func Load() (*Config, error) {
 	cfg := &Config{
-		HTTPAddr: getenv("MEM_HTTP_ADDR", ":8787"),
-		DBURL:    getenv("MEM_DB_URL", "postgres://mem:mem@localhost:5432/mem?sslmode=disable"),
+		HTTPAddr:       getenv("MEM_HTTP_ADDR", ":8787"),
+		RuntimeProfile: getenv("MEM_RUNTIME_PROFILE", "development"),
+		AutoMigrate:    true,
+		DBURL:          getenv("MEM_DB_URL", "postgres://mem:mem@localhost:5432/mem?sslmode=disable"),
 		// Redis/MinIO defaults match the host ports shipped in docker-compose.yml,
 		// which are shifted off the upstream defaults (6379, 9000) so the stack
 		// coexists with other local Redis/MinIO instances. Override with
@@ -111,6 +119,14 @@ func Load() (*Config, error) {
 			os.Getenv("MEM_MANAGED_EMBEDDING_PROVIDER"),
 		),
 		LogLevel: getenv("MEM_LOG_LEVEL", "info"),
+	}
+
+	if v := os.Getenv("MEM_AUTO_MIGRATE"); v != "" {
+		enabled, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("MEM_AUTO_MIGRATE: %w", err)
+		}
+		cfg.AutoMigrate = enabled
 	}
 
 	workerAuthKeyID := os.Getenv("MEM_WORKER_AUTH_KEY_ID")
@@ -197,6 +213,12 @@ func Load() (*Config, error) {
 
 	if cfg.DBURL == "" {
 		return nil, errors.New("MEM_DB_URL is required")
+	}
+	if cfg.RuntimeProfile != "development" && cfg.RuntimeProfile != "production" {
+		return nil, fmt.Errorf(
+			"MEM_RUNTIME_PROFILE must be development or production, got %q",
+			cfg.RuntimeProfile,
+		)
 	}
 	if cfg.DeploymentMode != "private" && cfg.DeploymentMode != "saas" {
 		return nil, fmt.Errorf("MEM_DEPLOYMENT_MODE must be private or saas, got %q", cfg.DeploymentMode)
@@ -309,7 +331,54 @@ func Load() (*Config, error) {
 			cfg.CORSOrigins = append(cfg.CORSOrigins, o)
 		}
 	}
+	if cfg.RuntimeProfile == "production" {
+		if err := validateProduction(cfg); err != nil {
+			return nil, err
+		}
+	}
 	return cfg, nil
+}
+
+func validateProduction(cfg *Config) error {
+	const (
+		developmentDBURL       = "postgres://mem:mem@localhost:5432/mem?sslmode=disable"
+		developmentRedisURL    = "redis://localhost:6479"
+		developmentS3Endpoint  = "http://localhost:9100"
+		developmentS3AccessKey = "mem"
+		developmentS3SecretKey = "mem-minio-password"
+	)
+
+	if cfg.DBURL == developmentDBURL {
+		return errors.New("MEM_DB_URL must be explicitly configured in production")
+	}
+	if cfg.AutoMigrate {
+		return errors.New("MEM_AUTO_MIGRATE=false is required in production; run mem-migrate once before rollout")
+	}
+	if cfg.RedisURL == "" || cfg.RedisURL == developmentRedisURL {
+		return errors.New("MEM_REDIS_URL must be explicitly configured in production")
+	}
+	if cfg.S3Endpoint == "" || cfg.S3Endpoint == developmentS3Endpoint {
+		return errors.New("MEM_S3_ENDPOINT must be explicitly configured in production")
+	}
+	if cfg.S3AccessKey == "" || cfg.S3AccessKey == developmentS3AccessKey {
+		return errors.New("MEM_S3_ACCESS_KEY must be explicitly configured in production")
+	}
+	if cfg.S3SecretKey == "" || cfg.S3SecretKey == developmentS3SecretKey {
+		return errors.New("MEM_S3_SECRET_KEY must be explicitly configured in production")
+	}
+	if cfg.RegistrationMode == "open" {
+		return errors.New("MEM_REGISTRATION_MODE=open is not permitted in production")
+	}
+	if cfg.WorkerGRPC != "" &&
+		(cfg.WorkerAuthKeyID == "" || len(cfg.WorkerAuthKey) != 32) {
+		return errors.New("Worker request authentication is required when MEM_WORKER_GRPC is enabled in production")
+	}
+	for _, origin := range cfg.CORSOrigins {
+		if origin == "*" {
+			return errors.New("MEM_CORS_ORIGINS=* is not permitted in production")
+		}
+	}
+	return nil
 }
 
 func parseAIProfiles(raw string) ([]string, error) {

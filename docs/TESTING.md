@@ -25,9 +25,10 @@ provider or any API key. The Web acceptance tests use MSW fixtures. Worker
 tests use fakes except for the explicitly opt-in visual-model evaluation.
 
 The two checked-in workflows have distinct responsibilities. `ci.yml` owns
-component build, lint, unit/race, generated-protobuf, coverage, and release
-artifact checks. `memory-validation.yml` owns repository metadata, browser
-acceptance, owned-database migrations, and process-level HTTP/CLI/MCP
+component build, lint, unit/race, generated-protobuf, coverage, release
+artifact checks, and production Compose/Helm/image validation.
+`memory-validation.yml` owns repository metadata, deployment-script lint,
+browser acceptance, owned-database migrations, and process-level HTTP/CLI/MCP
 acceptance. Their shared toolchain and service versions must stay aligned.
 Database tests intentionally overlap where artifact production and the
 Agent-memory contract need independent evidence.
@@ -93,6 +94,39 @@ make test-server
 make test-worker
 make test-web
 ```
+
+## 3.1 Production deployment assets
+
+Validate the single-node Compose graph and the default, production and
+Worker-disabled Helm renders:
+
+```bash
+make test-deploy
+```
+
+This fails when a stateful/internal service publishes a host port, the Compose
+backend is not isolated, a production deployment file uses a mutable `latest`
+tag, the Helm schema accepts `latest`, the Helm chart fails
+schema/lint/template validation, disabling Worker still renders Worker
+resources, or the production render omits its deployment, migration,
+disruption, network, ingress or autoscaling resources. It also enforces a
+single-replica, non-overlapping memd rollout and verifies that the production
+example does not enable a memd HPA. When a local `helm` binary is unavailable,
+the script uses the pinned `alpine/helm:3.17.1` container.
+
+Build all three first-party production images as an additional clean-checkout
+gate:
+
+```bash
+make test-deploy-build
+```
+
+Expected result: the images build successfully and the final line is
+`PASS: production Compose and Helm deployment validation`. These checks render
+configuration only; they do not create a Kubernetes cluster or mutate a
+production environment. The `Deployment profiles` CI job runs
+`make test-deploy-build` on every pull request and `main` push so Compose,
+Helm, and all three production Dockerfiles remain continuously enforced.
 
 ## 4. Disposable PostgreSQL environment
 

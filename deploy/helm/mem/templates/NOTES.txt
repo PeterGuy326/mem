@@ -1,0 +1,20 @@
+mem has been installed with the {{ .Values.runtime.deploymentMode }} deployment profile.
+
+Web service:
+  {{ include "mem.fullname" . }}-web:8080
+
+{{- if .Values.ingress.enabled }}
+Ingress:
+  https://{{ .Values.ingress.host }}{{ .Values.ingress.path }}
+{{- else }}
+For a local smoke check:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "mem.fullname" . }}-web 8080:8080
+  curl --fail http://127.0.0.1:8080/healthz
+{{- end }}
+
+The database migration runs once as a Helm pre-install/pre-upgrade hook.
+Runtime secrets are read from the existing Secret {{ .Values.existingSecret | quote }}.
+Keep memd at one replica with autoscaling disabled until the cross-replica
+index-generation work tracked by issue #55 is complete.
+Do not expose this deployment to the public Internet until the hosted auth
+requirements tracked by issue #65 are implemented.

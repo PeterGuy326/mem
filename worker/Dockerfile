@@ -9,41 +9,41 @@
 # -----------------------------------------------------------------------------
 # Stage 1: build (proto codegen + dep install with uv)
 # -----------------------------------------------------------------------------
-FROM python:3.11-slim AS builder
+FROM python:3.11.15-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 
-# Build tools needed for some wheels (faster-whisper -> CTranslate2 etc.)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
-        ca-certificates \
-        curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install uv (single static binary).
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+# Install a versioned uv binary rather than following a mutable latest tag.
+COPY --from=ghcr.io/astral-sh/uv:0.11.14 /uv /usr/local/bin/uv
 
 WORKDIR /app
 
-# Copy lockfile-relevant inputs first for better layer caching.
-# README.md is referenced by pyproject.toml's project.readme field — must
-# be present at install time even though it's only metadata.
-COPY pyproject.toml README.md ./
-# Optional: uv.lock would go here once we generate one.
+# Copy the locked dependency inputs before source for layer caching.
+COPY pyproject.toml uv.lock README.md ./
 
-# Resolve + install into a project-local venv at /app/.venv.
-# Runtime image does NOT need the [test] extra (and pyproject.toml has no
-# [test] group — uv would reject the flag).
-RUN uv venv /app/.venv \
- && uv pip install --python /app/.venv/bin/python -e .
+ARG WORKER_EXTRAS=""
+# Install locked third-party dependencies without the local project. Only the
+# explicitly supported production extras are accepted.
+RUN set -eu; set -f; extra_args=""; old_ifs="${IFS}"; IFS=,; \
+    for extra in ${WORKER_EXTRAS}; do \
+      case "${extra}" in \
+        asr|clip|face) extra_args="${extra_args} --extra ${extra}" ;; \
+        *) echo "WORKER_EXTRAS accepts only comma-separated asr, clip, and face" >&2; exit 2 ;; \
+      esac; \
+    done; \
+    IFS="${old_ifs}"; \
+    printf '%s\n' "${extra_args}" >/tmp/worker-extra-args; \
+    uv sync --frozen --no-dev --no-install-project ${extra_args}
 
-# Now copy the actual source + proto.
+# Copy the actual source + proto and install the project without re-resolving.
 COPY proto/ ./proto/
 COPY mem_worker/ ./mem_worker/
 COPY Makefile README.md ./
+RUN extra_args=$(cat /tmp/worker-extra-args); \
+    uv sync --frozen --no-dev ${extra_args}
 
 # Generate gRPC stubs (output lives inside mem_worker/proto/).
 RUN /app/.venv/bin/python -m grpc_tools.protoc \
@@ -57,18 +57,20 @@ RUN /app/.venv/bin/python -m grpc_tools.protoc \
 # -----------------------------------------------------------------------------
 # Stage 2: runtime
 # -----------------------------------------------------------------------------
-FROM python:3.11-slim AS runtime
+FROM python:3.11.15-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     MEM_WORKER_GRPC_HOST=0.0.0.0 \
     PATH="/app/.venv/bin:$PATH"
 
-# Minimal runtime libs (libgomp for some numeric wheels; libstdc++ comes by default).
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        libgomp1 \
-        ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
+# Optional numeric/model wheels need libgomp; the model-free image does not.
+ARG WORKER_EXTRAS=""
+RUN if [ -n "${WORKER_EXTRAS}" ]; then \
+      apt-get update \
+      && apt-get install -y --no-install-recommends libgomp1 \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi \
     && useradd --create-home --shell /bin/bash mem
 
 WORKDIR /app
@@ -78,9 +80,7 @@ USER mem
 
 EXPOSE 50051
 
-# Healthcheck: a tiny inline grpc call is overkill; instead probe that the
-# Python module imports — proto stubs missing here means the build was wrong.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import mem_worker, mem_worker.proto.processor_pb2_grpc" || exit 1
+    CMD python -m mem_worker.healthcheck || exit 1
 
 ENTRYPOINT ["python", "-m", "mem_worker.server"]

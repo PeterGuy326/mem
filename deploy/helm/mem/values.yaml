@@ -1,0 +1,160 @@
+nameOverride: ""
+fullnameOverride: ""
+
+imagePullSecrets: []
+
+existingSecret: mem-runtime
+
+runtime:
+  deploymentMode: private
+  registrationMode: first_user
+  aiProfiles: local-fast-v2
+  logLevel: info
+
+images:
+  server:
+    repository: mem-server
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  worker:
+    repository: mem-worker
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  web:
+    repository: mem-web
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+memd:
+  # memd coordinates indexing and embedding-provider switches in process.
+  # Keep one replica until https://github.com/fullstack-ai-infra/mem/issues/55
+  # provides cross-replica index generations.
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints:
+    enabled: true
+    maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+  autoscaling:
+    # Horizontal scaling is unsafe until issue #55 is complete.
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 1
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+worker:
+  enabled: true
+  replicaCount: 2
+  grpcMaxWorkers: 8
+  defaultEmbedding: ""
+  defaultVisualEmbedding: ""
+  defaultLLM: ""
+  defaultVLM: ""
+  defaultASR: ""
+  ollamaBaseURL: http://127.0.0.1:11434
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints:
+    enabled: true
+    maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 16
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+web:
+  replicaCount: 2
+  maxBodySize: 256m
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints:
+    enabled: true
+    maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: mem.example.com
+  path: /
+  pathType: Prefix
+  tls:
+    enabled: true
+    secretName: mem-tls
+
+networkPolicy:
+  enabled: true
+  # NetworkPolicy cannot address DNS names. This documentation-only range is
+  # intentionally non-routable; replace it with the exact dependency CIDRs.
+  externalEgressCIDRs:
+    - 192.0.2.0/24
+  externalEgressPorts:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 5432
+    - protocol: TCP
+      port: 6379
+    - protocol: TCP
+      port: 9000
+    - protocol: TCP
+      port: 11434
+
+migration:
+  activeDeadlineSeconds: 600
+  backoffLimit: 3
+
+revisionHistoryLimit: 3

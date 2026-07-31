@@ -29,15 +29,11 @@ dependencies = [
     "pillow>=10.2",
     # PDF (placeholder — W2 actually uses)
     "pypdf>=4.0",
-    # ASR (placeholder — W2 actually uses; pinned wide on purpose)
-    "faster-whisper>=1.0",
     # HTTP
     "requests>=2.31",
     "httpx>=0.27",
     # Cross-replica request replay protection
     "redis>=5.0",
-    # Numerics
-    "numpy>=1.26",
     # Logging
     "structlog>=24.1",
     # S3 / object storage
@@ -66,7 +62,11 @@ dev = [
 ]
 face = [
     "insightface>=0.7.3",
+    "numpy>=1.26",
     "onnxruntime>=1.26.0",
+]
+asr = [
+    "faster-whisper>=1.0",
 ]
 
 [project.scripts]

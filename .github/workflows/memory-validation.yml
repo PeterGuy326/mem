@@ -38,8 +38,14 @@ jobs:
 
       - name: Validate project scripts
         run: |
-          git ls-files -z 'scripts/*.sh' | xargs -0 -n1 bash -n
-          shellcheck scripts/verify.sh scripts/acceptance_agent_memory.sh
+          git ls-files -z 'scripts/*.sh' 'deploy/compose/*.sh' | xargs -0 -n1 bash -n
+          shellcheck \
+            scripts/verify.sh \
+            scripts/acceptance_agent_memory.sh \
+            scripts/validate_deploy.sh \
+            deploy/compose/backup.sh \
+            deploy/compose/generate-env.sh \
+            deploy/compose/restore.sh
           test -z "$(gofmt -l scripts/testdb.go scripts/mcp_acceptance.go)"
 
       - name: Validate test Compose model

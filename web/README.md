@@ -67,7 +67,8 @@ web/
 - **风格**：Linear / Vercel / Raycast。克制、深色优先、几何感、零拟物。
 - **配色**：暗色主调（`--bg: 10 11 15`），强调色 `indigo-400` (`--accent: 129 140 248`)。
   CSS 变量 + Tailwind `<alpha-value>` 模式，支持透明度组合 (`bg-accent/10`)。
-- **字体**：Inter (CDN 加载) + 系统中文回退 (`PingFang SC` / `Hiragino Sans GB` / `Microsoft YaHei`)。
+- **字体**：统一使用平台原生 sans-serif 栈，并为中文显式回退到
+  `PingFang SC` / `Hiragino Sans GB` / `Microsoft YaHei`；开发与生产均不请求第三方字体。
 - **组件**：Tailwind + Radix UI 原语（Dialog / Dropdown / Tooltip）+ `lucide-react` 图标。
   **拒绝** Antd / MUI。
 - **状态色**：`success` 绿、`warn` 琥珀、`danger` 红 — 仅用于 chip / badge / 危险按钮。

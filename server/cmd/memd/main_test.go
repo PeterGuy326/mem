@@ -9,6 +9,51 @@ import (
 	"github.com/PeterGuy326/mem/server/internal/workspacebundle"
 )
 
+func TestRedactURLCredentials(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{
+			name: "postgres",
+			raw:  "postgres://mem:database-secret@postgres:5432/mem?sslmode=disable",
+		},
+		{
+			name: "redis",
+			raw:  "redis://:redis-secret@redis:6379/0",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			got := redactURLCredentials(test.raw)
+			if strings.Contains(got, "secret") {
+				t.Fatalf("credentials leaked from %q: %q", test.raw, got)
+			}
+			if !strings.Contains(got, "@") {
+				t.Fatalf("redacted URL lost its endpoint: %q", got)
+			}
+		})
+	}
+}
+
+func TestRedactURLCredentialsLeavesPasswordlessValuesAlone(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{
+		"redis://redis:6379/0",
+		"redis:6379",
+		"://not-a-url",
+	} {
+		if got := redactURLCredentials(raw); got != raw {
+			t.Fatalf("redactURLCredentials(%q) = %q", raw, got)
+		}
+	}
+}
+
 func TestWorkspaceTransferBundleLimitsAreConservativeAndConsistent(t *testing.T) {
 	defaults := workspacebundle.DefaultLimits()
 	limits := workspaceTransferBundleLimits()

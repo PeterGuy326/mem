@@ -346,3 +346,116 @@ func TestLoadCORSOrigins(t *testing.T) {
 		}
 	}
 }
+
+func setProductionConfig(t *testing.T) {
+	t.Helper()
+	t.Setenv("MEM_RUNTIME_PROFILE", "production")
+	t.Setenv("MEM_AUTO_MIGRATE", "false")
+	t.Setenv(
+		"MEM_DB_URL",
+		"postgres://mem_prod:database-secret@postgres:5432/mem?sslmode=disable",
+	)
+	t.Setenv("MEM_REDIS_URL", "redis://:redis-secret@redis:6379/0")
+	t.Setenv("MEM_S3_ENDPOINT", "http://minio:9000")
+	t.Setenv("MEM_S3_ACCESS_KEY", "mem-production")
+	t.Setenv("MEM_S3_SECRET_KEY", "object-storage-secret")
+	t.Setenv("MEM_REGISTRATION_MODE", "first_user")
+	t.Setenv("MEM_CORS_ORIGINS", "")
+	t.Setenv("MEM_WORKER_GRPC", "")
+	t.Setenv("MEM_WORKER_AUTH_KEY_ID", "")
+	t.Setenv("MEM_WORKER_AUTH_KEY_B64", "")
+}
+
+func TestLoadProductionRejectsDevelopmentDefaults(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{"database", "MEM_DB_URL", "postgres://mem:mem@localhost:5432/mem?sslmode=disable"},
+		{"redis default", "MEM_REDIS_URL", "redis://localhost:6479"},
+		{"redis disabled", "MEM_REDIS_URL", ""},
+		{"object endpoint", "MEM_S3_ENDPOINT", "http://localhost:9100"},
+		{"object access key", "MEM_S3_ACCESS_KEY", "mem"},
+		{"object secret", "MEM_S3_SECRET_KEY", "mem-minio-password"},
+		{"open registration", "MEM_REGISTRATION_MODE", "open"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setProductionConfig(t)
+			t.Setenv(test.key, test.value)
+			if _, err := Load(); err == nil {
+				t.Fatalf(
+					"production runtime accepted development setting %s=%q",
+					test.key,
+					test.value,
+				)
+			}
+		})
+	}
+}
+
+func TestLoadProductionAcceptsExplicitModelFreeConfiguration(t *testing.T) {
+	setProductionConfig(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RuntimeProfile != "production" {
+		t.Fatalf("runtime profile = %q", cfg.RuntimeProfile)
+	}
+	if cfg.AutoMigrate {
+		t.Fatal("MEM_AUTO_MIGRATE=false was not honored")
+	}
+	if cfg.WorkerGRPC != "" {
+		t.Fatalf("model-free worker address = %q", cfg.WorkerGRPC)
+	}
+}
+
+func TestLoadProductionRejectsAutomaticMigration(t *testing.T) {
+	setProductionConfig(t)
+	t.Setenv("MEM_AUTO_MIGRATE", "true")
+	if _, err := Load(); err == nil {
+		t.Fatal("production runtime accepted automatic migrations")
+	}
+}
+
+func TestLoadProductionWorkerRequiresAuthentication(t *testing.T) {
+	setProductionConfig(t)
+	t.Setenv("MEM_WORKER_GRPC", "worker:50051")
+	if _, err := Load(); err == nil {
+		t.Fatal("production runtime accepted an unauthenticated Worker")
+	}
+
+	t.Setenv("MEM_WORKER_AUTH_KEY_ID", "memd-primary")
+	t.Setenv(
+		"MEM_WORKER_AUTH_KEY_B64",
+		base64.StdEncoding.EncodeToString([]byte(strings.Repeat("p", 32))),
+	)
+	if _, err := Load(); err != nil {
+		t.Fatalf("authenticated production Worker configuration: %v", err)
+	}
+}
+
+func TestLoadProductionRejectsWildcardCORS(t *testing.T) {
+	setProductionConfig(t)
+	t.Setenv("MEM_CORS_ORIGINS", "*")
+	if _, err := Load(); err == nil {
+		t.Fatal("production runtime accepted wildcard CORS")
+	}
+}
+
+func TestLoadRejectsInvalidRuntimeControls(t *testing.T) {
+	t.Run("runtime profile", func(t *testing.T) {
+		t.Setenv("MEM_RUNTIME_PROFILE", "staging")
+		if _, err := Load(); err == nil {
+			t.Fatal("invalid runtime profile loaded")
+		}
+	})
+	t.Run("auto migrate", func(t *testing.T) {
+		t.Setenv("MEM_AUTO_MIGRATE", "sometimes")
+		if _, err := Load(); err == nil {
+			t.Fatal("invalid auto-migrate value loaded")
+		}
+	})
+}

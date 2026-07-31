@@ -1,0 +1,239 @@
+name: mem
+
+x-database-url: &database-url postgres://mem:${MEM_POSTGRES_PASSWORD:?set MEM_POSTGRES_PASSWORD}@postgres:5432/mem?sslmode=disable
+
+x-server-environment: &server-environment
+  MEM_RUNTIME_PROFILE: production
+  MEM_HTTP_ADDR: :8080
+  MEM_AUTO_MIGRATE: "false"
+  MEM_DB_URL: *database-url
+  MEM_REDIS_URL: redis://:${MEM_REDIS_PASSWORD:?set MEM_REDIS_PASSWORD}@redis:6379/0
+  MEM_S3_ENDPOINT: http://minio:9000
+  MEM_S3_REGION: us-east-1
+  MEM_S3_BUCKET: ${MEM_S3_BUCKET:-mem}
+  MEM_S3_ACCESS_KEY: ${MEM_S3_ACCESS_KEY:?set MEM_S3_ACCESS_KEY}
+  MEM_S3_SECRET_KEY: ${MEM_S3_SECRET_KEY:?set MEM_S3_SECRET_KEY}
+  MEM_S3_USE_SSL: "false"
+  MEM_WORKER_GRPC: worker:50051
+  MEM_WORKER_AUTH_KEY_ID: ${MEM_WORKER_AUTH_KEY_ID:-memd-primary}
+  MEM_WORKER_AUTH_KEY_B64: ${MEM_WORKER_AUTH_KEY_B64:?set MEM_WORKER_AUTH_KEY_B64}
+  MEM_DEPLOYMENT_MODE: private
+  MEM_REGISTRATION_MODE: ${MEM_REGISTRATION_MODE:-first_user}
+  MEM_AI_PROFILES: local-fast-v2
+  MEM_LOG_LEVEL: ${MEM_LOG_LEVEL:-info}
+
+x-worker-environment: &worker-environment
+  MEM_DEPLOYMENT_MODE: private
+  MEM_WORKER_GRPC_HOST: 0.0.0.0
+  MEM_WORKER_GRPC_PORT: "50051"
+  MEM_WORKER_GRPC_MAX_WORKERS: ${MEM_WORKER_GRPC_MAX_WORKERS:-8}
+  MEM_WORKER_AUTH_MODE: required
+  MEM_WORKER_AUTH_KEY_ID: ${MEM_WORKER_AUTH_KEY_ID:-memd-primary}
+  MEM_WORKER_AUTH_KEY_B64: ${MEM_WORKER_AUTH_KEY_B64:?set MEM_WORKER_AUTH_KEY_B64}
+  MEM_WORKER_AUTH_REPLAY_REDIS_URL: redis://:${MEM_REDIS_PASSWORD:?set MEM_REDIS_PASSWORD}@redis:6379/0
+  MEM_S3_ENDPOINT: http://minio:9000
+  MEM_S3_REGION: us-east-1
+  MEM_S3_BUCKET: ${MEM_S3_BUCKET:-mem}
+  MEM_S3_ACCESS_KEY: ${MEM_S3_ACCESS_KEY:?set MEM_S3_ACCESS_KEY}
+  MEM_S3_SECRET_KEY: ${MEM_S3_SECRET_KEY:?set MEM_S3_SECRET_KEY}
+  MEM_S3_USE_SSL: "false"
+  OLLAMA_BASE_URL: http://127.0.0.1:11434
+  MEM_DEFAULT_EMBEDDING: ""
+  MEM_DEFAULT_VISUAL_EMBEDDING: ""
+  MEM_DEFAULT_LLM: ""
+  MEM_DEFAULT_VLM: ""
+  MEM_DEFAULT_ASR: ""
+  MEM_LOG_LEVEL: ${MEM_LOG_LEVEL:-INFO}
+  MEM_LOG_JSON: "true"
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.1-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mem
+      POSTGRES_USER: mem
+      POSTGRES_PASSWORD: ${MEM_POSTGRES_PASSWORD:?set MEM_POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mem -d mem"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  redis:
+    image: redis:7.4.2-alpine
+    restart: unless-stopped
+    environment:
+      REDISCLI_AUTH: ${MEM_REDIS_PASSWORD:?set MEM_REDIS_PASSWORD}
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --requirepass
+      - ${MEM_REDIS_PASSWORD:?set MEM_REDIS_PASSWORD}
+    volumes:
+      - redis-data:/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    restart: unless-stopped
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MEM_S3_ACCESS_KEY:?set MEM_S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MEM_S3_SECRET_KEY:?set MEM_S3_SECRET_KEY}
+    volumes:
+      - minio-data:/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MEM_S3_BUCKET: ${MEM_S3_BUCKET:-mem}
+      MEM_S3_ACCESS_KEY: ${MEM_S3_ACCESS_KEY:?set MEM_S3_ACCESS_KEY}
+      MEM_S3_SECRET_KEY: ${MEM_S3_SECRET_KEY:?set MEM_S3_SECRET_KEY}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        mc alias set local http://minio:9000 "$${MEM_S3_ACCESS_KEY}" "$${MEM_S3_SECRET_KEY}"
+        mc mb --ignore-existing "local/$${MEM_S3_BUCKET}"
+        mc anonymous set none "local/$${MEM_S3_BUCKET}"
+    networks:
+      - backend
+
+  migrate:
+    image: ${MEM_SERVER_IMAGE:-mem-server:${MEM_IMAGE_TAG:-local}}
+    build:
+      context: ../../server
+      args:
+        VERSION: ${MEM_IMAGE_TAG:-local}
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["/usr/local/bin/mem-migrate"]
+    environment:
+      MEM_DB_URL: *database-url
+    networks:
+      - backend
+
+  worker:
+    image: ${MEM_WORKER_IMAGE:-mem-worker:${MEM_IMAGE_TAG:-local}}
+    build:
+      context: ../../worker
+      args:
+        WORKER_EXTRAS: ${MEM_WORKER_EXTRAS:-}
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment: *worker-environment
+    volumes:
+      - worker-cache:/home/mem/.cache
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "python", "-m", "mem_worker.healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  memd:
+    image: ${MEM_SERVER_IMAGE:-mem-server:${MEM_IMAGE_TAG:-local}}
+    build:
+      context: ../../server
+      args:
+        VERSION: ${MEM_IMAGE_TAG:-local}
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      worker:
+        condition: service_healthy
+    environment: *server-environment
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/mem-healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  web:
+    image: ${MEM_WEB_IMAGE:-mem-web:${MEM_IMAGE_TAG:-local}}
+    build:
+      context: ../../web
+    restart: unless-stopped
+    depends_on:
+      memd:
+        condition: service_healthy
+    environment:
+      MEMD_UPSTREAM: http://memd:8080
+      MEM_MAX_BODY_SIZE: ${MEM_MAX_BODY_SIZE:-256m}
+    ports:
+      - "${MEM_BIND_ADDRESS:-127.0.0.1}:${MEM_EDGE_PORT:-8080}:8080"
+    networks:
+      - edge
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  minio-client:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    profiles: ["tools"]
+    environment:
+      MEM_S3_BUCKET: ${MEM_S3_BUCKET:-mem}
+      MEM_S3_ACCESS_KEY: ${MEM_S3_ACCESS_KEY:?set MEM_S3_ACCESS_KEY}
+      MEM_S3_SECRET_KEY: ${MEM_S3_SECRET_KEY:?set MEM_S3_SECRET_KEY}
+    entrypoint: ["/bin/sh", "-ec"]
+    networks:
+      - backend
+
+networks:
+  edge:
+  backend:
+    internal: true
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+  worker-cache:

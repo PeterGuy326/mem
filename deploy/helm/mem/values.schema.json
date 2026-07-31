@@ -1,0 +1,144 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["existingSecret", "images", "runtime"],
+  "properties": {
+    "existingSecret": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runtime": {
+      "type": "object",
+      "required": ["deploymentMode", "registrationMode", "aiProfiles"],
+      "properties": {
+        "deploymentMode": {
+          "type": "string",
+          "enum": ["private", "saas"]
+        },
+        "registrationMode": {
+          "type": "string",
+          "enum": ["first_user", "disabled"]
+        },
+        "aiProfiles": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "images": {
+      "type": "object",
+      "required": ["server", "worker", "web"],
+      "properties": {
+        "server": {
+          "$ref": "#/definitions/image"
+        },
+        "worker": {
+          "$ref": "#/definitions/image"
+        },
+        "web": {
+          "$ref": "#/definitions/image"
+        }
+      }
+    },
+    "memd": {
+      "$ref": "#/definitions/workload"
+    },
+    "worker": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/workload"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "grpcMaxWorkers": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            }
+          }
+        }
+      ]
+    },
+    "web": {
+      "$ref": "#/definitions/workload"
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "externalEgressCIDRs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 3
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "image": {
+      "type": "object",
+      "required": ["repository", "tag", "pullPolicy"],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "const": "latest"
+          }
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"]
+        }
+      }
+    },
+    "workload": {
+      "type": "object",
+      "required": ["replicaCount", "resources"],
+      "properties": {
+        "replicaCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "resources": {
+          "type": "object"
+        },
+        "autoscaling": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "minReplicas": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxReplicas": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "targetCPUUtilizationPercentage": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        }
+      }
+    }
+  }
+}

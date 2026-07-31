@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -83,10 +84,14 @@ func run() error {
 	defer database.Close()
 	logger.Info("db connected")
 
-	if err := database.Migrate(ctx); err != nil {
-		return fmt.Errorf("db migrate: %w", err)
+	if cfg.AutoMigrate {
+		if err := database.Migrate(ctx); err != nil {
+			return fmt.Errorf("db migrate: %w", err)
+		}
+		logger.Info("db migrations applied")
+	} else {
+		logger.Info("automatic database migrations disabled")
 	}
-	logger.Info("db migrations applied")
 
 	// S3 / MinIO.
 	store, err := storage.New(ctx, cfg.S3EndpointHost(), cfg.S3AccessKey, cfg.S3SecretKey,
@@ -205,7 +210,7 @@ func run() error {
 	if !queueCli.Enabled() {
 		logger.Warn("queue disabled — MEM_REDIS_URL unset; uploads will use inline goroutine fallback (NOT crash-safe)")
 	} else {
-		logger.Info("queue client ready", "redis", cfg.RedisURL)
+		logger.Info("queue client ready", "redis", redactURLCredentials(cfg.RedisURL))
 	}
 
 	providerSvc := provider.New(database.Pool, workerCli, queueCli, logger)
@@ -430,23 +435,16 @@ func newLogger(level string) *slog.Logger {
 }
 
 func redactDSN(s string) string {
-	// crude: postgres://user:pass@host/db -> postgres://user:***@host/db
-	at := -1
-	colon := -1
-	for i, c := range s {
-		if c == '/' && i+1 < len(s) && s[i+1] == '/' {
-			// skip protocol
-		}
-		if c == ':' && i > 10 {
-			colon = i
-		}
-		if c == '@' {
-			at = i
-			break
-		}
+	return redactURLCredentials(s)
+}
+
+func redactURLCredentials(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.User == nil {
+		return raw
 	}
-	if at < 0 || colon < 0 || colon >= at {
-		return s
+	if _, hasPassword := parsed.User.Password(); !hasPassword {
+		return raw
 	}
-	return s[:colon+1] + "***" + s[at:]
+	return parsed.Redacted()
 }

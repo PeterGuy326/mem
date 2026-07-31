@@ -58,6 +58,8 @@ flowchart LR
 | `worker/` | Python gRPC worker for extraction, embeddings, and model providers |
 | `web/` | React/Vite web interface |
 | `docker-compose.yml` | Local PostgreSQL/pgvector, Redis, and MinIO dependencies |
+| `deploy/compose/` | Production single-node deployment |
+| `deploy/helm/mem/` | Production multi-node Kubernetes deployment |
 
 The current implementation includes file and folder operations, token-based
 access, search and retrieval surfaces, an extensible processing worker, and MCP
@@ -193,8 +195,8 @@ mem resume photos/import
 mem workspace export --output agent-workspace.membundle
 ```
 
-部署与当前能力以仓库中的运行文档和代码为准；`docker compose up` 一键完整启动
-仍是目标体验。默认视觉模型的真实英文/中文边界见
+生产部署同时提供单机 Compose 和多机 Helm 方案，完整的密钥、迁移、高可用、
+备份恢复与升级边界见 [生产部署指南](docs/DEPLOYMENT.md)。默认视觉模型的真实英文/中文边界见
 [自然语言搜图基线](docs/acceptance/VISUAL_SEARCH_BASELINE.md)。
 
 ---

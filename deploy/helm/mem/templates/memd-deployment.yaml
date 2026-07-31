@@ -1,0 +1,116 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mem.fullname" . }}-memd
+  labels:
+    {{- include "mem.labels" . | nindent 4 }}
+    app.kubernetes.io/component: memd
+spec:
+  {{- if not .Values.memd.autoscaling.enabled }}
+  replicas: {{ .Values.memd.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  # memd uses process-local indexing coordination until issue #55. Recreate
+  # prevents old and new pods from overlapping during a rollout.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "mem.componentLabels" (dict "root" . "component" "memd") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mem.componentLabels" (dict "root" . "component" "memd") | nindent 8 }}
+      {{- with .Values.memd.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "mem.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.memd.topologySpreadConstraints.enabled }}
+      topologySpreadConstraints:
+        {{- include "mem.topologySpread" (dict "root" . "component" "memd" "values" .Values.memd.topologySpreadConstraints) | nindent 8 }}
+      {{- end }}
+      {{- with .Values.memd.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.memd.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.memd.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: memd
+          image: {{ include "mem.image" .Values.images.server | quote }}
+          imagePullPolicy: {{ .Values.images.server.pullPolicy }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.existingSecret | quote }}
+          env:
+            - name: MEM_RUNTIME_PROFILE
+              value: production
+            - name: MEM_HTTP_ADDR
+              value: :8080
+            - name: MEM_AUTO_MIGRATE
+              value: "false"
+            - name: MEM_DEPLOYMENT_MODE
+              value: {{ .Values.runtime.deploymentMode | quote }}
+            - name: MEM_REGISTRATION_MODE
+              value: {{ .Values.runtime.registrationMode | quote }}
+            - name: MEM_AI_PROFILES
+              value: {{ .Values.runtime.aiProfiles | quote }}
+            - name: MEM_LOG_LEVEL
+              value: {{ .Values.runtime.logLevel | quote }}
+            - name: MEM_WORKER_GRPC
+              value: {{ ternary (printf "%s-worker:50051" (include "mem.fullname" .)) "" .Values.worker.enabled | quote }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 4
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.memd.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 10Gi

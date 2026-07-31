@@ -4,7 +4,7 @@
         test test-server test-worker test-web test-recall recall-baseline \
         test-race test-env-up \
         test-env-down test-integration test-integration-race test-acceptance \
-        test-agent-certification \
+        test-agent-certification test-deploy test-deploy-build \
         test-all fmt lint build build-memd build-mem build-mem-mcp \
         proto-go proto-python
 
@@ -38,6 +38,8 @@ help:
 	@echo "  make test-integration-race - PostgreSQL 集成 race 回归"
 	@echo "  make test-acceptance - 隔离进程级 HTTP/CLI/MCP Agent-memory 验收"
 	@echo "  make test-agent-certification - 用显式 MEM_MCP_CERT_BINARY 验证 Agent host contract"
+	@echo "  make test-deploy    - 校验生产 Compose 与 Helm 配置"
+	@echo "  make test-deploy-build - 校验部署配置并构建三个生产镜像"
 	@echo "  make test-env-down         - 删除隔离测试环境"
 	@echo "  make test-all     - 执行全部回归与进程验收（要求测试 DB 已启动）"
 	@echo "  make build        - 编译三个二进制到 $(BIN_DIR)/ (memd, mem, mem-mcp)"
@@ -148,6 +150,12 @@ test-agent-certification:
 	MEM_MCP_CERT_BINARY='$(MEM_MCP_CERT_BINARY)' \
 		python3 -m unittest discover \
 			-s scripts/agent_certification -p 'test_*.py' -v
+
+test-deploy:
+	./scripts/validate_deploy.sh
+
+test-deploy-build:
+	MEM_VALIDATE_BUILD_IMAGES=1 ./scripts/validate_deploy.sh
 
 test-all:
 	$(MAKE) test-recall

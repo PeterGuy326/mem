@@ -1,0 +1,44 @@
+{{- if .Values.memd.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "mem.fullname" . }}-memd
+  labels:
+    {{- include "mem.labels" . | nindent 4 }}
+    app.kubernetes.io/component: memd
+spec:
+  minAvailable: {{ .Values.memd.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "mem.componentLabels" (dict "root" . "component" "memd") | nindent 6 }}
+---
+{{- end }}
+{{- if and .Values.worker.enabled .Values.worker.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "mem.fullname" . }}-worker
+  labels:
+    {{- include "mem.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  minAvailable: {{ .Values.worker.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "mem.componentLabels" (dict "root" . "component" "worker") | nindent 6 }}
+---
+{{- end }}
+{{- if .Values.web.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "mem.fullname" . }}-web
+  labels:
+    {{- include "mem.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  minAvailable: {{ .Values.web.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "mem.componentLabels" (dict "root" . "component" "web") | nindent 6 }}
+{{- end }}

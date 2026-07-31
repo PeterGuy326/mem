@@ -1,0 +1,132 @@
+{{- if .Values.worker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mem.fullname" . }}-worker
+  labels:
+    {{- include "mem.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  {{- if not .Values.worker.autoscaling.enabled }}
+  replicas: {{ .Values.worker.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "mem.componentLabels" (dict "root" . "component" "worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mem.componentLabels" (dict "root" . "component" "worker") | nindent 8 }}
+      {{- with .Values.worker.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "mem.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.worker.topologySpreadConstraints.enabled }}
+      topologySpreadConstraints:
+        {{- include "mem.topologySpread" (dict "root" . "component" "worker" "values" .Values.worker.topologySpreadConstraints) | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: worker
+          image: {{ include "mem.image" .Values.images.worker | quote }}
+          imagePullPolicy: {{ .Values.images.worker.pullPolicy }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.existingSecret | quote }}
+          env:
+            - name: MEM_DEPLOYMENT_MODE
+              value: {{ .Values.runtime.deploymentMode | quote }}
+            - name: MEM_WORKER_GRPC_HOST
+              value: 0.0.0.0
+            - name: MEM_WORKER_GRPC_PORT
+              value: "50051"
+            - name: MEM_WORKER_GRPC_MAX_WORKERS
+              value: {{ .Values.worker.grpcMaxWorkers | quote }}
+            - name: MEM_WORKER_AUTH_MODE
+              value: required
+            - name: OLLAMA_BASE_URL
+              value: {{ .Values.worker.ollamaBaseURL | quote }}
+            - name: MEM_DEFAULT_EMBEDDING
+              value: {{ .Values.worker.defaultEmbedding | quote }}
+            - name: MEM_DEFAULT_VISUAL_EMBEDDING
+              value: {{ .Values.worker.defaultVisualEmbedding | quote }}
+            - name: MEM_DEFAULT_LLM
+              value: {{ .Values.worker.defaultLLM | quote }}
+            - name: MEM_DEFAULT_VLM
+              value: {{ .Values.worker.defaultVLM | quote }}
+            - name: MEM_DEFAULT_ASR
+              value: {{ .Values.worker.defaultASR | quote }}
+            - name: MEM_LOG_LEVEL
+              value: {{ .Values.runtime.logLevel | upper | quote }}
+            - name: MEM_LOG_JSON
+              value: "true"
+          ports:
+            - name: grpc
+              containerPort: 50051
+              protocol: TCP
+          livenessProbe:
+            exec:
+              command: ["python", "-m", "mem_worker.healthcheck"]
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 4
+          readinessProbe:
+            exec:
+              command: ["python", "-m", "mem_worker.healthcheck"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: cache
+              mountPath: /home/mem/.cache
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 2Gi
+        - name: cache
+          emptyDir:
+            sizeLimit: 20Gi
+{{- end }}
