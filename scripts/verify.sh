@@ -4,7 +4,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-unit}"
-EXPECTED_MIGRATION_HEAD=18
+EXPECTED_MIGRATION_HEAD=19
 MIGRATION_ROLLBACK_TARGET=11
 MODEL_TEXT_CANONICAL_BASE=15
 WORKSPACE_AI_PROFILE_BASE=16
@@ -177,7 +177,7 @@ assert_migration_version() {
 
 run_migration_round_trip() {
   require_command go
-  log "Migration validation and explicit 0016/0017/0018 rollback round trips"
+  log "Migration validation and explicit 0016/0017/0018/0019 rollback round trips"
   (
     cd "${REPO_ROOT}/server"
     go run github.com/pressly/goose/v3/cmd/goose@v3.22.1 \
@@ -218,6 +218,7 @@ run_migration_round_trip() {
   MEM_TEST_TARGET_DB="$MEM_TEST_DB" testdb assert-state up
   MEM_TEST_TARGET_DB="$MEM_TEST_DB" testdb assert-workspace-ai-profile-table present
   MEM_TEST_TARGET_DB="$MEM_TEST_DB" testdb assert-managed-ai-settlement-outbox present
+  MEM_TEST_TARGET_DB="$MEM_TEST_DB" testdb assert-index-generation-tables present
   (
     cd "${REPO_ROOT}/server"
     go run github.com/pressly/goose/v3/cmd/goose@v3.22.1 \
@@ -227,6 +228,7 @@ run_migration_round_trip() {
   assert_migration_version "$MANAGED_AI_SETTLEMENT_OUTBOX_BASE"
   MEM_TEST_TARGET_DB="$MEM_TEST_DB" testdb assert-workspace-ai-profile-table present
   MEM_TEST_TARGET_DB="$MEM_TEST_DB" testdb assert-managed-ai-settlement-outbox absent
+  MEM_TEST_TARGET_DB="$MEM_TEST_DB" testdb assert-index-generation-tables absent
   (
     cd "${REPO_ROOT}/server"
     go run github.com/pressly/goose/v3/cmd/goose@v3.22.1 \
@@ -235,6 +237,7 @@ run_migration_round_trip() {
   assert_migration_version "$EXPECTED_MIGRATION_HEAD"
   MEM_TEST_TARGET_DB="$MEM_TEST_DB" testdb assert-workspace-ai-profile-table present
   MEM_TEST_TARGET_DB="$MEM_TEST_DB" testdb assert-managed-ai-settlement-outbox present
+  MEM_TEST_TARGET_DB="$MEM_TEST_DB" testdb assert-index-generation-tables present
   (
     cd "${REPO_ROOT}/server"
     go run github.com/pressly/goose/v3/cmd/goose@v3.22.1 \
@@ -244,6 +247,7 @@ run_migration_round_trip() {
   assert_migration_version "$WORKSPACE_AI_PROFILE_BASE"
   MEM_TEST_TARGET_DB="$MEM_TEST_DB" testdb assert-workspace-ai-profile-table absent
   MEM_TEST_TARGET_DB="$MEM_TEST_DB" testdb assert-managed-ai-settlement-outbox absent
+  MEM_TEST_TARGET_DB="$MEM_TEST_DB" testdb assert-index-generation-tables absent
   (
     cd "${REPO_ROOT}/server"
     go run github.com/pressly/goose/v3/cmd/goose@v3.22.1 \
@@ -252,6 +256,7 @@ run_migration_round_trip() {
   assert_migration_version "$EXPECTED_MIGRATION_HEAD"
   MEM_TEST_TARGET_DB="$MEM_TEST_DB" testdb assert-workspace-ai-profile-table present
   MEM_TEST_TARGET_DB="$MEM_TEST_DB" testdb assert-managed-ai-settlement-outbox present
+  MEM_TEST_TARGET_DB="$MEM_TEST_DB" testdb assert-index-generation-tables present
   (
     cd "${REPO_ROOT}/server"
     go run github.com/pressly/goose/v3/cmd/goose@v3.22.1 \
@@ -321,6 +326,7 @@ run_postgres_tests() {
     TestManagedSearchReplayPostgres
     TestManagedEmbeddingHTTPAuthorizationPostgres
     TestAIProfilePostgres
+    TestIndexGenerationPostgres
     TestManagedAISettlementOutboxPostgres
     TestReleasedFileStageRetryPostgres
   )
@@ -333,7 +339,7 @@ run_postgres_tests() {
     MEM_TEST_DB="$MEM_TEST_DB" go test \
       ${race_flag:+"$race_flag"} \
       -v -count=1 -p 1 -timeout 20m \
-      -run '^(TestMemoryPostgres|TestHandoffPostgres|TestWorkspaceTransferPostgres|TestHandoffCrossAgentHTTPIntegration|TestMemoryPathLifecycleIntegration|TestWorkspacePathLockingIntegration|TestFilePathLockingIntegration|TestAnnotationDecisionIntegration|TestIndexerEnrichmentIntegration|TestRecomputePerson|TestManagedEmbeddingEntitlementPostgres|TestManagedSearchReplayPostgres|TestManagedEmbeddingHTTPAuthorizationPostgres|TestAIProfilePostgres|TestManagedAISettlementOutboxPostgres|TestReleasedFileStageRetryPostgres)$' \
+      -run '^(TestMemoryPostgres|TestHandoffPostgres|TestWorkspaceTransferPostgres|TestHandoffCrossAgentHTTPIntegration|TestMemoryPathLifecycleIntegration|TestWorkspacePathLockingIntegration|TestFilePathLockingIntegration|TestAnnotationDecisionIntegration|TestIndexerEnrichmentIntegration|TestRecomputePerson|TestManagedEmbeddingEntitlementPostgres|TestManagedSearchReplayPostgres|TestManagedEmbeddingHTTPAuthorizationPostgres|TestAIProfilePostgres|TestIndexGenerationPostgres|TestManagedAISettlementOutboxPostgres|TestReleasedFileStageRetryPostgres)$' \
       ./internal/memory \
       ./internal/handoff \
       ./internal/workspacetransfer \
@@ -345,6 +351,7 @@ run_postgres_tests() {
       ./internal/entitlement \
       ./internal/search \
       ./internal/aiprofile \
+      ./internal/indexgeneration \
       ./internal/managedusage
   ) 2>&1 | tee "$integration_log"
   local test_status="${PIPESTATUS[0]}"

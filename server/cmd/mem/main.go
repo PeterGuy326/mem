@@ -80,6 +80,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newFaceCmd())
 	root.AddCommand(newProviderCmd())
 	root.AddCommand(newProfileCmd())
+	root.AddCommand(newGenerationCmd())
 	root.AddCommand(newModelCmd())
 	root.AddCommand(newTimelineCmd())
 	root.AddCommand(newWorkspaceCmd())

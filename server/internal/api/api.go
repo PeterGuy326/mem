@@ -38,6 +38,7 @@ import (
 	"github.com/PeterGuy326/mem/server/internal/folder"
 	"github.com/PeterGuy326/mem/server/internal/handoff"
 	"github.com/PeterGuy326/mem/server/internal/indexer"
+	"github.com/PeterGuy326/mem/server/internal/indexgeneration"
 	"github.com/PeterGuy326/mem/server/internal/memory"
 	"github.com/PeterGuy326/mem/server/internal/pathx"
 	"github.com/PeterGuy326/mem/server/internal/provider"
@@ -115,6 +116,16 @@ type AIProfileService interface {
 	Select(context.Context, uuid.UUID, uuid.UUID, string) (*aiprofile.Selection, error)
 }
 
+// IndexGenerationService is intentionally read-only at the public HTTP
+// boundary until the durable Worker rebuild and active-generation search
+// adapters are wired. Lifecycle mutation remains a canonical internal service
+// contract so metadata cannot claim activation while search reads legacy rows.
+type IndexGenerationService interface {
+	List(context.Context, uuid.UUID, int) ([]indexgeneration.Build, error)
+	Get(context.Context, uuid.UUID, uuid.UUID) (*indexgeneration.Build, error)
+	Events(context.Context, uuid.UUID, uuid.UUID) ([]indexgeneration.Event, error)
+}
+
 // Server bundles the dependencies a handler needs.
 type Server struct {
 	Auth                     *auth.Service
@@ -127,10 +138,11 @@ type Server struct {
 	Context                  *contextpack.Service
 	Memory                   MemoryService
 	Handoff                  handoff.ServicePort
-	Provider                 *provider.Service // optional; nil disables /v1/providers
-	AIProfiles               AIProfileService  // optional; nil disables workspace profile API
-	Relator                  *relator.Service  // optional; nil falls back to stub response
-	Face                     *face.Service     // optional; nil disables /v1/faces
+	Provider                 *provider.Service      // optional; nil disables /v1/providers
+	AIProfiles               AIProfileService       // optional; nil disables workspace profile API
+	IndexGenerations         IndexGenerationService // optional; nil disables generation status API
+	Relator                  *relator.Service       // optional; nil falls back to stub response
+	Face                     *face.Service          // optional; nil disables /v1/faces
 	Workspace                *workspace.Service
 	WorkspaceTransfer        WorkspaceTransferService
 	WorkspaceTransferTimeout time.Duration
@@ -190,6 +202,17 @@ func (s *Server) Router() http.Handler {
 			s.requireWorkspaceProviderWrite,
 			s.requireUnrestrictedPaths,
 		).Put("/v1/workspaces/current/ai-profile", s.handleSelectAIProfile)
+		r.With(s.requireScope(auth.ScopeRead)).Get(
+			"/v1/workspaces/current/index-generations", s.handleListIndexGenerations,
+		)
+		r.With(s.requireScope(auth.ScopeRead)).Get(
+			"/v1/workspaces/current/index-generations/{buildID}",
+			s.handleGetIndexGeneration,
+		)
+		r.With(s.requireScope(auth.ScopeRead)).Get(
+			"/v1/workspaces/current/index-generations/{buildID}/events",
+			s.handleListIndexGenerationEvents,
+		)
 		r.With(s.requireScope(auth.ScopeRead)).
 			Get("/v1/entitlements/current", s.handleEntitlementSummary)
 		r.With(

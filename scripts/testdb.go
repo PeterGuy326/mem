@@ -62,6 +62,7 @@ func run() error {
 			"usage: testdb <check|create|drop|version|assert-state|" +
 				"assert-workspace-ai-profile-table <absent|present>|" +
 				"assert-managed-ai-settlement-outbox <absent|present>|" +
+				"assert-index-generation-tables <absent|present>|" +
 				"seed-file-enrichment|assert-file-preserved <down|up>|" +
 				"seed-v15-noncanonical-text|assert-v15-noncanonical-text|" +
 				"assert-canonical-model-text-values|" +
@@ -134,6 +135,14 @@ func run() error {
 			)
 		}
 		return assertManagedAISettlementOutbox(ctx, os.Args[2] == "present")
+	case "assert-index-generation-tables":
+		if len(os.Args) != 3 ||
+			(os.Args[2] != "absent" && os.Args[2] != "present") {
+			return errors.New(
+				"assert-index-generation-tables requires absent or present",
+			)
+		}
+		return assertIndexGenerationTables(ctx, os.Args[2] == "present")
 	case "seed-file-enrichment":
 		if len(os.Args) != 2 {
 			return errors.New("seed-file-enrichment takes no arguments")
@@ -225,6 +234,33 @@ func assertManagedAISettlementOutbox(ctx context.Context, wantPresent bool) erro
 	if present != wantPresent {
 		return fmt.Errorf(
 			"managed AI settlement outbox present: %t, want %t",
+			present,
+			wantPresent,
+		)
+	}
+	return nil
+}
+
+func assertIndexGenerationTables(ctx context.Context, wantPresent bool) error {
+	conn, err := targetConnection(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close(ctx)
+
+	var present bool
+	if err := conn.QueryRow(ctx, `
+		SELECT to_regclass('public.index_generation_builds') IS NOT NULL
+		   AND to_regclass('public.index_generations') IS NOT NULL
+		   AND to_regclass('public.index_generation_targets') IS NOT NULL
+		   AND to_regclass('public.index_generation_vectors') IS NOT NULL
+		   AND to_regclass('public.index_generation_events') IS NOT NULL
+	`).Scan(&present); err != nil {
+		return fmt.Errorf("inspect index generation schema: %w", err)
+	}
+	if present != wantPresent {
+		return fmt.Errorf(
+			"index generation schema present: %t, want %t",
 			present,
 			wantPresent,
 		)

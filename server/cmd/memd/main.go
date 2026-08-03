@@ -28,6 +28,7 @@ import (
 	"github.com/PeterGuy326/mem/server/internal/folder"
 	"github.com/PeterGuy326/mem/server/internal/handoff"
 	"github.com/PeterGuy326/mem/server/internal/indexer"
+	"github.com/PeterGuy326/mem/server/internal/indexgeneration"
 	"github.com/PeterGuy326/mem/server/internal/managedusage"
 	"github.com/PeterGuy326/mem/server/internal/memory"
 	"github.com/PeterGuy326/mem/server/internal/provider"
@@ -175,6 +176,7 @@ func run() error {
 		)
 	}
 	profileSvc := aiprofile.New(database.Pool, workerCli, cfg.AIProfiles...)
+	generationSvc := indexgeneration.New(database.Pool, cfg.AIProfiles...)
 	var managedUsageSvc *managedusage.Service
 	if cfg.DeploymentMode == "saas" {
 		managedUsageSvc = managedusage.New(entitlementSvc)
@@ -228,6 +230,7 @@ func run() error {
 		Handoff:                  handoffSvc,
 		Provider:                 providerSvc,
 		AIProfiles:               profileSvc,
+		IndexGenerations:         generationSvc,
 		Relator:                  relatorSvc,
 		Face:                     faceSvc,
 		Workspace:                workspaceSvc,

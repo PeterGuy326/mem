@@ -9,6 +9,14 @@ The project is not yet publishing stable semantic-versioned releases.
 
 ### Added
 
+- Additive versioned index-generation foundation with immutable per-route
+  provider/model/dimension/pipeline identities, complete historical profile
+  snapshots, exact corpus membership with deletion tombstones, tokenized
+  expiring Worker attempts, workspace-consistent foreign keys, content-hash
+  target progress, exact-dimension vector storage, privacy-bounded lifecycle
+  audit, fail-closed ready/activation/rollback semantics, retained discard with
+  physical expiry cleanup, and read-only API/CLI status surfaces. Worker rebuild
+  execution and generation-aware ANN search remain explicitly unwired.
 - Production deployment profiles: a secret-generated, loopback-only
   single-node Compose stack for Web, memd, Worker, PostgreSQL, Redis and MinIO;
   a multi-node Helm chart with horizontally scalable Web/Worker, single-replica

@@ -1168,6 +1168,11 @@ mem/
 4. ✅ Web UI 已能展示 Drive/Search、结构化记忆账本、任务/checkpoint/Resume 和
    Workspace Transfer；继续补 correction/supersede、导入历史与完整权限管理。
 5. 持续增强图片 caption、视觉向量、实体/关系、精确 source locator 与召回评测。
+6. ✅ 已建立版本化 index generation 的持久化身份、目标进度、审计、失败/取消、
+   完整 profile/corpus 快照、带租约 attempt、删除 tombstone、ready gate、原子激活/
+   回滚和可清理的延迟 discard 内核；HTTP/CLI 当前仅开放只读状态。
+   Worker 重建执行、多维 ANN 查询路由和生产 benchmark gate 尚未接线，详见
+   [`docs/INDEX_GENERATIONS.md`](docs/INDEX_GENERATIONS.md)，因此 issue #55 仍保持开放。
 
 ---
 
@@ -1183,3 +1188,4 @@ mem/
 | MCP | Model Context Protocol，Agent 调用工具的开放协议 |
 | Token Scope | 权限粒度（search/read/write/delete/admin） |
 | Index Status | 文件 AI 处理状态（pending/processing/done/failed） |
+| Index Generation | 固定 workspace、route、provider/model、dimension 与 pipeline/profile revision 的可回滚派生索引空间 |

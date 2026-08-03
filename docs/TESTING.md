@@ -176,8 +176,9 @@ marker before it can drop anything. The control role therefore needs
    AI-profile schema; proves the `15 → 18` migration path canonicalizes
    bounded model text and adds workspace AI profiles plus the managed-stage
    settlement outbox; explicitly proves the
-   `16 → 17 → 18 → 17 → 18 → 16 → 18` table boundaries, then performs the
-   broader `18 → 15 → 18` and `18 → 11 → 18` rollback round trips; asserts
+   `16 → 17 → 19 → 17 → 19 → 16 → 19` table boundaries, including the
+   additive index-generation schema, then performs the broader `19 → 15 → 19`
+   and `19 → 11 → 19` rollback round trips; asserts
    every intermediate schema state; and proves accepted model tags are
    removed before provenance disappears rather than being copied into
    `user_tags` on re-up;
@@ -203,10 +204,11 @@ Required tests:
 - `TestManagedSearchReplayPostgres`
 - `TestManagedEmbeddingHTTPAuthorizationPostgres`
 - `TestAIProfilePostgres`
+- `TestIndexGenerationPostgres`
 - `TestManagedAISettlementOutboxPostgres`
 - `TestReleasedFileStageRetryPostgres`
 
-Expected result: migrations reach the declared current head (currently `18`),
+Expected result: migrations reach the declared current head (currently `19`),
 all rollback-state assertions pass, every named test prints `PASS`, all commands
 exit `0`, and the race run reports no data race.
 
@@ -380,8 +382,8 @@ Use this table in pull requests and add implementation-specific scenarios:
 | V2 | Worker processing regressions remain hermetic | `make test-worker` | Exit `0`; real-model gate explicitly skipped |
 | V3 | Localization, enrichment, memory, transfer and managed-embedding control surfaces work in a browser | `make test-web` | Typecheck/lint/build, all four browser acceptance suites, the localization audit and managed status mapping pass |
 | V4 | High-risk Go paths are race-free | `make test-race` | Exit `0`; no data-race warning |
-| V5 | Fresh schema, rollback and PostgreSQL semantics hold | `make test-integration` | Migration head and sixteen named tests pass, none skipped |
-| V6 | DB concurrency paths are race-free | `make test-integration-race` | The same sixteen tests pass under `-race` |
+| V5 | Fresh schema, rollback and PostgreSQL semantics hold | `make test-integration` | Migration head and seventeen named tests pass, none skipped |
+| V6 | DB concurrency paths are race-free | `make test-integration-race` | The same seventeen tests pass under `-race` |
 | V7 | Real service boundaries agree | `make test-acceptance` | HTTP, CLI and MCP share one isolated service; memory citation/provenance, bounded checkpoint listing, full checkpoint get, lifecycle and forget redaction pass |
 | V8 | Five config shapes and the real adapter preserve the host-neutral MCP contract | `MEM_MCP_CERT_BINARY=... make test-agent-certification` | All fixtures and current-adapter scenarios pass with no skip |
 | V9 | Multilingual visual quality meets the chosen checkpoint | Opt-in command in section 7 | All fixed ranking assertions pass |
