@@ -5,7 +5,7 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Surface tokens — driven by CSS variables so we can swap themes (W2)
+        // Surface tokens — driven by CSS variables so themes swap at runtime.
         bg: {
           DEFAULT: 'rgb(var(--bg) / <alpha-value>)',
           subtle: 'rgb(var(--bg-subtle) / <alpha-value>)',
@@ -47,7 +47,7 @@ export default {
         '2xs': ['0.6875rem', { lineHeight: '0.875rem' }],
       },
       boxShadow: {
-        soft: '0 1px 0 0 rgb(255 255 255 / 0.03) inset, 0 1px 2px 0 rgb(0 0 0 / 0.4)',
+        soft: 'var(--shadow-soft)',
         glow: '0 0 0 1px rgb(var(--accent) / 0.35), 0 8px 24px -8px rgb(var(--accent) / 0.45)',
       },
       backgroundImage: {

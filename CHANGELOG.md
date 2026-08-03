@@ -28,6 +28,9 @@ The project is not yet publishing stable semantic-versioned releases.
 - Complete Web Chinese/English localization with a persisted runtime selector,
   locale-aware metadata and display formatting, dictionary parity and
   hard-coded-prose auditing, and bilingual browser acceptance coverage.
+- Persistent Web dark/light theme switching with pre-render application,
+  localized accessible controls, theme-aware notifications, and browser
+  acceptance coverage.
 - Server-owned, workspace-scoped AI profiles: an offline-first
   `local-fast-v2` fixed to Ollama Qwen3 Embedding 0.6B at 768 dimensions, and
   a SaaS-only `idealab-quality-v2` fixed to an explicitly bound Idealab

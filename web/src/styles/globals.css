@@ -5,54 +5,56 @@
 /*
  * Design tokens
  * ----
- * Style brief: Linear / Vercel / Raycast. Restrained, dark-first, geometric.
- * Accent: indigo-500-ish, dialed down a touch for the dark canvas.
+ * Style brief: Linear / Vercel / Raycast. Restrained, geometric, dark or light.
+ * Accent: indigo-500-ish, tuned independently for each canvas.
  * Color tokens are emitted as space-separated RGB triples so Tailwind's
  * `<alpha-value>` token works (e.g. `bg-bg/60`).
  */
 :root {
   /* Dark (default) */
-  --bg: 10 11 15;            /* near black, slightly warm */
-  --bg-subtle: 14 16 22;     /* sidebar / second surface */
-  --bg-panel: 18 21 28;      /* cards */
-  --bg-inset: 23 27 36;      /* inputs, code blocks */
+  --bg: 10 11 15; /* near black, slightly warm */
+  --bg-subtle: 14 16 22; /* sidebar / second surface */
+  --bg-panel: 18 21 28; /* cards */
+  --bg-inset: 23 27 36; /* inputs, code blocks */
 
-  --fg: 232 234 240;         /* primary text */
-  --fg-muted: 156 163 175;   /* secondary text */
-  --fg-subtle: 107 114 128;  /* tertiary, captions */
+  --fg: 232 234 240; /* primary text */
+  --fg-muted: 156 163 175; /* secondary text */
+  --fg-subtle: 107 114 128; /* tertiary, captions */
 
   --border: 30 35 46;
   --border-strong: 48 55 72;
 
-  --accent: 129 140 248;        /* indigo-400 */
-  --accent-hover: 165 180 252;  /* indigo-300 */
-  --accent-muted: 67 56 202;    /* indigo-700 */
+  --accent: 129 140 248; /* indigo-400 */
+  --accent-hover: 165 180 252; /* indigo-300 */
+  --accent-muted: 67 56 202; /* indigo-700 */
 
   --success: 52 211 153;
   --warn: 251 191 36;
   --danger: 248 113 113;
 
-  /* Spacing scale follows Tailwind defaults; no override here. */
+  --shadow-soft: 0 1px 0 0 rgb(255 255 255 / 0.03) inset, 0 1px 2px 0 rgb(0 0 0 / 0.4);
+
   color-scheme: dark;
 }
 
 .light {
-  /* Reserved for W2 — values are placeholders, not used in W1. */
   --bg: 250 250 252;
   --bg-subtle: 244 245 248;
   --bg-panel: 255 255 255;
   --bg-inset: 240 242 246;
   --fg: 17 24 39;
   --fg-muted: 75 85 99;
-  --fg-subtle: 156 163 175;
+  --fg-subtle: 107 114 128;
   --border: 226 230 237;
   --border-strong: 203 213 225;
   --accent: 79 70 229;
-  --accent-hover: 99 102 241;
+  --accent-hover: 67 56 202;
   --accent-muted: 224 231 255;
   --success: 5 150 105;
   --warn: 217 119 6;
   --danger: 220 38 38;
+  --shadow-soft: 0 1px 0 0 rgb(255 255 255 / 0.8) inset, 0 1px 3px 0 rgb(15 23 42 / 0.12);
+
   color-scheme: light;
 }
 
@@ -76,7 +78,7 @@
     color: rgb(var(--fg));
   }
 
-  /* Scrollbar — match the dark canvas */
+  /* Scrollbar follows the active canvas. */
   ::-webkit-scrollbar {
     width: 10px;
     height: 10px;
@@ -102,7 +104,9 @@
   }
 
   /* Heading defaults */
-  h1, h2, h3 {
+  h1,
+  h2,
+  h3 {
     @apply tracking-tight text-fg;
   }
 }
@@ -120,7 +124,7 @@
     text-wrap: balance;
   }
 
-  /* Hairline divider that looks crisp on dark */
+  /* Hairline divider tuned by the active border token. */
   .hairline {
     @apply border-t border-border;
   }
@@ -153,11 +157,6 @@
   position: absolute;
   inset: 0;
   transform: translateX(-100%);
-  background: linear-gradient(
-    90deg,
-    transparent,
-    rgb(var(--border-strong) / 0.25),
-    transparent
-  );
+  background: linear-gradient(90deg, transparent, rgb(var(--border-strong) / 0.25), transparent);
   animation: shimmer 1.6s infinite;
 }

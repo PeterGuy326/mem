@@ -105,6 +105,8 @@ run_web() {
   )
   log "Web localization audit and acceptance"
   (cd "${REPO_ROOT}/web" && npm run test:i18n)
+  log "Web theme acceptance"
+  (cd "${REPO_ROOT}/web" && npm run test:theme)
   log "Web file-enrichment acceptance"
   (cd "${REPO_ROOT}/web" && npm run test:enrichment)
   log "Web memory acceptance"

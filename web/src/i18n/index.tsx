@@ -46,6 +46,8 @@ const dict = {
   'nav.notSignedIn': { zh: '未登录', en: 'Not signed in' },
   'nav.language': { zh: '语言', en: 'Language' },
   'nav.account': { zh: '账户菜单', en: 'Account menu' },
+  'nav.switchToLightTheme': { zh: '切换到浅色主题', en: 'Switch to light theme' },
+  'nav.switchToDarkTheme': { zh: '切换到深色主题', en: 'Switch to dark theme' },
 
   // ---- index providers ----
   'providers.title': { zh: '索引模型', en: 'Index models' },

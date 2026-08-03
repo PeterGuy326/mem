@@ -10,13 +10,16 @@ import {
   BookOpenText,
   LogOut,
   FolderOpen,
+  Moon,
   ScrollText,
   Settings,
   Search,
+  Sun,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Logo } from './Logo';
 import { useAuth } from '@/hooks/useAuth';
+import { useTheme } from '@/hooks/useTheme';
 import { cn } from '@/lib/cn';
 import { useT, LANGS } from '@/i18n';
 import { useCapabilities } from '@/hooks/useWorkspace';
@@ -31,6 +34,7 @@ export function TopBar({ children }: { children?: React.ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const { t, lang, setLang } = useT();
   const capabilities = useCapabilities();
   const [q, setQ] = React.useState('');
@@ -113,6 +117,21 @@ export function TopBar({ children }: { children?: React.ReactNode }) {
         </form>
 
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={toggleTheme}
+            aria-label={theme === 'dark' ? t('nav.switchToLightTheme') : t('nav.switchToDarkTheme')}
+            title={theme === 'dark' ? t('nav.switchToLightTheme') : t('nav.switchToDarkTheme')}
+            data-testid="theme-toggle"
+            className="grid h-8 w-8 place-items-center rounded-md text-fg-muted transition-colors
+                       hover:bg-bg-inset hover:text-fg"
+          >
+            {theme === 'dark' ? (
+              <Sun className="h-4 w-4" aria-hidden="true" />
+            ) : (
+              <Moon className="h-4 w-4" aria-hidden="true" />
+            )}
+          </button>
           <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild>
               <button

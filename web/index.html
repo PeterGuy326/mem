@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN" class="dark">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
@@ -8,6 +8,7 @@
     <meta name="theme-color" content="#0a0b0f" />
     <script>
       (() => {
+        const root = document.documentElement;
         let language;
         try {
           language = localStorage.getItem('mem.lang');
@@ -17,7 +18,19 @@
         const chinese =
           language === 'zh' ||
           (language !== 'en' && navigator.language.toLowerCase().startsWith('zh'));
-        document.documentElement.lang = chinese ? 'zh-CN' : 'en';
+        root.lang = chinese ? 'zh-CN' : 'en';
+        let theme = 'dark';
+        try {
+          theme = localStorage.getItem('mem.theme') === 'light' ? 'light' : 'dark';
+        } catch {
+          // Storage can be unavailable in hardened browser contexts.
+        }
+        root.classList.add(theme);
+        root.dataset.theme = theme;
+        root.style.colorScheme = theme;
+        document
+          .querySelector('meta[name="theme-color"]')
+          ?.setAttribute('content', theme === 'light' ? '#fafafc' : '#0a0b0f');
       })();
     </script>
     <title>mem</title>

@@ -15,6 +15,7 @@
     "test:i18n:audit": "node localization-audit.mjs",
     "test:memory": "node memory-acceptance.mjs",
     "test:managed-embedding": "node managed-embedding-status-test.mjs",
+    "test:theme": "node theme-acceptance.mjs",
     "test:transfer": "node transfer-acceptance.mjs",
     "typecheck": "tsc -b --noEmit"
   },

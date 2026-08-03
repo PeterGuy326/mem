@@ -28,6 +28,7 @@ npm run build        # 产出 dist/
 npm run lint         # ESLint 严格 0 警告
 npm run typecheck    # tsc --noEmit
 npm run test:i18n    # 词典/硬编码审计 + 中英文运行时切换验收
+npm run test:theme   # 自启 Vite + MSW，验证主题首屏、切换与持久化
 npm run test:enrichment # 验证文件增强与人工审核流程
 npm run test:memory  # 自启 Vite + MSW，验证 Memory 生命周期与权限态
 npm run test:transfer # 自启 Vite + MSW，验证 workspace transfer
@@ -64,9 +65,12 @@ web/
 
 ## 设计 system
 
-- **风格**：Linear / Vercel / Raycast。克制、深色优先、几何感、零拟物。
-- **配色**：暗色主调（`--bg: 10 11 15`），强调色 `indigo-400` (`--accent: 129 140 248`)。
-  CSS 变量 + Tailwind `<alpha-value>` 模式，支持透明度组合 (`bg-accent/10`)。
+- **风格**：Linear / Vercel / Raycast。克制、几何感、零拟物，深色优先并支持浅色主题。
+- **配色**：深色与浅色分别定义语义色 token（暗色主调 `--bg: 10 11 15`，强调色
+  `indigo-400` (`--accent: 129 140 248`)），CSS 变量 + Tailwind `<alpha-value>` 模式
+  支持运行时切换和透明度组合 (`bg-accent/10`)。
+- **主题偏好**：顶栏的太阳/月亮按钮即时切换，偏好仅保存在当前浏览器的
+  `localStorage`（`mem.theme`）；内联首屏脚本会在 React 启动前应用主题，避免刷新闪烁。
 - **字体**：统一使用平台原生 sans-serif 栈，并为中文显式回退到
   `PingFang SC` / `Hiragino Sans GB` / `Microsoft YaHei`；开发与生产均不请求第三方字体。
 - **组件**：Tailwind + Radix UI 原语（Dialog / Dropdown / Tooltip）+ `lucide-react` 图标。
@@ -74,7 +78,7 @@ web/
 - **状态色**：`success` 绿、`warn` 琥珀、`danger` 红 — 仅用于 chip / badge / 危险按钮。
 - **语言**：账户菜单可即时切换简体中文 / English，显式偏好保存在当前浏览器的
   `mem.lang`；产品文案全部来自双语词典，文件名、记忆正文、Provider/协议标识保持原样。
-- **暗色变量**已写齐；`light` 模式 W2 解锁（CSS 变量已就位）。
+- **主题通知**：Sonner toast 与浏览器 `theme-color` 会跟随当前主题。
 
 ---
 
@@ -86,7 +90,7 @@ web/
 | `/search?q=...` | `SearchPage.tsx` | 顶部巨型搜索框 + 类型/时间过滤 + 图片瀑布 + 文档列表混排 |
 | `/files/:id` | `FileDetailPage.tsx` | 左预览 / 右元数据 + AI 卡片 + 相关文件 |
 | `/login` | `LoginPage.tsx` | 极简登录页（W1 mock：任意账号通过） |
-| `/settings` | `SettingsPage.tsx` | Provider / Token / 主题（占位） |
+| `/settings` | `SettingsPage.tsx` | Provider / Token |
 
 ---
 
@@ -131,7 +135,6 @@ API endpoints 默认全部走 mock，与后端 W3/W4 输出一一对应：
 ## 未做的（按 W1 范围）
 
 - [ ] 移动端响应式（W1 桌面优先）
-- [ ] 主题切换（结构就位 W2 上）
 - [ ] Phase 2 路由：`/timeline` `/faces` `/tags`（已占位）
 - [ ] 真接后端（W4 移除 mock）
 

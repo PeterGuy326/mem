@@ -73,7 +73,7 @@ make test-race
 - `go build ./...`, `go vet ./...` and uncached `go test ./...`;
 - Worker `pytest` through the locked `uv` environment;
 - Web typecheck, ESLint, production build;
-- the Localization, File Enrichment, Memory, and Workspace Transfer browser acceptance suites.
+- the Localization, Theme, File Enrichment, Memory, and Workspace Transfer browser acceptance suites.
 
 `make test-race` executes the high-risk Go file/folder path-locking, memory,
 handoff, transfer, API, client, tool, CLI, and MCP packages with the race
@@ -380,7 +380,7 @@ Use this table in pull requests and add implementation-specific scenarios:
 | --- | --- | --- | --- |
 | V1 | Server, CLI and MCP build and preserve unit contracts | `make test-server` | Exit `0`; no skipped DB claim |
 | V2 | Worker processing regressions remain hermetic | `make test-worker` | Exit `0`; real-model gate explicitly skipped |
-| V3 | Localization, enrichment, memory, transfer and managed-embedding control surfaces work in a browser | `make test-web` | Typecheck/lint/build, all four browser acceptance suites, the localization audit and managed status mapping pass |
+| V3 | Localization, theme, enrichment, memory, transfer and managed-embedding control surfaces work in a browser | `make test-web` | Typecheck/lint/build, the localization audit, all browser acceptance suites and managed status mapping pass |
 | V4 | High-risk Go paths are race-free | `make test-race` | Exit `0`; no data-race warning |
 | V5 | Fresh schema, rollback and PostgreSQL semantics hold | `make test-integration` | Migration head and seventeen named tests pass, none skipped |
 | V6 | DB concurrency paths are race-free | `make test-integration-race` | The same seventeen tests pass under `-race` |
@@ -402,7 +402,7 @@ Use this table in pull requests and add implementation-specific scenarios:
   cleanup is `NOT VERIFIED`.
 - `web/acceptance.mjs` and `web/e2e-smoke.mjs` are legacy, environment-specific
   manual scripts. The standard portable Web gates are
-  `npm run test:i18n`, `npm run test:enrichment`, `npm run test:memory`, and
+  `npm run test:i18n`, `npm run test:theme`, `npm run test:enrichment`, `npm run test:memory`, and
   `npm run test:transfer`.
 - Migration downgrade proves DDL behavior on disposable data. It is not a
   promise that privacy-redacted payloads or discarded identifiers can be

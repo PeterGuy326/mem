@@ -107,10 +107,11 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
 
-      - name: Run localization, enrichment, memory and workspace-transfer browser acceptance
+      - name: Run localization, theme, enrichment, memory and workspace-transfer browser acceptance
         working-directory: web
         run: |
           npm run test:i18n
+          npm run test:theme
           npm run test:enrichment
           npm run test:memory
           npm run test:transfer
