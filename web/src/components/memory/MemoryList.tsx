@@ -1,5 +1,5 @@
 import { Bot, ChevronRight, FolderClosed, Pin, ThumbsDown, ThumbsUp } from 'lucide-react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation } from 'react-router';
 import { Badge, type BadgeProps } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { useT } from '@/i18n';

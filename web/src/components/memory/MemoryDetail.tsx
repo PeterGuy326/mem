@@ -19,7 +19,7 @@ import {
   Trash2,
   UserRound,
 } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { toast } from 'sonner';
 import { ForgetMemoryDialog } from './ForgetMemoryDialog';
 import { MemoryKindBadge } from './MemoryList';

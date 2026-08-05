@@ -3,7 +3,7 @@
  * global TopBar plus a scrollable outlet. ExplorerPage manages its own
  * full-height two-pane layout and renders <TopBar> directly instead.
  */
-import { Outlet } from 'react-router-dom';
+import { Outlet } from 'react-router';
 import { TopBar } from './TopBar';
 
 export function AppLayout() {

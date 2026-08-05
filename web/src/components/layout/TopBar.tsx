@@ -4,7 +4,7 @@
  * ExplorerPage (which passes its breadcrumb in via `children`).
  */
 import * as React from 'react';
-import { useNavigate, Link, useLocation } from 'react-router-dom';
+import { useNavigate, Link, useLocation } from 'react-router';
 import {
   ArrowLeftRight,
   BookOpenText,

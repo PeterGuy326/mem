@@ -331,7 +331,7 @@ Run the Web checks:
 ```bash
 cd ../web
 npm ci
-npm audit --omit=dev --audit-level=high  # advisory; findings do not gate CI
+npm run audit
 npm run lint
 npm run typecheck
 npm run build
@@ -339,8 +339,8 @@ npm run build
 
 Go and Python tests report coverage in CI. The web package currently uses
 linting, type checking, and a production build as its required baseline.
-Production dependency auditing is advisory so that a newly published external
-advisory cannot block an unrelated pull request.
+Dependency auditing is also required: production advisories fail at moderate
+severity, while development-only advisories fail at high severity.
 
 ## Contributing
 

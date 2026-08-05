@@ -249,10 +249,9 @@ jobs:
         working-directory: web
         run: npm ci
 
-      - name: Audit production dependencies (advisory)
-        continue-on-error: true
+      - name: Audit dependencies
         working-directory: web
-        run: npm audit --omit=dev --audit-level=high
+        run: npm run audit
 
       - name: Lint
         working-directory: web
