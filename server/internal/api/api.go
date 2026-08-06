@@ -32,6 +32,7 @@ import (
 	"github.com/PeterGuy326/mem/server/internal/aiprofile"
 	"github.com/PeterGuy326/mem/server/internal/auth"
 	"github.com/PeterGuy326/mem/server/internal/contextpack"
+	"github.com/PeterGuy326/mem/server/internal/durablecontext"
 	"github.com/PeterGuy326/mem/server/internal/entitlement"
 	"github.com/PeterGuy326/mem/server/internal/face"
 	"github.com/PeterGuy326/mem/server/internal/file"
@@ -63,6 +64,17 @@ type MemoryService interface {
 	Archive(context.Context, memory.LifecycleCommand) (*memory.MutationResult, error)
 	Restore(context.Context, memory.LifecycleCommand) (*memory.MutationResult, error)
 	Forget(context.Context, memory.ForgetCommand) (*memory.ForgetResult, error)
+}
+
+// DurableContextService is the scoped durable-context port (mem#70). Handlers
+// stay behind an interface so contract pinning, denial, and degradation
+// mapping are testable without a database.
+type DurableContextService interface {
+	Grant(context.Context, durablecontext.GrantCommand) (*durablecontext.Grant, error)
+	Revoke(context.Context, durablecontext.RevokeCommand) (*durablecontext.Grant, error)
+	ListGrants(context.Context, durablecontext.ListGrantsQuery) ([]durablecontext.Grant, error)
+	Recall(context.Context, durablecontext.RecallQuery) (*durablecontext.RecallResult, error)
+	Get(context.Context, durablecontext.GetQuery) (*durablecontext.RecallHit, error)
 }
 
 // WorkspaceTransferService is the portable full-workspace import/export port.
@@ -137,6 +149,7 @@ type Server struct {
 	Search                   SearchService    // optional; nil disables /v1/search
 	Context                  *contextpack.Service
 	Memory                   MemoryService
+	DurableContext           DurableContextService
 	Handoff                  handoff.ServicePort
 	Provider                 *provider.Service      // optional; nil disables /v1/providers
 	AIProfiles               AIProfileService       // optional; nil disables workspace profile API
@@ -271,6 +284,25 @@ func (s *Server) Router() http.Handler {
 			s.requireScope(auth.ScopeDelete),
 			s.requireWorkspaceDelete,
 		).Post("/v1/memories/{id}/forget", s.handleForgetMemory)
+
+		// Scoped durable context (mem#70): version-pinned, read-only resume
+		// over explicitly approved memories. Allowlist mutation is admin
+		// policy; recall and get are read scope only.
+		r.With(s.requireScope(auth.ScopeRead)).Post(
+			"/v1/durable-context/recall", s.handleDurableContextRecall,
+		)
+		r.With(s.requireScope(auth.ScopeRead)).Get(
+			"/v1/durable-context/memories/{id}", s.handleDurableContextGetMemory,
+		)
+		r.With(s.requireScope(auth.ScopeAdmin)).Post(
+			"/v1/durable-context/grants", s.handleCreateDurableContextGrant,
+		)
+		r.With(s.requireScope(auth.ScopeAdmin)).Get(
+			"/v1/durable-context/grants", s.handleListDurableContextGrants,
+		)
+		r.With(s.requireScope(auth.ScopeAdmin)).Post(
+			"/v1/durable-context/grants/{grantID}/revoke", s.handleRevokeDurableContextGrant,
+		)
 
 		// Versioned, vendor-neutral task checkpoints. The task key is stable
 		// across Claude Code, Codex and other Agent hosts.

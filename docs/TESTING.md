@@ -176,16 +176,18 @@ marker before it can drop anything. The control role therefore needs
    AI-profile schema; proves the `15 → 18` migration path canonicalizes
    bounded model text and adds workspace AI profiles plus the managed-stage
    settlement outbox; explicitly proves the
-   `16 → 17 → 19 → 17 → 19 → 16 → 19` table boundaries, including the
-   additive index-generation schema, then performs the broader `19 → 15 → 19`
-   and `19 → 11 → 19` rollback round trips; asserts
+   `16 → 17 → 20 → 17 → 20 → 16 → 20` table boundaries, including the
+   additive index-generation schema and the additive durable-context grants
+   table, then performs the broader `20 → 15 → 20`
+   and `20 → 11 → 20` rollback round trips; asserts
    every intermediate schema state; and proves accepted model tags are
    removed before provenance disappears rather than being copied into
    `user_tags` on re-up;
 3. creates separate fresh databases for normal and race runs, then executes
    the real PostgreSQL memory, handoff, workspace-transfer, HTTP-router,
    folder/file path-locking, folder-lifecycle, relator, managed-entitlement,
-   replay-authorization and HTTP-ordering tests serially; and
+   replay-authorization, HTTP-ordering and durable-context scope tests
+   serially; and
 4. fails if any required integration test is skipped.
 
 Required tests:
@@ -207,8 +209,9 @@ Required tests:
 - `TestIndexGenerationPostgres`
 - `TestManagedAISettlementOutboxPostgres`
 - `TestReleasedFileStageRetryPostgres`
+- `TestDurableContextPostgres`
 
-Expected result: migrations reach the declared current head (currently `19`),
+Expected result: migrations reach the declared current head (currently `20`),
 all rollback-state assertions pass, every named test prints `PASS`, all commands
 exit `0`, and the race run reports no data race.
 

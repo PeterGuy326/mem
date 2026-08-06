@@ -4,7 +4,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-unit}"
-EXPECTED_MIGRATION_HEAD=19
+EXPECTED_MIGRATION_HEAD=20
 MIGRATION_ROLLBACK_TARGET=11
 MODEL_TEXT_CANONICAL_BASE=15
 WORKSPACE_AI_PROFILE_BASE=16
@@ -179,7 +179,7 @@ assert_migration_version() {
 
 run_migration_round_trip() {
   require_command go
-  log "Migration validation and explicit 0016/0017/0018/0019 rollback round trips"
+  log "Migration validation and explicit 0016/0017/0018/0019/0020 rollback round trips"
   (
     cd "${REPO_ROOT}/server"
     go run github.com/pressly/goose/v3/cmd/goose@v3.22.1 \
@@ -331,6 +331,7 @@ run_postgres_tests() {
     TestIndexGenerationPostgres
     TestManagedAISettlementOutboxPostgres
     TestReleasedFileStageRetryPostgres
+    TestDurableContextPostgres
   )
 
   integration_log="$(mktemp "${TMPDIR:-/tmp}/mem-integration.XXXXXX")"
@@ -341,7 +342,7 @@ run_postgres_tests() {
     MEM_TEST_DB="$MEM_TEST_DB" go test \
       ${race_flag:+"$race_flag"} \
       -v -count=1 -p 1 -timeout 20m \
-      -run '^(TestMemoryPostgres|TestHandoffPostgres|TestWorkspaceTransferPostgres|TestHandoffCrossAgentHTTPIntegration|TestMemoryPathLifecycleIntegration|TestWorkspacePathLockingIntegration|TestFilePathLockingIntegration|TestAnnotationDecisionIntegration|TestIndexerEnrichmentIntegration|TestRecomputePerson|TestManagedEmbeddingEntitlementPostgres|TestManagedSearchReplayPostgres|TestManagedEmbeddingHTTPAuthorizationPostgres|TestAIProfilePostgres|TestIndexGenerationPostgres|TestManagedAISettlementOutboxPostgres|TestReleasedFileStageRetryPostgres)$' \
+      -run '^(TestMemoryPostgres|TestHandoffPostgres|TestWorkspaceTransferPostgres|TestHandoffCrossAgentHTTPIntegration|TestMemoryPathLifecycleIntegration|TestWorkspacePathLockingIntegration|TestFilePathLockingIntegration|TestAnnotationDecisionIntegration|TestIndexerEnrichmentIntegration|TestRecomputePerson|TestManagedEmbeddingEntitlementPostgres|TestManagedSearchReplayPostgres|TestManagedEmbeddingHTTPAuthorizationPostgres|TestAIProfilePostgres|TestIndexGenerationPostgres|TestManagedAISettlementOutboxPostgres|TestReleasedFileStageRetryPostgres|TestDurableContextPostgres)$' \
       ./internal/memory \
       ./internal/handoff \
       ./internal/workspacetransfer \
@@ -354,7 +355,8 @@ run_postgres_tests() {
       ./internal/search \
       ./internal/aiprofile \
       ./internal/indexgeneration \
-      ./internal/managedusage
+      ./internal/managedusage \
+      ./internal/durablecontext
   ) 2>&1 | tee "$integration_log"
   local test_status="${PIPESTATUS[0]}"
   set -e

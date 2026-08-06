@@ -38,6 +38,7 @@ func RegisterAll(reg *tools.Registry, client *apiclient.Client) error {
 		registerMemoryArchive,
 		registerMemoryRestore,
 		registerMemoryForget,
+		registerDurableContextRecall,
 		registerCheckpoint,
 		registerTaskList,
 		registerCheckpointList,

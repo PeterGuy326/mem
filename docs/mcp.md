@@ -142,9 +142,14 @@ The canonical product surface is:
 | `mem_context` | Build an evidence-backed context pack for the calling Agent |
 | `mem_related` | Top-K files related to a `file_id` by embedding similarity |
 | `mem_face` | Person clusters: `action=list` / `name` / `merge` |
+| `mem_durable_context_recall` | Resume explicitly granted, workspace-scoped active memories for one principal through the pinned `durable-context.v1` contract |
 
 `mem_ask` has been retired. There is one recall pipeline: `mem_context`
 retrieves evidence, while the calling Agent synthesizes the answer.
+
+Scoped durable context (cross-session resume of explicitly approved context)
+is a separate pinned contract; see [`DURABLE_CONTEXT.md`](./DURABLE_CONTEXT.md).
+Grant administration stays on the authenticated HTTP/admin surface.
 
 ## `mem_checkpoint` and `mem_resume`
 

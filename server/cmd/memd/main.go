@@ -22,6 +22,7 @@ import (
 	"github.com/PeterGuy326/mem/server/internal/config"
 	"github.com/PeterGuy326/mem/server/internal/contextpack"
 	"github.com/PeterGuy326/mem/server/internal/db"
+	"github.com/PeterGuy326/mem/server/internal/durablecontext"
 	"github.com/PeterGuy326/mem/server/internal/entitlement"
 	"github.com/PeterGuy326/mem/server/internal/face"
 	"github.com/PeterGuy326/mem/server/internal/file"
@@ -119,6 +120,7 @@ func run() error {
 	folderSvc := folder.New(database.Pool)
 	fileSvc := file.New(database.Pool, store, folderSvc)
 	memorySvc := memory.New(database.Pool)
+	durableContextSvc := durablecontext.New(database.Pool, memorySvc)
 	handoffSvc := handoff.New(database.Pool)
 	workspaceBundleLimits := workspaceTransferBundleLimits()
 	workspaceTransferSvc := workspacetransfer.New(
@@ -227,6 +229,7 @@ func run() error {
 		Search:                   searchSvc,
 		Context:                  contextSvc,
 		Memory:                   memorySvc,
+		DurableContext:           durableContextSvc,
 		Handoff:                  handoffSvc,
 		Provider:                 providerSvc,
 		AIProfiles:               profileSvc,

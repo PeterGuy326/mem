@@ -9,6 +9,16 @@ The project is not yet publishing stable semantic-versioned releases.
 
 ### Added
 
+- Version-pinned scoped durable-context contract (`durable-context.v1`,
+  mem#70 REQ-001): explicit workspace-scoped recall grants with audit
+  retention and idempotent soft revoke, read-only recall/get endpoints and a
+  `mem_durable_context_recall` MCP tool that resume only granted active
+  memories with version-pinned locators and provenance, a denied/stale/
+  forgotten/unavailable error taxonomy, pinned-contract rejection of
+  incompatible versions, and PostgreSQL scenario coverage for cross-session
+  resume, cross-principal/workspace denial, superseded/forgotten/unapproved
+  exclusion, and revoke/re-grant audit. Grants remain target-local policy and
+  are not bundled in workspace exports.
 - Additive versioned index-generation foundation with immutable per-route
   provider/model/dimension/pipeline identities, complete historical profile
   snapshots, exact corpus membership with deletion tombstones, tokenized
