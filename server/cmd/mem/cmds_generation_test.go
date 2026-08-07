@@ -11,12 +11,18 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestGenerationCommandsAreReadOnlyAndRegistered(t *testing.T) {
+func TestGenerationCommandsAreRegistered(t *testing.T) {
 	root := newRootCmd()
 	for _, path := range [][]string{
 		{"generation", "list"},
 		{"generation", "status"},
 		{"generation", "events"},
+		{"generation", "create"},
+		{"generation", "cancel"},
+		{"generation", "resume"},
+		{"generation", "activate"},
+		{"generation", "rollback"},
+		{"generation", "discard"},
 	} {
 		command, remaining, err := root.Find(path)
 		if err != nil {
@@ -24,17 +30,6 @@ func TestGenerationCommandsAreReadOnlyAndRegistered(t *testing.T) {
 		}
 		if len(remaining) != 0 || command.CommandPath() != "mem "+strings.Join(path, " ") {
 			t.Fatalf("path %q resolved to %q with remaining %q", path, command.CommandPath(), remaining)
-		}
-	}
-	command, _, err := root.Find([]string{"generation"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, forbidden := range []string{"create", "activate", "rollback", "discard", "cancel", "resume"} {
-		for _, child := range command.Commands() {
-			if child.Name() == forbidden {
-				t.Fatalf("generation command unexpectedly exposes %q", forbidden)
-			}
 		}
 	}
 }

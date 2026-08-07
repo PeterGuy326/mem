@@ -31,14 +31,20 @@ type indexGenerationEventsResponse struct {
 func newGenerationCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "generation",
-		Short: "Inspect versioned index-generation state",
-		Long: `Inspect safe generation identities, bounded rebuild progress and audit events.
-Build/activate commands remain unavailable until Worker rebuild execution and
-active-generation search routing are wired to the same server contract.`,
+		Short: "Manage versioned index-generation lifecycle",
+		Long: `Manage safe generation identities, bounded rebuild progress and audit events.
+Mutation commands (create, activate, rollback, cancel, resume, discard) require
+admin scope and workspace provider-write authorization.`,
 	}
 	cmd.AddCommand(newGenerationListCmd())
 	cmd.AddCommand(newGenerationStatusCmd())
 	cmd.AddCommand(newGenerationEventsCmd())
+	cmd.AddCommand(newGenerationCreateCmd())
+	cmd.AddCommand(newGenerationCancelCmd())
+	cmd.AddCommand(newGenerationResumeCmd())
+	cmd.AddCommand(newGenerationActivateCmd())
+	cmd.AddCommand(newGenerationRollbackCmd())
+	cmd.AddCommand(newGenerationDiscardCmd())
 	return cmd
 }
 
@@ -191,4 +197,90 @@ func pointerText(value *string) string {
 		return ""
 	}
 	return terminalSafe(*value)
+}
+
+func newGenerationCreateCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "create <profile-id>",
+		Short: "Create a new index generation build for a profile",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			format, err := rememberOutputFormat(cmd)
+			if err != nil {
+				return err
+			}
+			profileID := strings.TrimSpace(args[0])
+			if profileID == "" {
+				return fmt.Errorf("profile-id is required")
+			}
+			client, err := configuredWorkspaceAIProfileClient()
+			if err != nil {
+				return err
+			}
+			body := map[string]string{"profile_id": profileID}
+			var response indexGenerationGetResponse
+			if err := client.doJSON("POST", workspaceIndexGenerationsPath, body, &response); err != nil {
+				return err
+			}
+			if format == "json" {
+				return writeCommandJSON(cmd, response)
+			}
+			return writeGenerationStatus(cmd, response.Generation)
+		},
+	}
+	cmd.Flags().String("format", "text", "text|json")
+	return cmd
+}
+
+func newGenerationCancelCmd() *cobra.Command {
+	return newGenerationActionCmd("cancel", "Cancel a building index generation")
+}
+
+func newGenerationResumeCmd() *cobra.Command {
+	return newGenerationActionCmd("resume", "Resume a cancelled or failed build")
+}
+
+func newGenerationActivateCmd() *cobra.Command {
+	return newGenerationActionCmd("activate", "Activate a ready generation for search")
+}
+
+func newGenerationRollbackCmd() *cobra.Command {
+	return newGenerationActionCmd("rollback", "Rollback to a previously active generation")
+}
+
+func newGenerationDiscardCmd() *cobra.Command {
+	return newGenerationActionCmd("discard", "Discard an inactive generation with retention")
+}
+
+func newGenerationActionCmd(action, short string) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   action + " <build-id>",
+		Short: short,
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			format, err := rememberOutputFormat(cmd)
+			if err != nil {
+				return err
+			}
+			id, err := parseGenerationBuildID(args[0])
+			if err != nil {
+				return err
+			}
+			client, err := configuredWorkspaceAIProfileClient()
+			if err != nil {
+				return err
+			}
+			var response indexGenerationGetResponse
+			path := workspaceIndexGenerationsPath + "/" + url.PathEscape(id.String()) + "/" + action
+			if err := client.doJSON("POST", path, nil, &response); err != nil {
+				return err
+			}
+			if format == "json" {
+				return writeCommandJSON(cmd, response)
+			}
+			return writeGenerationStatus(cmd, response.Generation)
+		},
+	}
+	cmd.Flags().String("format", "text", "text|json")
+	return cmd
 }

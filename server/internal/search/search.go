@@ -70,6 +70,7 @@ type Service struct {
 	worker                   textEmbedder
 	defaultEmbeddingProvider string
 	profiles                 aiProfileResolver
+	generations              GenerationResolver
 	requireProfile           bool
 	// requireManagedProfileReservation prevents in-process callers from
 	// bypassing the HTTP managed-search executor after a workspace chooses a
@@ -457,6 +458,9 @@ func (s *Service) searchTextWithRoute(
 	if len(vec) == 0 {
 		return nil, fmt.Errorf("empty text embedding")
 	}
+	if gen := s.resolveActiveGeneration(ctx, q.UserID, RouteText); gen != nil {
+		return s.runTextANNGeneration(ctx, q, vec, gen)
+	}
 	return s.runTextANN(ctx, q, vec)
 }
 
@@ -508,6 +512,9 @@ func (s *Service) searchVisualWithRoute(
 	}
 	if len(vec) == 0 {
 		return nil, fmt.Errorf("empty visual embedding")
+	}
+	if gen := s.resolveActiveGeneration(ctx, q.UserID, RouteVisual); gen != nil {
+		return s.runVisualANNGeneration(ctx, q, vec, gen)
 	}
 	return s.runVisualANN(ctx, q, vec)
 }

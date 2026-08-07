@@ -130,14 +130,19 @@ type AIProfileService interface {
 	Select(context.Context, uuid.UUID, uuid.UUID, string) (*aiprofile.Selection, error)
 }
 
-// IndexGenerationService is intentionally read-only at the public HTTP
-// boundary until the durable Worker rebuild and active-generation search
-// adapters are wired. Lifecycle mutation remains a canonical internal service
-// contract so metadata cannot claim activation while search reads legacy rows.
+// IndexGenerationService exposes the versioned generation lifecycle to HTTP
+// handlers. Read methods are available to all authenticated clients; mutation
+// methods require admin scope and workspace provider-write authorization.
 type IndexGenerationService interface {
 	List(context.Context, uuid.UUID, int) ([]indexgeneration.Build, error)
 	Get(context.Context, uuid.UUID, uuid.UUID) (*indexgeneration.Build, error)
 	Events(context.Context, uuid.UUID, uuid.UUID) ([]indexgeneration.Event, error)
+	Create(context.Context, uuid.UUID, uuid.UUID, string) (*indexgeneration.Build, error)
+	Cancel(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*indexgeneration.Build, error)
+	Resume(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*indexgeneration.Build, error)
+	Activate(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*indexgeneration.Build, error)
+	Rollback(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*indexgeneration.Build, error)
+	Discard(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (*indexgeneration.Build, error)
 }
 
 // Server bundles the dependencies a handler needs.
@@ -228,6 +233,30 @@ func (s *Server) Router() http.Handler {
 			"/v1/workspaces/current/index-generations/{buildID}/events",
 			s.handleListIndexGenerationEvents,
 		)
+		r.With(
+			s.requireScope(auth.ScopeAdmin),
+			s.requireWorkspaceProviderWrite,
+		).Post("/v1/workspaces/current/index-generations", s.handleCreateIndexGeneration)
+		r.With(
+			s.requireScope(auth.ScopeAdmin),
+			s.requireWorkspaceProviderWrite,
+		).Post("/v1/workspaces/current/index-generations/{buildID}/cancel", s.handleCancelIndexGeneration)
+		r.With(
+			s.requireScope(auth.ScopeAdmin),
+			s.requireWorkspaceProviderWrite,
+		).Post("/v1/workspaces/current/index-generations/{buildID}/resume", s.handleResumeIndexGeneration)
+		r.With(
+			s.requireScope(auth.ScopeAdmin),
+			s.requireWorkspaceProviderWrite,
+		).Post("/v1/workspaces/current/index-generations/{buildID}/activate", s.handleActivateIndexGeneration)
+		r.With(
+			s.requireScope(auth.ScopeAdmin),
+			s.requireWorkspaceProviderWrite,
+		).Post("/v1/workspaces/current/index-generations/{buildID}/rollback", s.handleRollbackIndexGeneration)
+		r.With(
+			s.requireScope(auth.ScopeAdmin),
+			s.requireWorkspaceProviderWrite,
+		).Post("/v1/workspaces/current/index-generations/{buildID}/discard", s.handleDiscardIndexGeneration)
 		r.With(s.requireScope(auth.ScopeRead)).
 			Get("/v1/entitlements/current", s.handleEntitlementSummary)
 		r.With(
