@@ -1,4 +1,4 @@
-import { Navigate, useLocation } from 'react-router-dom';
+import { Navigate, useLocation } from 'react-router';
 import { useAuth } from '@/hooks/useAuth';
 
 /** Wrap any private route subtree. Bounces to /login when unauthenticated. */

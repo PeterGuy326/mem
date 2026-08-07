@@ -1,5 +1,5 @@
 import { ArrowLeft, FolderClosed, GitCommitHorizontal, ScrollText } from 'lucide-react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';

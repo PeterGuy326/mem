@@ -1,5 +1,5 @@
 import { ArrowRight, GitCommitHorizontal } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { CheckpointKindBadge, TaskStatusBadge } from './TaskStatusBadge';
 import { checkpointPagePath } from '@/lib/handoff';
 import { formatDateTime, truncateMiddle } from '@/lib/format';

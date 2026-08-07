@@ -6,7 +6,7 @@ import {
   GitCommitHorizontal,
   UserRoundCog,
 } from 'lucide-react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router';
 import { toast } from 'sonner';
 import { HandoffState } from '@/components/tasks/HandoffState';
 import { ReferenceList } from '@/components/tasks/ReferenceList';

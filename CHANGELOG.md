@@ -155,6 +155,10 @@ The project is not yet publishing stable semantic-versioned releases.
 
 ### Security
 
+- Upgrade the Web runtime to React 19.2 and React Router 8, remove the retired
+  `react-router-dom` compatibility package, refresh vulnerable transitive
+  tooling dependencies, and make production-moderate/development-high npm
+  audits required in CI, with a documented per-advisory reachability review.
 - Fail closed in production on development state-service credentials,
   automatic per-replica migrations, open registration, wildcard CORS or an
   unauthenticated Worker.

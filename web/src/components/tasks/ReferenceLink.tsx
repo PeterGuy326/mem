@@ -1,5 +1,5 @@
 import { ExternalLink, FileText, Fingerprint } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { cn } from '@/lib/cn';
 
 export function memFileID(uri: string): string | null {

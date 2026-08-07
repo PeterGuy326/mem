@@ -1,5 +1,5 @@
 import { AlertTriangle, LockKeyhole, ScrollText } from 'lucide-react';
-import { Outlet } from 'react-router-dom';
+import { Outlet } from 'react-router';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';

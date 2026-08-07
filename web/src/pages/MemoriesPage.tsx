@@ -7,7 +7,7 @@ import {
   LockKeyhole,
   ShieldCheck,
 } from 'lucide-react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { MemoryDetail } from '@/components/memory/MemoryDetail';
 import { MemoryFilters, type MemoryFilterValue } from '@/components/memory/MemoryFilters';
 import { MemoryList } from '@/components/memory/MemoryList';

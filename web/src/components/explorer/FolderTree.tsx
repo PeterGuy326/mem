@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { ChevronRight, FolderClosed, HardDrive } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import {

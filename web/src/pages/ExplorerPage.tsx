@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router';
 import { Upload, FolderOpen } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/cn';

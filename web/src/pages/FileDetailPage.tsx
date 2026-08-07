@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router';
 import {
   ArrowLeft,
   Download,
