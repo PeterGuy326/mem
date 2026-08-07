@@ -41,6 +41,8 @@ func TestMemoryControlRoutesAreRegistered(t *testing.T) {
 		http.MethodPost + " /v1/memories/{id}/archive",
 		http.MethodPost + " /v1/memories/{id}/restore",
 		http.MethodPost + " /v1/memories/{id}/forget",
+		http.MethodPost + " /v1/memory-relations",
+		http.MethodGet + " /v1/memories/{id}/relations",
 	} {
 		if !registered[route] {
 			t.Errorf("memory route %q is not registered", route)

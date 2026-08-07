@@ -64,6 +64,8 @@ type MemoryService interface {
 	Archive(context.Context, memory.LifecycleCommand) (*memory.MutationResult, error)
 	Restore(context.Context, memory.LifecycleCommand) (*memory.MutationResult, error)
 	Forget(context.Context, memory.ForgetCommand) (*memory.ForgetResult, error)
+	CreateRelation(context.Context, memory.CreateRelationCommand) (*memory.CreateRelationResult, error)
+	ListRelations(context.Context, memory.ListRelationsQuery) ([]memory.Relation, error)
 }
 
 // DurableContextService is the scoped durable-context port (mem#70). Handlers
@@ -284,6 +286,15 @@ func (s *Server) Router() http.Handler {
 			s.requireScope(auth.ScopeDelete),
 			s.requireWorkspaceDelete,
 		).Post("/v1/memories/{id}/forget", s.handleForgetMemory)
+
+		// Memory relations (correction/supersede/occurrence).
+		r.With(
+			s.requireScope(auth.ScopeRead),
+			s.requireScope(auth.ScopeWrite),
+		).Post("/v1/memory-relations", s.handleCreateMemoryRelation)
+		r.With(
+			s.requireScope(auth.ScopeRead),
+		).Get("/v1/memories/{id}/relations", s.handleListMemoryRelations)
 
 		// Scoped durable context (mem#70): version-pinned, read-only resume
 		// over explicitly approved memories. Allowlist mutation is admin

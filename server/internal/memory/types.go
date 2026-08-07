@@ -112,15 +112,16 @@ type Query struct {
 
 // RecallQuery describes deterministic lexical retrieval.
 type RecallQuery struct {
-	WorkspaceID     uuid.UUID
-	Text            string
-	Scope           string
-	AllowedPaths    []string
-	Since           *time.Time
-	Until           *time.Time
-	Kinds           []string
-	LifecycleStatus string
-	Limit           int
+	WorkspaceID        uuid.UUID
+	Text               string
+	Scope              string
+	AllowedPaths       []string
+	Since              *time.Time
+	Until              *time.Time
+	Kinds              []string
+	LifecycleStatus    string
+	IncludeSuperseded  bool
+	Limit              int
 }
 
 // ListQuery describes stable keyset pagination over memory records. Recursive

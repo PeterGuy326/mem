@@ -667,3 +667,124 @@ func memoryKindFilters(r *http.Request) []string {
 	}
 	return out
 }
+
+// --- Memory Relations ---
+
+type createRelationRequest struct {
+	SourceID     string `json:"source_id"`
+	TargetID     string `json:"target_id"`
+	RelationType string `json:"relation_type"`
+	Reason       string `json:"reason,omitempty"`
+}
+
+func (s *Server) handleCreateMemoryRelation(w http.ResponseWriter, r *http.Request) {
+	if s.Memory == nil {
+		writeError(w, http.StatusServiceUnavailable, "memory_disabled",
+			"structured memory service not configured")
+		return
+	}
+	var req createRelationRequest
+	if !s.decodeMemoryControlRequest(w, r, &req) {
+		return
+	}
+	sourceID, err := uuid.Parse(strings.TrimSpace(req.SourceID))
+	if err != nil || sourceID == uuid.Nil {
+		writeError(w, http.StatusBadRequest, "bad_source_id", "source_id must be a UUID")
+		return
+	}
+	targetID, err := uuid.Parse(strings.TrimSpace(req.TargetID))
+	if err != nil || targetID == uuid.Nil {
+		writeError(w, http.StatusBadRequest, "bad_target_id", "target_id must be a UUID")
+		return
+	}
+
+	actorID, tokenID := memoryActorIDs(r)
+	tok := r.Context().Value(ctxToken).(*auth.Token)
+	ws := currentWorkspace(r)
+
+	result, err := s.Memory.CreateRelation(r.Context(), memory.CreateRelationCommand{
+		WorkspaceID:  ws.ID,
+		SourceID:     sourceID,
+		TargetID:     targetID,
+		RelationType: req.RelationType,
+		ActorUserID:  &actorID,
+		ActorTokenID: &tokenID,
+		Reason:       req.Reason,
+		AllowedPaths: tok.Paths,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, memory.ErrInvalidCommand):
+			writeError(w, http.StatusBadRequest, "invalid_relation", err.Error())
+		case errors.Is(err, memory.ErrNotFound):
+			writeError(w, http.StatusNotFound, "not_found", "source or target memory not found")
+		case errors.Is(err, memory.ErrForgotten):
+			writeError(w, http.StatusGone, "memory_forgotten",
+				"cannot create relation to a forgotten memory")
+		case errors.Is(err, memory.ErrRelationCycle):
+			writeError(w, http.StatusConflict, "relation_cycle",
+				"relation would create a cycle in the supersedes/corrects graph")
+		case errors.Is(err, memory.ErrCrossWorkspace):
+			writeError(w, http.StatusBadRequest, "cross_workspace",
+				"relations cannot cross workspace boundaries")
+		default:
+			if s.Log != nil {
+				s.Log.Error("memory.create_relation_failed", "workspace_id", ws.ID, "err", err)
+			}
+			writeError(w, http.StatusInternalServerError, "relation_write_failed",
+				"relation could not be created")
+		}
+		return
+	}
+
+	status := http.StatusCreated
+	if !result.Created {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, result.Relation)
+}
+
+func (s *Server) handleListMemoryRelations(w http.ResponseWriter, r *http.Request) {
+	if s.Memory == nil {
+		writeError(w, http.StatusServiceUnavailable, "memory_disabled",
+			"structured memory service not configured")
+		return
+	}
+	id, ok := memoryIDFromRequest(w, r)
+	if !ok {
+		return
+	}
+	direction := strings.TrimSpace(r.URL.Query().Get("direction"))
+	relationType := strings.TrimSpace(r.URL.Query().Get("relation_type"))
+	limit, err := positiveQueryInt(r, "limit", 50, 200)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_limit", err.Error())
+		return
+	}
+
+	tok := r.Context().Value(ctxToken).(*auth.Token)
+	relations, err := s.Memory.ListRelations(r.Context(), memory.ListRelationsQuery{
+		WorkspaceID:  currentWorkspace(r).ID,
+		MemoryID:     id,
+		Direction:    direction,
+		RelationType: relationType,
+		AllowedPaths: tok.Paths,
+		Limit:        limit,
+	})
+	if err != nil {
+		if errors.Is(err, memory.ErrInvalidCommand) {
+			writeError(w, http.StatusBadRequest, "invalid_relation_query", err.Error())
+			return
+		}
+		if s.Log != nil {
+			s.Log.Error("memory.list_relations_failed", "memory_id", id, "err", err)
+		}
+		writeError(w, http.StatusInternalServerError, "relation_list_failed",
+			"relations could not be listed")
+		return
+	}
+	if relations == nil {
+		relations = []memory.Relation{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"relations": relations})
+}

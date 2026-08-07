@@ -271,6 +271,16 @@ func (s *Service) Recall(ctx context.Context, q RecallQuery) ([]RecallHit, error
 		args = append(args, kinds)
 		where = append(where, fmt.Sprintf("m.kind = ANY($%d::text[])", len(args)))
 	}
+	if !q.IncludeSuperseded {
+		where = append(where, `NOT EXISTS (
+			SELECT 1 FROM memory_relations r
+			  JOIN memories sup ON sup.id = r.source_id AND sup.workspace_id = r.workspace_id
+			 WHERE r.workspace_id = m.workspace_id
+			   AND r.target_id = m.id
+			   AND r.relation_type IN ('supersedes', 'corrects')
+			   AND sup.lifecycle_status = 'active'
+		)`)
+	}
 	args = append(args, q.Text)
 	textArg := len(args)
 	args = append(args, q.Limit)

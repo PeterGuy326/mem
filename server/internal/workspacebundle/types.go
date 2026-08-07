@@ -26,8 +26,9 @@ const (
 	ChecksumsPath            = "checksums.sha256"
 	FoldersIndexPath         = "objects/folders.ndjson"
 	FilesIndexPath           = "objects/files.ndjson"
-	MemoriesIndexPath        = "objects/memories.ndjson"
-	MemoryEventsIndexPath    = "objects/memory_events.ndjson"
+	MemoriesIndexPath         = "objects/memories.ndjson"
+	MemoryRelationsIndexPath  = "objects/memory_relations.ndjson"
+	MemoryEventsIndexPath     = "objects/memory_events.ndjson"
 	TasksIndexPath           = "objects/tasks.ndjson"
 	CheckpointsIndexPath     = "objects/checkpoints.ndjson"
 	CheckpointRefsIndexPath  = "objects/checkpoint_refs.ndjson"
@@ -404,6 +405,17 @@ type MemoryRecord struct {
 	UpdatedAt            time.Time       `json:"updated_at"`
 }
 
+// MemoryRelationRecord is the portable projection of one immutable relation
+// edge. Actor identifiers are excluded as target-local.
+type MemoryRelationRecord struct {
+	ID           uuid.UUID `json:"id"`
+	SourceID     uuid.UUID `json:"source_id"`
+	TargetID     uuid.UUID `json:"target_id"`
+	RelationType string    `json:"relation_type"`
+	Reason       string    `json:"reason,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
 // MemoryEventRecord is the portable, non-secret projection of one append-only
 // memory control-plane mutation. Actor user/token IDs are intentionally absent.
 type MemoryEventRecord struct {
@@ -470,6 +482,7 @@ type BundleData struct {
 	Folders            []FolderRecord
 	Files              []FileRecord
 	Memories           []MemoryRecord
+	MemoryRelations    []MemoryRelationRecord
 	MemoryEvents       []MemoryEventRecord
 	Tasks              []TaskRecord
 	Checkpoints        []CheckpointRecord

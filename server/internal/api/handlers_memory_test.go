@@ -91,6 +91,22 @@ func (s *memoryServiceStub) Forget(
 	return s.forgetResult, s.controlErr
 }
 
+func (s *memoryServiceStub) CreateRelation(
+	_ context.Context,
+	_ memory.CreateRelationCommand,
+) (*memory.CreateRelationResult, error) {
+	s.calls++
+	return nil, s.controlErr
+}
+
+func (s *memoryServiceStub) ListRelations(
+	_ context.Context,
+	_ memory.ListRelationsQuery,
+) ([]memory.Relation, error) {
+	s.calls++
+	return nil, s.controlErr
+}
+
 func memoryHandlerContext(req *http.Request, paths []string) (*http.Request, uuid.UUID, uuid.UUID, uuid.UUID) {
 	actorID := uuid.New()
 	ownerID := uuid.New()

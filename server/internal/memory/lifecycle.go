@@ -331,6 +331,9 @@ func (s *Service) applyMutation(ctx context.Context, cmd mutationBase) (*Mutatio
 		if err := redactMemoryEventMetadata(ctx, tx, cmd.workspaceID, cmd.memoryID); err != nil {
 			return nil, err
 		}
+		if err := redactMemoryRelations(ctx, tx, cmd.workspaceID, cmd.memoryID); err != nil {
+			return nil, err
+		}
 	}
 	event, inserted, err := insertMemoryEvent(ctx, tx, cmd, nextVersion, now)
 	if err != nil {
@@ -687,4 +690,22 @@ func uuidString(in *uuid.UUID) string {
 		return ""
 	}
 	return in.String()
+}
+
+// redactMemoryRelations removes actor metadata from relation edges touching a
+// forgotten memory. The structural edges (source_id, target_id, relation_type)
+// are preserved so the DAG remains consistent.
+func redactMemoryRelations(ctx context.Context, tx pgx.Tx, workspaceID, memoryID uuid.UUID) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE memory_relations
+		   SET actor_user_id = NULL,
+		       actor_token_id = NULL,
+		       reason = ''
+		 WHERE workspace_id = $1
+		   AND (source_id = $2 OR target_id = $2)`,
+		workspaceID, memoryID)
+	if err != nil {
+		return fmt.Errorf("redact memory relations: %w", err)
+	}
+	return nil
 }
