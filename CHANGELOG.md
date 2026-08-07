@@ -206,6 +206,8 @@ The project is not yet publishing stable semantic-versioned releases.
 
 ### Fixed
 
+- Make combined file and folder move-plus-rename requests atomic, including
+  validation, final-path conflict handling and destination folder creation.
 - Keep rejected/superseded AI descriptions out of file detail, visual-search
   snippets, and workspace bundle projections; serialize same-file index runs
   and preserve the last usable text embedding when a partial retry produces no

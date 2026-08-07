@@ -444,6 +444,74 @@ func (s *Service) Move(ctx context.Context, userID uuid.UUID, srcPath, dstParent
 	})
 }
 
+// Relocate changes a folder's parent and basename in one transaction. The
+// final path is checked before any folder, descendant, file, or memory path is
+// rewritten.
+func (s *Service) Relocate(
+	ctx context.Context,
+	userID, folderID uuid.UUID,
+	expectedSrcPath, dstParentPath, newName string,
+) error {
+	srcNorm, err := pathx.Normalize(expectedSrcPath)
+	if err != nil {
+		return err
+	}
+	if srcNorm == pathx.Root {
+		return ErrRootOp
+	}
+	dstNorm, err := pathx.Normalize(dstParentPath)
+	if err != nil {
+		return err
+	}
+	if err := pathx.ValidateName(newName); err != nil {
+		return err
+	}
+	if pathx.IsDescendantOrSelf(dstNorm, srcNorm) {
+		return ErrCycle
+	}
+	newPath, err := pathx.Join(dstNorm, newName)
+	if err != nil {
+		return err
+	}
+	return s.withPathMutationTx(ctx, userID, func(tx pgx.Tx) error {
+		src, err := selectFolderByIDTx(ctx, tx, userID, folderID)
+		if err != nil {
+			return err
+		}
+		if src.Path != srcNorm {
+			return ErrNotFound
+		}
+		if newPath == src.Path {
+			return nil
+		}
+		if pathx.IsDescendantOrSelf(dstNorm, src.Path) {
+			return ErrCycle
+		}
+		if conflict, err := selectFolderByPathTx(ctx, tx, userID, newPath); err == nil && conflict != nil {
+			return ErrConflict
+		} else if err != nil && !errors.Is(err, ErrNotFound) {
+			return err
+		}
+
+		var newParentID *uuid.UUID
+		if dstNorm != pathx.Root {
+			parent, err := ensureFolderTx(ctx, tx, userID, dstNorm)
+			if err != nil {
+				return err
+			}
+			newParentID = &parent.ID
+		}
+		containsTaskState, err := containsTaskStateTx(ctx, tx, userID, src.Path, true)
+		if err != nil {
+			return fmt.Errorf("check relocate task checkpoints: %w", err)
+		}
+		if containsTaskState {
+			return ErrContainsTaskState
+		}
+		return rewritePrefixTx(ctx, tx, userID, src.ID, srcNorm, newPath, newParentID)
+	})
+}
+
 // rewritePrefixTx renames `srcID` (and all of its descendant folders + files)
 // from oldPrefix to newPrefix. `newParentID` becomes srcID's new parent_id.
 // Must run inside a tx.
@@ -735,6 +803,20 @@ func selectFolderByPathTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, path
 	row := tx.QueryRow(ctx,
 		`SELECT id, user_id, parent_id, path, name, created_at, updated_at
 		 FROM folders WHERE user_id = $1 AND path = $2`, userID, path)
+	return scanFolder(row)
+}
+
+func selectFolderByIDTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	userID, folderID uuid.UUID,
+) (*Folder, error) {
+	row := tx.QueryRow(ctx,
+		`SELECT id, user_id, parent_id, path, name, created_at, updated_at
+		 FROM folders
+		 WHERE id = $1 AND user_id = $2
+		 FOR UPDATE`,
+		folderID, userID)
 	return scanFolder(row)
 }
 

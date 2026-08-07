@@ -3,6 +3,7 @@ package file
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -201,6 +202,100 @@ func TestFilePathLockingIntegration(t *testing.T) {
 			t.Fatalf("Rename: %v", err)
 		}
 		assertStoredFilePathMatchesFolder(t, ctx, database.Pool, fileID, "/B")
+	})
+
+	t.Run("Relocate validates and commits path with name", func(t *testing.T) {
+		userID, _ := createFileLockTenant(t, ctx, database.Pool, "atomic-relocate")
+		folders := folder.New(database.Pool)
+		source, err := folders.Create(ctx, userID, "/RelocateSource")
+		if err != nil {
+			t.Fatalf("create relocate source: %v", err)
+		}
+		fileID := uuid.New()
+		if _, err := database.Pool.Exec(ctx, `
+			INSERT INTO files (
+				id, user_id, name, path, folder_id, size, sha256, mime,
+				storage_key, tags, index_status
+			)
+			VALUES ($1, $2, 'before.txt', '/RelocateSource', $3, 1, $4,
+			        'text/plain', $5, '{}', 'pending')
+		`,
+			fileID,
+			userID,
+			source.ID,
+			strings.Repeat("c", 64),
+			"workspace-lock/"+fileID.String(),
+		); err != nil {
+			t.Fatalf("insert relocate source file: %v", err)
+		}
+		service := New(database.Pool, &recordingObjectStore{}, folders)
+
+		if _, err := service.Relocate(
+			ctx,
+			userID,
+			fileID,
+			"/RelocateSource",
+			"/CreatedByRejectedRelocate/Nested",
+			"invalid/name",
+		); err == nil {
+			t.Fatal("Relocate accepted an invalid name")
+		}
+		stored, err := service.Get(ctx, userID, fileID)
+		if err != nil {
+			t.Fatalf("load rejected relocation: %v", err)
+		}
+		if stored.Path != "/RelocateSource" || stored.Name != "before.txt" {
+			t.Fatalf("rejected relocation stored path=%q name=%q", stored.Path, stored.Name)
+		}
+		if _, err := folders.Get(ctx, userID, "/CreatedByRejectedRelocate"); !errors.Is(err, folder.ErrNotFound) {
+			t.Fatalf("rejected relocation created destination: err=%v", err)
+		}
+
+		relocated, err := service.Relocate(
+			ctx,
+			userID,
+			fileID,
+			"/RelocateSource",
+			"/RelocateDestination",
+			"after.txt",
+		)
+		if err != nil {
+			t.Fatalf("Relocate: %v", err)
+		}
+		if relocated.Path != "/RelocateDestination" || relocated.Name != "after.txt" {
+			t.Fatalf("relocated path=%q name=%q", relocated.Path, relocated.Name)
+		}
+		assertStoredFilePathMatchesFolder(
+			t,
+			ctx,
+			database.Pool,
+			fileID,
+			"/RelocateDestination",
+		)
+
+		if _, err := service.Move(ctx, userID, fileID, "/MovedAfterAuthorization"); err != nil {
+			t.Fatalf("move after simulated authorization: %v", err)
+		}
+		if _, err := service.Relocate(
+			ctx,
+			userID,
+			fileID,
+			"/RelocateDestination",
+			"/CreatedByStaleRelocate/Nested",
+			"stale.txt",
+		); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("stale-source Relocate = %v, want ErrNotFound", err)
+		}
+		stored, err = service.Get(ctx, userID, fileID)
+		if err != nil {
+			t.Fatalf("load stale-source relocation: %v", err)
+		}
+		if stored.Path != "/MovedAfterAuthorization" || stored.Name != "after.txt" {
+			t.Fatalf("stale-source relocation stored path=%q name=%q", stored.Path, stored.Name)
+		}
+		if _, err := folders.Get(ctx, userID, "/CreatedByStaleRelocate"); !errors.Is(err, folder.ErrNotFound) {
+			t.Fatalf("stale-source relocation created destination: err=%v", err)
+		}
 	})
 }
 

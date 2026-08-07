@@ -1188,17 +1188,27 @@ func (s *Server) handlePatchFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	var (
-		out *file.File
-	)
-	if req.Path != nil {
+	var out *file.File
+	if req.Path != nil && req.Name != nil {
+		out, err = s.File.Relocate(
+			r.Context(),
+			u.ID,
+			id,
+			current.Path,
+			*req.Path,
+			*req.Name,
+		)
+		if err != nil {
+			writeFileMutateError(w, err)
+			return
+		}
+	} else if req.Path != nil {
 		out, err = s.File.Move(r.Context(), u.ID, id, *req.Path)
 		if err != nil {
 			writeFileMutateError(w, err)
 			return
 		}
-	}
-	if req.Name != nil {
+	} else {
 		out, err = s.File.Rename(r.Context(), u.ID, id, *req.Name)
 		if err != nil {
 			writeFileMutateError(w, err)
@@ -1580,20 +1590,25 @@ func (s *Server) handlePatchFolder(w http.ResponseWriter, r *http.Request) {
 	if !requireTokenPath(w, r, destPath) {
 		return
 	}
-	curPath := cur.Path
-	if req.ParentPath != nil {
-		if err := s.Folder.Move(r.Context(), u.ID, curPath, *req.ParentPath); err != nil {
+	if req.ParentPath != nil && req.Name != nil {
+		if err := s.Folder.Relocate(
+			r.Context(),
+			u.ID,
+			id,
+			cur.Path,
+			*req.ParentPath,
+			*req.Name,
+		); err != nil {
 			writeFolderMutateError(w, err)
 			return
 		}
-		curPath, err = pathx.Join(destParent, cur.Name)
-		if err != nil {
+	} else if req.ParentPath != nil {
+		if err := s.Folder.Move(r.Context(), u.ID, cur.Path, *req.ParentPath); err != nil {
 			writeFolderMutateError(w, err)
 			return
 		}
-	}
-	if req.Name != nil {
-		if err := s.Folder.Rename(r.Context(), u.ID, curPath, *req.Name); err != nil {
+	} else {
+		if err := s.Folder.Rename(r.Context(), u.ID, cur.Path, *req.Name); err != nil {
 			writeFolderMutateError(w, err)
 			return
 		}

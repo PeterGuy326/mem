@@ -582,6 +582,62 @@ func (s *Service) Move(ctx context.Context, userID, fileID uuid.UUID, newPath st
 	return s.Get(ctx, userID, fileID)
 }
 
+// Relocate changes a file's parent directory and basename in one transaction.
+// mkdir -p is applied to newPath only after both requested fields validate.
+func (s *Service) Relocate(
+	ctx context.Context,
+	userID, fileID uuid.UUID,
+	expectedPath, newPath, newName string,
+) (*File, error) {
+	expected, err := pathx.Normalize(expectedPath)
+	if err != nil {
+		return nil, err
+	}
+	dest, err := pathx.Normalize(newPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := pathx.ValidateName(newName); err != nil {
+		return nil, err
+	}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := workspacelock.ForContentWriteByOwner(ctx, tx, userID); err != nil {
+		return nil, err
+	}
+	var folderID *uuid.UUID
+	if dest != pathx.Root {
+		folderRecord, err := s.folders.ResolveOrCreateLockedTx(ctx, tx, userID, dest)
+		if err != nil {
+			return nil, fmt.Errorf("mkdir -p: %w", err)
+		}
+		if folderRecord != nil {
+			folderID = &folderRecord.ID
+		}
+	}
+
+	now := time.Now().UTC()
+	tag, err := tx.Exec(ctx,
+		`UPDATE files
+		 SET path = $1, folder_id = $2, name = $3, updated_at = $4
+		 WHERE id = $5 AND user_id = $6 AND path = $7`,
+		dest, folderID, newName, now, fileID, userID, expected)
+	if err != nil {
+		return nil, fmt.Errorf("relocate file: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, ErrNotFound
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return s.Get(ctx, userID, fileID)
+}
+
 // Rename changes the basename of a file (its parent directory is unchanged).
 func (s *Service) Rename(ctx context.Context, userID, fileID uuid.UUID, newName string) (*File, error) {
 	if err := pathx.ValidateName(newName); err != nil {

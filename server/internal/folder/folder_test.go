@@ -231,6 +231,9 @@ func TestMemoryPathLifecycleIntegration(t *testing.T) {
 	svc := New(pool)
 	for _, p := range []string{
 		"/A%_/Child",
+		"/AtomicSource/original/Child",
+		"/AtomicDestination/taken",
+		"/AtomicDestination/original",
 		"/Destination_100%",
 		"/Memory_Only%",
 		"/Task_Only%/Child",
@@ -245,12 +248,14 @@ func TestMemoryPathLifecycleIntegration(t *testing.T) {
 		path   string
 		status string
 	}
+	atomicMemoryID := uuid.New()
 	rows := []memoryRow{
 		{id: uuid.New(), path: "/A%_", status: "active"},
 		{id: uuid.New(), path: "/A%_/Child", status: "archived"},
 		{id: uuid.New(), path: "/Axx/Child", status: "active"},
 		{id: uuid.New(), path: "/A%_suffix", status: "active"},
 		{id: uuid.New(), path: "/Memory_Only%", status: "active"},
+		{id: atomicMemoryID, path: "/AtomicSource/original/Child", status: "active"},
 	}
 	for _, row := range rows {
 		if _, err := pool.Exec(ctx,
@@ -259,6 +264,63 @@ func TestMemoryPathLifecycleIntegration(t *testing.T) {
 			row.id, workspaceID, row.path, row.status); err != nil {
 			t.Fatalf("insert memory %q: %v", row.path, err)
 		}
+	}
+
+	atomicRoot, err := svc.Get(ctx, userID, "/AtomicSource/original")
+	if err != nil {
+		t.Fatalf("load atomic relocation source: %v", err)
+	}
+	if err := svc.Relocate(
+		ctx,
+		userID,
+		atomicRoot.ID,
+		"/AtomicSource/original",
+		"/AtomicDestination",
+		"taken",
+	); !errors.Is(err, ErrConflict) {
+		t.Fatalf("conflicting Relocate = %v, want ErrConflict", err)
+	}
+	if _, err := svc.Get(ctx, userID, "/AtomicSource/original/Child"); err != nil {
+		t.Fatalf("conflicting Relocate changed source: %v", err)
+	}
+	if got := folderTestMemoryPath(t, ctx, pool, atomicMemoryID); got != "/AtomicSource/original/Child" {
+		t.Fatalf("conflicting Relocate changed memory path: %q", got)
+	}
+
+	if err := svc.Relocate(
+		ctx,
+		userID,
+		atomicRoot.ID,
+		"/AtomicSource/original",
+		"/AtomicDestination",
+		"renamed_%",
+	); err != nil {
+		t.Fatalf("Relocate around intermediate-name conflict: %v", err)
+	}
+	if _, err := svc.Get(ctx, userID, "/AtomicDestination/renamed_%/Child"); err != nil {
+		t.Fatalf("relocated literal-segment descendant missing: %v", err)
+	}
+	if _, err := svc.Get(ctx, userID, "/AtomicDestination/original"); err != nil {
+		t.Fatalf("intermediate-name conflict changed: %v", err)
+	}
+	if got := folderTestMemoryPath(t, ctx, pool, atomicMemoryID); got != "/AtomicDestination/renamed_%/Child" {
+		t.Fatalf("relocated memory path = %q", got)
+	}
+	if err := svc.Relocate(
+		ctx,
+		userID,
+		atomicRoot.ID,
+		"/AtomicSource/original",
+		"/CreatedByStaleFolderRelocate/Nested",
+		"stale_%",
+	); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("stale-source folder Relocate = %v, want ErrNotFound", err)
+	}
+	if _, err := svc.Get(ctx, userID, "/AtomicDestination/renamed_%/Child"); err != nil {
+		t.Fatalf("stale-source Relocate changed relocated folder: %v", err)
+	}
+	if _, err := svc.Get(ctx, userID, "/CreatedByStaleFolderRelocate"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("stale-source folder Relocate created destination: err=%v", err)
 	}
 
 	if err := svc.Rename(ctx, userID, "/A%_", "Renamed_%"); err != nil {
@@ -311,6 +373,33 @@ func TestMemoryPathLifecycleIntegration(t *testing.T) {
 		 VALUES ($1, $2, $3)`,
 		workspaceID, "folder-guard-"+uuid.NewString(), "/Task_Only%/Child"); err != nil {
 		t.Fatalf("insert Agent task: %v", err)
+	}
+	taskFolder, err := svc.Get(ctx, userID, "/Task_Only%")
+	if err != nil {
+		t.Fatalf("load task-scoped folder: %v", err)
+	}
+	if err := svc.Relocate(
+		ctx,
+		userID,
+		taskFolder.ID,
+		taskFolder.Path,
+		"/Task_Only%/Child",
+		"cycle",
+	); !errors.Is(err, ErrCycle) {
+		t.Fatalf("cyclic Relocate = %v, want ErrCycle", err)
+	}
+	if err := svc.Relocate(
+		ctx,
+		userID,
+		taskFolder.ID,
+		taskFolder.Path,
+		"/CreatedByBlockedTaskRelocate/Nested",
+		"Task_Moved",
+	); !errors.Is(err, ErrContainsTaskState) {
+		t.Fatalf("Relocate with task checkpoint state = %v, want ErrContainsTaskState", err)
+	}
+	if _, err := svc.Get(ctx, userID, "/CreatedByBlockedTaskRelocate"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("blocked task Relocate created destination: err=%v", err)
 	}
 	if err := svc.Rename(ctx, userID, "/Task_Only%", "Task_Moved"); !errors.Is(err, ErrContainsTaskState) {
 		t.Fatalf("rename with task checkpoint state = %v, want ErrContainsTaskState", err)

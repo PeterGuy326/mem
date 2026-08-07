@@ -196,6 +196,7 @@ Required tests:
 - `TestHandoffPostgres`
 - `TestWorkspaceTransferPostgres`
 - `TestHandoffCrossAgentHTTPIntegration`
+- `TestRelocateHTTPPostgres`
 - `TestMemoryPathLifecycleIntegration`
 - `TestWorkspacePathLockingIntegration`
 - `TestFilePathLockingIntegration`
@@ -385,8 +386,8 @@ Use this table in pull requests and add implementation-specific scenarios:
 | V2 | Worker processing regressions remain hermetic | `make test-worker` | Exit `0`; real-model gate explicitly skipped |
 | V3 | Localization, theme, enrichment, memory, transfer and managed-embedding control surfaces work in a browser | `make test-web` | Typecheck/lint/build, the localization audit, all browser acceptance suites and managed status mapping pass |
 | V4 | High-risk Go paths are race-free | `make test-race` | Exit `0`; no data-race warning |
-| V5 | Fresh schema, rollback and PostgreSQL semantics hold | `make test-integration` | Migration head and seventeen named tests pass, none skipped |
-| V6 | DB concurrency paths are race-free | `make test-integration-race` | The same seventeen tests pass under `-race` |
+| V5 | Fresh schema, rollback and PostgreSQL semantics hold | `make test-integration` | Migration head and eighteen named tests pass, none skipped |
+| V6 | DB concurrency paths are race-free | `make test-integration-race` | The same eighteen tests pass under `-race` |
 | V7 | Real service boundaries agree | `make test-acceptance` | HTTP, CLI and MCP share one isolated service; memory citation/provenance, bounded checkpoint listing, full checkpoint get, lifecycle and forget redaction pass |
 | V8 | Five config shapes and the real adapter preserve the host-neutral MCP contract | `MEM_MCP_CERT_BINARY=... make test-agent-certification` | All fixtures and current-adapter scenarios pass with no skip |
 | V9 | Multilingual visual quality meets the chosen checkpoint | Opt-in command in section 7 | All fixed ranking assertions pass |
