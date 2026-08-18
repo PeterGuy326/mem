@@ -4,7 +4,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-unit}"
-EXPECTED_MIGRATION_HEAD=20
+EXPECTED_MIGRATION_HEAD=23
 MIGRATION_ROLLBACK_TARGET=11
 MODEL_TEXT_CANONICAL_BASE=15
 WORKSPACE_AI_PROFILE_BASE=16
@@ -317,6 +317,7 @@ run_postgres_tests() {
     TestMemoryPostgres
     TestHandoffPostgres
     TestWorkspaceTransferPostgres
+    TestWorkspaceTransferMergeConservativePostgres
     TestHandoffCrossAgentHTTPIntegration
     TestRelocateHTTPPostgres
     TestMemoryPathLifecycleIntegration
@@ -343,7 +344,7 @@ run_postgres_tests() {
     MEM_TEST_DB="$MEM_TEST_DB" go test \
       ${race_flag:+"$race_flag"} \
       -v -count=1 -p 1 -timeout 20m \
-      -run '^(TestMemoryPostgres|TestHandoffPostgres|TestWorkspaceTransferPostgres|TestHandoffCrossAgentHTTPIntegration|TestRelocateHTTPPostgres|TestMemoryPathLifecycleIntegration|TestWorkspacePathLockingIntegration|TestFilePathLockingIntegration|TestAnnotationDecisionIntegration|TestIndexerEnrichmentIntegration|TestRecomputePerson|TestManagedEmbeddingEntitlementPostgres|TestManagedSearchReplayPostgres|TestManagedEmbeddingHTTPAuthorizationPostgres|TestAIProfilePostgres|TestIndexGenerationPostgres|TestManagedAISettlementOutboxPostgres|TestReleasedFileStageRetryPostgres|TestDurableContextPostgres)$' \
+      -run '^(TestMemoryPostgres|TestHandoffPostgres|TestWorkspaceTransferPostgres|TestWorkspaceTransferMergeConservativePostgres|TestHandoffCrossAgentHTTPIntegration|TestRelocateHTTPPostgres|TestMemoryPathLifecycleIntegration|TestWorkspacePathLockingIntegration|TestFilePathLockingIntegration|TestAnnotationDecisionIntegration|TestIndexerEnrichmentIntegration|TestRecomputePerson|TestManagedEmbeddingEntitlementPostgres|TestManagedSearchReplayPostgres|TestManagedEmbeddingHTTPAuthorizationPostgres|TestAIProfilePostgres|TestIndexGenerationPostgres|TestManagedAISettlementOutboxPostgres|TestReleasedFileStageRetryPostgres|TestDurableContextPostgres)$' \
       ./internal/memory \
       ./internal/handoff \
       ./internal/workspacetransfer \

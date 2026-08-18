@@ -772,8 +772,9 @@ func TestWorkspaceCapabilitiesExposeTransferAvailabilityAndPermission(t *testing
 				}
 			}
 			if test.wantFeature {
-				if len(response.WorkspaceRestoreModes) != 1 ||
-					response.WorkspaceRestoreModes[0] != workspacetransfer.RestoreModeFresh {
+				if len(response.WorkspaceRestoreModes) != 2 ||
+					response.WorkspaceRestoreModes[0] != workspacetransfer.RestoreModeFresh ||
+					response.WorkspaceRestoreModes[1] != workspacetransfer.RestoreModeMergeConservative {
 					t.Errorf("restore modes = %v", response.WorkspaceRestoreModes)
 				}
 				if len(response.WorkspaceBundleSchemaVersions) != 2 ||

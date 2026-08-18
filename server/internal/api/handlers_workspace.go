@@ -53,6 +53,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		workspaceRestoreModes = append(
 			workspaceRestoreModes,
 			workspacetransfer.RestoreModeFresh,
+			workspacetransfer.RestoreModeMergeConservative,
 		)
 		workspaceBundleSchemaVersions = append(
 			workspaceBundleSchemaVersions,
