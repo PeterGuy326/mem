@@ -353,6 +353,37 @@ func TestWorkspaceTransferPostgres(t *testing.T) {
 		t.Fatalf("replay=%+v first=%+v puts=%v", replayed, imported, store.puts)
 	}
 
+	// ImportHistory is a read-only projection of the durable ledger: exactly
+	// the one committed target import. Failed imports leave no ledger row and
+	// therefore no history entry.
+	history, err := service.ImportHistory(ctx, targetWorkspace, 0)
+	if err != nil {
+		t.Fatalf("list workspace import history: %v", err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("import history = %+v", history)
+	}
+	historyEntry := history[0]
+	if historyEntry.BundleID != fixture.bundleID ||
+		historyEntry.ArchiveSHA256 != imported.ArchiveSHA256 ||
+		historyEntry.SourceWorkspaceID != sourceWorkspace ||
+		historyEntry.SchemaVersion != workspacebundle.CurrentSchemaVersion ||
+		historyEntry.RestoreMode != RestoreModeFresh ||
+		historyEntry.ResultStatus != ImportStatusSucceeded ||
+		historyEntry.ConflictCount != 0 ||
+		historyEntry.SkippedCount != 0 ||
+		historyEntry.ImportedAt != imported.ImportedAt {
+		t.Fatalf("import history entry = %+v", historyEntry)
+	}
+	failedHistory, err := service.ImportHistory(ctx, failureWorkspace, 0)
+	if err != nil || len(failedHistory) != 0 {
+		t.Fatalf(
+			"failed workspace import history = %+v err=%v",
+			failedHistory,
+			err,
+		)
+	}
+
 	// Exercise the ambiguous-commit verifier against a real pool connection.
 	// A matching durable ledger is success and must preserve uploaded objects.
 	commitErr := errors.New("commit acknowledgement lost")

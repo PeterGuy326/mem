@@ -32,6 +32,11 @@ type workspaceTransferServiceStub struct {
 		context.Context,
 		workspacetransfer.ImportRequest,
 	) (*workspacetransfer.ImportResult, error)
+	importHistory func(
+		context.Context,
+		uuid.UUID,
+		int,
+	) ([]workspacetransfer.ImportHistoryEntry, error)
 }
 
 func (stub *workspaceTransferServiceStub) Export(
@@ -46,6 +51,17 @@ func (stub *workspaceTransferServiceStub) Import(
 	request workspacetransfer.ImportRequest,
 ) (*workspacetransfer.ImportResult, error) {
 	return stub.importBundle(ctx, request)
+}
+
+func (stub *workspaceTransferServiceStub) ImportHistory(
+	ctx context.Context,
+	workspaceID uuid.UUID,
+	limit int,
+) ([]workspacetransfer.ImportHistoryEntry, error) {
+	if stub.importHistory == nil {
+		return nil, workspacetransfer.ErrNotConfigured
+	}
+	return stub.importHistory(ctx, workspaceID, limit)
 }
 
 func TestWorkspaceExportBuffersUntilServiceSuccess(t *testing.T) {
@@ -795,6 +811,234 @@ func TestWorkspaceCapabilitiesExposeTransferAvailabilityAndPermission(t *testing
 			}
 		})
 	}
+}
+
+func TestWorkspaceImportHistoryProjectsLedgerEntries(t *testing.T) {
+	workspaceID := uuid.New()
+	bundleID := uuid.New()
+	sourceWorkspaceID := uuid.New()
+	importedAt := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	var observedWorkspaceID uuid.UUID
+	var observedLimit int
+	server := &Server{WorkspaceTransfer: &workspaceTransferServiceStub{
+		importHistory: func(
+			_ context.Context,
+			targetID uuid.UUID,
+			limit int,
+		) ([]workspacetransfer.ImportHistoryEntry, error) {
+			observedWorkspaceID = targetID
+			observedLimit = limit
+			return []workspacetransfer.ImportHistoryEntry{{
+				BundleID:          bundleID,
+				ArchiveSHA256:     strings.Repeat("a", 64),
+				SourceWorkspaceID: sourceWorkspaceID,
+				SchemaVersion:     2,
+				RestoreMode:       workspacetransfer.RestoreModeFresh,
+				ResultStatus:      workspacetransfer.ImportStatusSucceeded,
+				ConflictCount:     0,
+				SkippedCount:      0,
+				ImportedAt:        importedAt,
+			}}, nil
+		},
+	}}
+	request := workspaceTransferRequest(
+		httptest.NewRequest(http.MethodGet, "/v1/workspaces/current/imports", nil),
+		workspaceID,
+		workspace.RoleOwner,
+		[]string{auth.ScopeAdmin},
+		nil,
+	)
+	recorder := httptest.NewRecorder()
+
+	server.handleWorkspaceImportHistory(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if observedWorkspaceID != workspaceID {
+		t.Fatalf("workspace id = %s, want %s", observedWorkspaceID, workspaceID)
+	}
+	if observedLimit != workspacetransfer.DefaultImportHistoryLimit {
+		t.Fatalf("limit = %d, want default %d", observedLimit, workspacetransfer.DefaultImportHistoryLimit)
+	}
+	var response workspaceImportHistoryResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Count != 1 || len(response.Items) != 1 {
+		t.Fatalf("response = %+v", response)
+	}
+	entry := response.Items[0]
+	if entry.BundleID != bundleID.String() ||
+		entry.ArchiveSHA256 != strings.Repeat("a", 64) ||
+		entry.SourceWorkspaceID != sourceWorkspaceID.String() ||
+		entry.SchemaVersion != 2 ||
+		entry.RestoreMode != workspacetransfer.RestoreModeFresh ||
+		entry.ResultStatus != workspacetransfer.ImportStatusSucceeded ||
+		entry.ConflictCount != 0 ||
+		entry.SkippedCount != 0 ||
+		!entry.ImportedAt.Equal(importedAt) {
+		t.Fatalf("entry = %+v", entry)
+	}
+}
+
+func TestWorkspaceImportHistoryReturnsEmptyListNotNull(t *testing.T) {
+	server := &Server{WorkspaceTransfer: &workspaceTransferServiceStub{
+		importHistory: func(
+			context.Context,
+			uuid.UUID,
+			int,
+		) ([]workspacetransfer.ImportHistoryEntry, error) {
+			return []workspacetransfer.ImportHistoryEntry{}, nil
+		},
+	}}
+	request := workspaceTransferRequest(
+		httptest.NewRequest(http.MethodGet, "/v1/workspaces/current/imports", nil),
+		uuid.New(),
+		workspace.RoleOwner,
+		[]string{auth.ScopeAdmin},
+		nil,
+	)
+	recorder := httptest.NewRecorder()
+
+	server.handleWorkspaceImportHistory(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"items":[]`) {
+		t.Fatalf("body = %s", recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"count":0`) {
+		t.Fatalf("body = %s", recorder.Body.String())
+	}
+}
+
+func TestWorkspaceImportHistoryValidatesLimitBeforeService(t *testing.T) {
+	tests := []struct {
+		name       string
+		path       string
+		wantStatus int
+		wantLimit  int
+	}{
+		{"default", "/v1/workspaces/current/imports", http.StatusOK, 50},
+		{"explicit", "/v1/workspaces/current/imports?limit=7", http.StatusOK, 7},
+		{"upper bound", "/v1/workspaces/current/imports?limit=100", http.StatusOK, 100},
+		{"zero", "/v1/workspaces/current/imports?limit=0", http.StatusBadRequest, 0},
+		{"too large", "/v1/workspaces/current/imports?limit=101", http.StatusBadRequest, 0},
+		{"not a number", "/v1/workspaces/current/imports?limit=abc", http.StatusBadRequest, 0},
+		{"negative", "/v1/workspaces/current/imports?limit=-3", http.StatusBadRequest, 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			called := false
+			var observedLimit int
+			server := &Server{WorkspaceTransfer: &workspaceTransferServiceStub{
+				importHistory: func(
+					_ context.Context,
+					_ uuid.UUID,
+					limit int,
+				) ([]workspacetransfer.ImportHistoryEntry, error) {
+					called = true
+					observedLimit = limit
+					return []workspacetransfer.ImportHistoryEntry{}, nil
+				},
+			}}
+			request := workspaceTransferRequest(
+				httptest.NewRequest(http.MethodGet, test.path, nil),
+				uuid.New(),
+				workspace.RoleOwner,
+				[]string{auth.ScopeAdmin},
+				nil,
+			)
+			recorder := httptest.NewRecorder()
+
+			server.handleWorkspaceImportHistory(recorder, request)
+
+			if recorder.Code != test.wantStatus {
+				t.Fatalf(
+					"status = %d, want %d, body = %s",
+					recorder.Code,
+					test.wantStatus,
+					recorder.Body.String(),
+				)
+			}
+			if test.wantStatus != http.StatusOK {
+				if called {
+					t.Fatal("service called for rejected limit")
+				}
+				if !strings.Contains(recorder.Body.String(), "bad_limit") {
+					t.Fatalf("body = %s", recorder.Body.String())
+				}
+				return
+			}
+			if !called || observedLimit != test.wantLimit {
+				t.Fatalf("called = %t, limit = %d, want %d", called, observedLimit, test.wantLimit)
+			}
+		})
+	}
+}
+
+func TestWorkspaceImportHistoryErrorMapping(t *testing.T) {
+	requestFor := func() *http.Request {
+		return workspaceTransferRequest(
+			httptest.NewRequest(http.MethodGet, "/v1/workspaces/current/imports", nil),
+			uuid.New(),
+			workspace.RoleOwner,
+			[]string{auth.ScopeAdmin},
+			nil,
+		)
+	}
+
+	t.Run("internal error does not leak detail", func(t *testing.T) {
+		server := &Server{WorkspaceTransfer: &workspaceTransferServiceStub{
+			importHistory: func(
+				context.Context,
+				uuid.UUID,
+				int,
+			) ([]workspacetransfer.ImportHistoryEntry, error) {
+				return nil, fmt.Errorf("database password must-not-leak: %w", errors.New("boom"))
+			},
+		}}
+		recorder := httptest.NewRecorder()
+
+		server.handleWorkspaceImportHistory(recorder, requestFor())
+
+		if recorder.Code != http.StatusInternalServerError {
+			t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+		}
+		if !strings.Contains(recorder.Body.String(), "workspace_transfer_failed") {
+			t.Fatalf("body = %s", recorder.Body.String())
+		}
+		if strings.Contains(recorder.Body.String(), "must-not-leak") {
+			t.Fatalf("internal detail leaked: %s", recorder.Body.String())
+		}
+	})
+
+	t.Run("not configured service", func(t *testing.T) {
+		server := &Server{WorkspaceTransfer: &workspaceTransferServiceStub{}}
+		recorder := httptest.NewRecorder()
+
+		server.handleWorkspaceImportHistory(recorder, requestFor())
+
+		if recorder.Code != http.StatusServiceUnavailable {
+			t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+		}
+		if !strings.Contains(recorder.Body.String(), "workspace_transfer_unavailable") {
+			t.Fatalf("body = %s", recorder.Body.String())
+		}
+	})
+
+	t.Run("nil service", func(t *testing.T) {
+		server := &Server{}
+		recorder := httptest.NewRecorder()
+
+		server.handleWorkspaceImportHistory(recorder, requestFor())
+
+		if recorder.Code != http.StatusServiceUnavailable {
+			t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+		}
+	})
 }
 
 func workspaceTransferRequest(

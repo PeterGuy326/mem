@@ -5,8 +5,10 @@ import {
   ArrowLeftRight,
   ArrowUpFromLine,
   CheckCircle2,
+  ChevronDown,
   FileArchive,
   Fingerprint,
+  History,
   Info,
   LockKeyhole,
   RotateCcw,
@@ -18,13 +20,18 @@ import { Button } from '@/components/ui/Button';
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { useWorkspaceExport, useWorkspaceImport } from '@/hooks/useWorkspaceTransfer';
+import {
+  useImportHistory,
+  useWorkspaceExport,
+  useWorkspaceImport,
+} from '@/hooks/useWorkspaceTransfer';
 import { useCapabilities } from '@/hooks/useWorkspace';
 import { useT } from '@/i18n';
-import { formatBytes, formatDateTime } from '@/lib/format';
+import { formatBytes, formatDateTime, truncateMiddle } from '@/lib/format';
 import type {
   Capabilities,
   WorkspaceImportConflict,
+  WorkspaceImportHistoryEntry,
   WorkspaceImportResult,
   WorkspaceObjectCounts,
 } from '@/lib/types';
@@ -624,6 +631,156 @@ function ImportCard({
   );
 }
 
+function ImportHistoryRow({
+  entry,
+  expanded,
+  onToggle,
+}: {
+  entry: WorkspaceImportHistoryEntry;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const { t } = useT();
+  const detailID = React.useId();
+  return (
+    <li className="min-w-0 border-b border-border last:border-b-0" data-testid="workspace-import-history-row">
+      <button
+        type="button"
+        className="flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-bg-inset/60"
+        aria-expanded={expanded}
+        aria-controls={detailID}
+        onClick={onToggle}
+        data-testid="workspace-import-history-toggle"
+      >
+        <CheckCircle2 className="h-4 w-4 flex-none text-success" aria-hidden="true" />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-xs font-medium text-fg">{formatDateTime(entry.imported_at)}</p>
+          <p className="mt-0.5 truncate font-mono text-2xs text-fg-subtle">
+            {truncateMiddle(entry.bundle_id, 28)}
+          </p>
+        </div>
+        <div className="hidden flex-none items-center gap-1.5 sm:flex">
+          <Badge tone="neutral">{t('transfer.history.modeValue', { mode: entry.restore_mode })}</Badge>
+          <Badge tone="success" dot>
+            {t('transfer.history.status.succeeded')}
+          </Badge>
+        </div>
+        <ChevronDown
+          className={`h-4 w-4 flex-none text-fg-subtle transition-transform ${expanded ? 'rotate-180' : ''}`}
+          aria-hidden="true"
+        />
+      </button>
+      {expanded && (
+        <div id={detailID} className="border-t border-border bg-bg-inset/40 px-3 py-3" data-testid="workspace-import-history-detail">
+          <dl className="grid min-w-0 gap-2 text-xs">
+            <div className="min-w-0">
+              <dt className="text-fg-subtle">{t('transfer.history.importedAt')}</dt>
+              <dd className="mt-0.5 text-fg">{formatDateTime(entry.imported_at)}</dd>
+            </div>
+            <div className="min-w-0">
+              <dt className="text-fg-subtle">{t('transfer.import.bundleId')}</dt>
+              <dd className="mt-0.5 break-all font-mono text-fg">{entry.bundle_id}</dd>
+            </div>
+            <div className="min-w-0">
+              <dt className="text-fg-subtle">{t('transfer.import.sourceWorkspace')}</dt>
+              <dd className="mt-0.5 break-all font-mono text-fg-muted">{entry.source_workspace_id}</dd>
+            </div>
+            <div className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-4">
+              <div className="min-w-0">
+                <dt className="text-fg-subtle">{t('transfer.history.schemaVersion')}</dt>
+                <dd className="mt-0.5 font-mono text-fg">v{entry.schema_version}</dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="text-fg-subtle">{t('transfer.history.restoreMode')}</dt>
+                <dd className="mt-0.5 font-mono text-fg">{entry.restore_mode}</dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="text-fg-subtle">{t('transfer.history.conflicts')}</dt>
+                <dd className="mt-0.5 font-mono text-fg">{entry.conflict_count}</dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="text-fg-subtle">{t('transfer.history.skipped')}</dt>
+                <dd className="mt-0.5 font-mono text-fg">{entry.skipped_count}</dd>
+              </div>
+            </div>
+            <div className="min-w-0">
+              <dt className="flex items-center gap-1.5 text-fg-subtle">
+                <Fingerprint className="h-3 w-3" aria-hidden="true" />
+                {t('transfer.history.digest')}
+              </dt>
+              <dd className="mt-0.5 break-all font-mono text-fg-muted">{entry.archive_sha256}</dd>
+            </div>
+          </dl>
+        </div>
+      )}
+    </li>
+  );
+}
+
+function ImportHistoryCard({ workspaceID }: { workspaceID: string }) {
+  const { t } = useT();
+  const history = useImportHistory(workspaceID, true);
+  const [expandedBundleID, setExpandedBundleID] = React.useState<string | null>(null);
+
+  return (
+    <Card className="min-w-0" data-testid="workspace-import-history">
+      <CardHeader className="flex flex-row items-start justify-between gap-3">
+        <div className="min-w-0">
+          <CardTitle>{t('transfer.history.eyebrow')}</CardTitle>
+          <h2 className="mt-1.5 text-lg font-semibold">{t('transfer.history.title')}</h2>
+        </div>
+        <div className="grid h-9 w-9 flex-none place-items-center rounded-md border border-accent/20 bg-accent/10 text-accent">
+          <History className="h-4 w-4" aria-hidden="true" />
+        </div>
+      </CardHeader>
+      <CardBody className="space-y-4">
+        <p className="text-sm leading-relaxed text-fg-muted">{t('transfer.history.description')}</p>
+
+        {history.isLoading && (
+          <div className="space-y-2" role="status" aria-label={t('transfer.history.loading')} data-testid="workspace-import-history-loading">
+            <Skeleton className="h-12 w-full" />
+            <Skeleton className="h-12 w-full" />
+            <Skeleton className="h-12 w-3/4" />
+          </div>
+        )}
+
+        {!history.isLoading && history.error && (
+          <TransferErrorNotice error={history.error} onRetry={() => void history.refetch()} />
+        )}
+
+        {!history.isLoading && !history.error && history.data && history.data.items.length === 0 && (
+          <div className="rounded-md border border-border bg-bg-inset/60 p-4" data-testid="workspace-import-history-empty">
+            <p className="text-sm font-medium text-fg">{t('transfer.history.empty')}</p>
+            <p className="mt-1 text-xs leading-relaxed text-fg-muted">{t('transfer.history.emptyHint')}</p>
+          </div>
+        )}
+
+        {!history.isLoading && !history.error && history.data && history.data.items.length > 0 && (
+          <>
+            <ul className="min-w-0 overflow-hidden rounded-md border border-border bg-bg-panel" data-testid="workspace-import-history-list">
+              {history.data.items.map((entry) => (
+                <ImportHistoryRow
+                  key={`${entry.bundle_id}-${entry.archive_sha256}`}
+                  entry={entry}
+                  expanded={expandedBundleID === entry.bundle_id}
+                  onToggle={() =>
+                    setExpandedBundleID((current) =>
+                      current === entry.bundle_id ? null : entry.bundle_id,
+                    )
+                  }
+                />
+              ))}
+            </ul>
+            <p className="text-2xs leading-relaxed text-fg-subtle">
+              {t('transfer.history.countNote', { count: history.data.count })}
+            </p>
+          </>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
 function WorkspaceTransferSurface({ capabilities }: { capabilities: Capabilities }) {
   const { t } = useT();
   const supportsCurrentExport = advertisedWorkspaceBundleSchema(capabilities) !== null;
@@ -667,6 +824,10 @@ function WorkspaceTransferSurface({ capabilities }: { capabilities: Capabilities
           permitted={capabilities.permissions.workspace_import}
         />
       </div>
+
+      {importSupported && capabilities.permissions.workspace_import && (
+        <ImportHistoryCard workspaceID={capabilities.workspace.id} />
+      )}
     </main>
   );
 }

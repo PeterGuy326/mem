@@ -108,6 +108,13 @@ The project is not yet publishing stable semantic-versioned releases.
 - Resource-bounded workspace export and empty-target `fresh` import across
   API, typed client, CLI and Web, including idempotent import ledger,
   structured/truncated conflicts and failure compensation.
+- Read-only workspace import history: a bounded, paginated
+  `GET /v1/workspaces/current/imports` ledger endpoint (owner/admin,
+  unrestricted-path gated) projecting committed import ledger entries with
+  bundle id, archive SHA-256 digest, schema version, restore mode, result
+  status, conflict/skip counts and import time, plus a reverse-chronological
+  expandable import-history block on the Web Workspace Transfer page with
+  loading/empty/error states and bilingual copy.
 - Web Drive trust surfaces for Tasks, checkpoint/Resume, Memories lifecycle
   control and Workspace Transfer.
 - Real-image visual regression coverage and an opt-in multilingual CLIP

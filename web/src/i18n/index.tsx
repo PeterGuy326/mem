@@ -894,6 +894,30 @@ const dict = {
     zh: '服务端返回了未预期的 API 状态。保留下面的错误代码并在条件恢复后重试。',
     en: 'The server returned an unexpected API status. Keep the error code below and retry when the condition clears.',
   },
+  'transfer.history.eyebrow': { zh: '步骤 03 · 账本', en: 'Step 03 · Ledger' },
+  'transfer.history.title': { zh: '导入历史', en: 'Import history' },
+  'transfer.history.description': {
+    zh: '当前工作区已提交恢复的 bundle 记录，按导入时间倒序排列。展开任意一条可查看来源工作区、协议版本、恢复模式与账本摘要。',
+    en: 'Bundle restores committed into this workspace, newest first. Expand any entry to inspect the source workspace, schema version, restore mode, and ledger digest.',
+  },
+  'transfer.history.loading': { zh: '正在加载导入历史…', en: 'Loading import history…' },
+  'transfer.history.empty': { zh: '还没有导入记录', en: 'No imports recorded yet' },
+  'transfer.history.emptyHint': {
+    zh: '成功提交一次 fresh 恢复后，这里会出现对应的账本条目。失败或存在冲突的导入不会写入账本。',
+    en: 'After a fresh restore commits successfully, its ledger entry appears here. Failed or conflicting imports are never written to the ledger.',
+  },
+  'transfer.history.countNote': {
+    zh: '共 {count} 条已提交的导入记录',
+    en: '{count} committed import record(s)',
+  },
+  'transfer.history.modeValue': { zh: '模式 {mode}', en: 'mode {mode}' },
+  'transfer.history.status.succeeded': { zh: '成功', en: 'Succeeded' },
+  'transfer.history.importedAt': { zh: '导入时间', en: 'Imported at' },
+  'transfer.history.schemaVersion': { zh: 'Bundle 协议版本', en: 'Bundle schema version' },
+  'transfer.history.restoreMode': { zh: '恢复模式', en: 'Restore mode' },
+  'transfer.history.conflicts': { zh: '冲突', en: 'Conflicts' },
+  'transfer.history.skipped': { zh: '跳过', en: 'Skipped' },
+  'transfer.history.digest': { zh: '账本摘要（SHA-256）', en: 'Ledger digest (SHA-256)' },
 
   // ---- capabilities / task handoff gate ----
   'capabilities.failed': {

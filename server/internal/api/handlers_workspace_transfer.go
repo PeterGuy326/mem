@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -296,6 +298,90 @@ func mergeResponse(merge *workspacetransfer.MergeSummary) *workspaceMergeRespons
 		ConflictTotal:      merge.ConflictTotal,
 		ConflictsTruncated: merge.ConflictsTruncated,
 	}
+}
+
+// handleWorkspaceImportHistory lists committed bundle imports for the current
+// workspace from the workspace_imports idempotency ledger, newest first. It is
+// a read-only projection of committed import rows; failed or aborted imports
+// leave no ledger row by design.
+func (s *Server) handleWorkspaceImportHistory(w http.ResponseWriter, r *http.Request) {
+	if s.WorkspaceTransfer == nil {
+		writeError(
+			w,
+			http.StatusServiceUnavailable,
+			"workspace_transfer_unavailable",
+			"workspace transfer is not configured",
+		)
+		return
+	}
+	limit := workspacetransfer.DefaultImportHistoryLimit
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > workspacetransfer.MaxImportHistoryLimit {
+			writeError(
+				w,
+				http.StatusBadRequest,
+				"bad_limit",
+				fmt.Sprintf("limit must be between 1 and %d", workspacetransfer.MaxImportHistoryLimit),
+			)
+			return
+		}
+		limit = parsed
+	}
+	entries, err := s.WorkspaceTransfer.ImportHistory(
+		r.Context(),
+		currentWorkspace(r).ID,
+		limit,
+	)
+	if err != nil {
+		if errors.Is(err, workspacetransfer.ErrNotConfigured) {
+			writeError(
+				w,
+				http.StatusServiceUnavailable,
+				"workspace_transfer_unavailable",
+				"workspace transfer is not configured",
+			)
+			return
+		}
+		s.logWorkspaceTransferError("list workspace import history", err)
+		writeWorkspaceTransferInternalError(w)
+		return
+	}
+	items := make([]workspaceImportHistoryEntryResponse, 0, len(entries))
+	for _, entry := range entries {
+		items = append(items, workspaceImportHistoryEntryResponse{
+			BundleID:          entry.BundleID.String(),
+			ArchiveSHA256:     entry.ArchiveSHA256,
+			SourceWorkspaceID: entry.SourceWorkspaceID.String(),
+			SchemaVersion:     entry.SchemaVersion,
+			RestoreMode:       entry.RestoreMode,
+			ResultStatus:      entry.ResultStatus,
+			ConflictCount:     entry.ConflictCount,
+			SkippedCount:      entry.SkippedCount,
+			ImportedAt:        entry.ImportedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, workspaceImportHistoryResponse{
+		Items: items,
+		Count: len(items),
+	})
+}
+
+type workspaceImportHistoryEntryResponse struct {
+	BundleID          string    `json:"bundle_id"`
+	ArchiveSHA256     string    `json:"archive_sha256"`
+	SourceWorkspaceID string    `json:"source_workspace_id"`
+	SchemaVersion     int       `json:"schema_version"`
+	RestoreMode       string    `json:"restore_mode"`
+	ResultStatus      string    `json:"result_status"`
+	ConflictCount     int       `json:"conflict_count"`
+	SkippedCount      int       `json:"skipped_count"`
+	ImportedAt        time.Time `json:"imported_at"`
+}
+
+type workspaceImportHistoryResponse struct {
+	Items []workspaceImportHistoryEntryResponse `json:"items"`
+	Count int                                   `json:"count"`
 }
 
 func workspaceCountsResponse(counts workspacebundle.ObjectCounts) workspaceObjectCountsResponse {

@@ -242,7 +242,7 @@ export interface Capabilities {
 
 // ---- Portable workspace transfer ----
 
-export type WorkspaceRestoreMode = 'fresh';
+export type WorkspaceRestoreMode = 'fresh' | 'merge_conservative';
 
 export interface WorkspaceObjectCounts {
   folders: number;
@@ -279,6 +279,29 @@ export interface WorkspaceImportConflictResponse {
   /** Confirmed lower bound when the server caps conflict enumeration. */
   total?: number;
   truncated?: boolean;
+}
+
+/**
+ * One committed bundle import from the workspace_imports ledger. Only fully
+ * committed fresh imports are ever recorded, so `result_status` is always
+ * `succeeded` and the conflict/skip counts are always zero; failed imports
+ * leave no ledger row.
+ */
+export interface WorkspaceImportHistoryEntry {
+  bundle_id: string;
+  archive_sha256: string;
+  source_workspace_id: string;
+  schema_version: number;
+  restore_mode: WorkspaceRestoreMode;
+  result_status: 'succeeded';
+  conflict_count: number;
+  skipped_count: number;
+  imported_at: string;
+}
+
+export interface WorkspaceImportHistory {
+  items: WorkspaceImportHistoryEntry[];
+  count: number;
 }
 
 // ---- Structured Agent memory control plane ----

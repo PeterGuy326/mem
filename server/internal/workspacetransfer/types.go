@@ -114,3 +114,24 @@ type MergeSummary struct {
 	ConflictTotal      int
 	ConflictsTruncated bool
 }
+
+// ImportStatusSucceeded is the only status recorded in the workspace_imports
+// ledger. Fresh imports commit atomically: any conflict aborts the whole
+// transaction, so a ledger row always represents a complete, successful
+// restore with zero conflicts and zero skipped objects. Failed imports never
+// leave a ledger row.
+const ImportStatusSucceeded = "succeeded"
+
+// ImportHistoryEntry is one committed bundle import from the
+// workspace_imports idempotency ledger, projected for read-only listing.
+type ImportHistoryEntry struct {
+	BundleID          uuid.UUID
+	ArchiveSHA256     string
+	SourceWorkspaceID uuid.UUID
+	SchemaVersion     int
+	RestoreMode       string
+	ResultStatus      string
+	ConflictCount     int
+	SkippedCount      int
+	ImportedAt        time.Time
+}
