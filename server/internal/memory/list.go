@@ -128,6 +128,15 @@ func (s *Service) List(ctx context.Context, q ListQuery) (*ListResult, error) {
 			m.content_sha256,
 			m.lifecycle_status,
 			m.state_version,
+			EXISTS (
+				SELECT 1 FROM memory_relations r
+				  JOIN memories sup ON sup.id = r.source_id
+				                   AND sup.workspace_id = r.workspace_id
+				 WHERE r.workspace_id = m.workspace_id
+				   AND r.target_id = m.id
+				   AND r.relation_type IN ('supersedes', 'corrects')
+				   AND sup.lifecycle_status = 'active'
+			),
 			m.pinned_at,
 			m.useful_count,
 			m.not_useful_count,
@@ -166,6 +175,7 @@ func (s *Service) List(ctx context.Context, q ListQuery) (*ListResult, error) {
 			&summary.ContentSHA256,
 			&summary.LifecycleStatus,
 			&summary.StateVersion,
+			&summary.Superseded,
 			&summary.PinnedAt,
 			&summary.UsefulCount,
 			&summary.NotUsefulCount,

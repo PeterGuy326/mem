@@ -134,10 +134,16 @@ func (s *Service) CreateRelation(ctx context.Context, cmd CreateRelationCommand)
 	// Verify both memories exist in the same workspace and are path-authorized.
 	srcMem, err := s.loadMemoryInTx(ctx, tx, cmd.WorkspaceID, cmd.SourceID, allowed)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("source memory: %w", ErrNotFound)
+		}
 		return nil, fmt.Errorf("source memory: %w", err)
 	}
 	tgtMem, err := s.loadMemoryInTx(ctx, tx, cmd.WorkspaceID, cmd.TargetID, allowed)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("target memory: %w", ErrNotFound)
+		}
 		return nil, fmt.Errorf("target memory: %w", err)
 	}
 
@@ -248,14 +254,40 @@ func (s *Service) ListRelations(ctx context.Context, q ListRelationsQuery) ([]Re
 		q.Limit = 200
 	}
 
+	allowed, err := normalizeAllowedPaths(q.AllowedPaths)
+	if err != nil {
+		return nil, err
+	}
+
+	// The anchor memory must exist, be visible under the caller's allowed
+	// paths, and not be forgotten — mirroring Get — so listing relations never
+	// leaks the existence of a memory the caller cannot read.
 	args := []any{q.WorkspaceID, q.MemoryID}
+	where := []string{"m.workspace_id = $1", "m.id = $2"}
+	args, where = appendPathFilters(args, where, "m.path", "/", allowed)
+	var anchorStatus string
+	err = s.pool.QueryRow(ctx, `
+		SELECT m.lifecycle_status
+		  FROM memories m
+		 WHERE `+strings.Join(where, " AND "), args...).Scan(&anchorStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list relations: load anchor: %w", err)
+	}
+	if anchorStatus == StatusForgotten {
+		return nil, ErrForgotten
+	}
+
+	args = []any{q.WorkspaceID, q.MemoryID}
 	var dirColumn string
 	if direction == "source" {
 		dirColumn = "source_id"
 	} else {
 		dirColumn = "target_id"
 	}
-	where := []string{
+	where = []string{
 		"r.workspace_id = $1",
 		fmt.Sprintf("r.%s = $2", dirColumn),
 	}
@@ -373,21 +405,24 @@ func (s *Service) loadMemoryInTx(ctx context.Context, tx pgx.Tx, workspaceID, me
 }
 
 // wouldCycle checks whether adding source -> target would create a cycle in the
-// supersedes/corrects DAG. It traverses forward from target to see if source
-// is reachable.
+// supersedes/corrects DAG. The new edge closes a cycle exactly when target
+// already supersedes source through existing edges, so it traverses forward
+// from target and looks for source. The exact edge being written is excluded
+// so an idempotent replay of an existing edge is not reported as a cycle.
 func (s *Service) wouldCycle(ctx context.Context, tx pgx.Tx, workspaceID, sourceID, targetID uuid.UUID) (bool, error) {
-	// BFS from target following source edges: if we ever reach sourceID, there
-	// is a cycle.
+	// BFS from target following supersedes/corrects edges in their forward
+	// direction: if we ever reach sourceID, there is a cycle.
 	var found bool
 	err := tx.QueryRow(ctx, `
 		WITH RECURSIVE chain(id) AS (
 			SELECT $3::uuid
 			UNION
-			SELECT r.source_id
+			SELECT r.target_id
 			  FROM memory_relations r
-			  JOIN chain c ON c.id = r.target_id
+			  JOIN chain c ON c.id = r.source_id
 			 WHERE r.workspace_id = $1
 			   AND r.relation_type IN ('supersedes', 'corrects')
+			   AND NOT (r.source_id = $2 AND r.target_id = $3)
 		)
 		SELECT EXISTS(SELECT 1 FROM chain WHERE id = $2)`,
 		workspaceID, sourceID, targetID,

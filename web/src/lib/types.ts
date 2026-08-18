@@ -372,6 +372,8 @@ export interface AgentMemorySummary {
   content_sha256: string;
   lifecycle_status: MemoryLifecycle;
   state_version: number;
+  /** True when an active memory supersedes or corrects this one. */
+  superseded: boolean;
   pinned: boolean;
   pinned_at?: string | null;
   useful_count: number;
@@ -434,6 +436,32 @@ export interface MemoryForgetResponse {
   forgotten_at?: string;
   event: MemoryEvent;
   replayed: boolean;
+}
+
+/** Immutable memory-to-memory edge types. */
+export type MemoryRelationType = 'supersedes' | 'corrects' | 'occurrence_of';
+
+/** One immutable relation edge from `GET/POST /v1/memory-relations`. */
+export interface MemoryRelation {
+  id: string;
+  workspace_id: string;
+  source_id: string;
+  target_id: string;
+  relation_type: MemoryRelationType;
+  actor_user_id?: string;
+  reason?: string;
+  created_at: string;
+}
+
+export interface ListMemoryRelationsResponse {
+  relations: MemoryRelation[];
+}
+
+export interface CreateMemoryRelationRequest {
+  source_id: string;
+  target_id: string;
+  relation_type: MemoryRelationType;
+  reason?: string;
 }
 
 // ---- Portable Agent handoff v1 ----

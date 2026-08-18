@@ -9,6 +9,18 @@ The project is not yet publishing stable semantic-versioned releases.
 
 ### Added
 
+- Web UI for the immutable memory correction/supersede relations landed in
+  #90: memory list rows carry a server-derived `superseded` marker, detail
+  and expanded ledger views show a bidirectional relations panel with peer
+  resolution that degrades gracefully for unreadable peers, and a dialog
+  creates `supersedes`/`corrects` edges against listed or manually entered
+  peers with cache invalidation across lists, details, and relation panels.
+  Relation listing now enforces anchor visibility (path authorization,
+  not-found, and forgotten semantics mirroring `Get`), cycle detection
+  traverses the supersedes/corrects DAG forward and treats idempotent
+  replays as non-cycles, and bilingual `memories.relations.*` copy plus
+  deterministic mock fixtures and component tests cover the panel's
+  loaded/empty/error states.
 - Version-pinned scoped durable-context contract (`durable-context.v1`,
   mem#70 REQ-001): explicit workspace-scoped recall grants with audit
   retention and idempotent soft revoke, read-only recall/get endpoints and a

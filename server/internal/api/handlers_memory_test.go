@@ -19,22 +19,26 @@ import (
 )
 
 type memoryServiceStub struct {
-	command          memory.Command
-	query            memory.Query
-	listQuery        memory.ListQuery
-	feedbackCommand  memory.FeedbackCommand
-	lifecycleCommand memory.LifecycleCommand
-	forgetCommand    memory.ForgetCommand
-	result           *memory.RememberResult
-	record           *memory.Memory
-	listResult       *memory.ListResult
-	mutationResult   *memory.MutationResult
-	forgetResult     *memory.ForgetResult
-	writeErr         error
-	readErr          error
-	listErr          error
-	controlErr       error
-	calls            int
+	command               memory.Command
+	query                 memory.Query
+	listQuery             memory.ListQuery
+	feedbackCommand       memory.FeedbackCommand
+	lifecycleCommand      memory.LifecycleCommand
+	forgetCommand         memory.ForgetCommand
+	createRelationCommand memory.CreateRelationCommand
+	listRelationsQuery    memory.ListRelationsQuery
+	result                *memory.RememberResult
+	record                *memory.Memory
+	listResult            *memory.ListResult
+	mutationResult        *memory.MutationResult
+	forgetResult          *memory.ForgetResult
+	relationResult        *memory.CreateRelationResult
+	relations             []memory.Relation
+	writeErr              error
+	readErr               error
+	listErr               error
+	controlErr            error
+	calls                 int
 }
 
 func (s *memoryServiceStub) Remember(_ context.Context, cmd memory.Command) (*memory.RememberResult, error) {
@@ -93,18 +97,20 @@ func (s *memoryServiceStub) Forget(
 
 func (s *memoryServiceStub) CreateRelation(
 	_ context.Context,
-	_ memory.CreateRelationCommand,
+	cmd memory.CreateRelationCommand,
 ) (*memory.CreateRelationResult, error) {
 	s.calls++
-	return nil, s.controlErr
+	s.createRelationCommand = cmd
+	return s.relationResult, s.controlErr
 }
 
 func (s *memoryServiceStub) ListRelations(
 	_ context.Context,
-	_ memory.ListRelationsQuery,
+	q memory.ListRelationsQuery,
 ) ([]memory.Relation, error) {
 	s.calls++
-	return nil, s.controlErr
+	s.listRelationsQuery = q
+	return s.relations, s.controlErr
 }
 
 func memoryHandlerContext(req *http.Request, paths []string) (*http.Request, uuid.UUID, uuid.UUID, uuid.UUID) {
@@ -687,5 +693,251 @@ func TestHandleRememberRejectsMalformedRequestBeforeService(t *testing.T) {
 				t.Fatalf("status=%d calls=%d body=%s", rec.Code, stub.calls, rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestHandleCreateMemoryRelationPersistsAuthenticatedEdge(t *testing.T) {
+	sourceID := uuid.New()
+	targetID := uuid.New()
+	stub := &memoryServiceStub{relationResult: &memory.CreateRelationResult{
+		Relation: memory.Relation{
+			ID:           uuid.New(),
+			SourceID:     sourceID,
+			TargetID:     targetID,
+			RelationType: memory.RelSupersedes,
+		},
+		Created: true,
+	}}
+	server := &Server{Memory: stub}
+	req := httptest.NewRequest(http.MethodPost, "/v1/memory-relations", strings.NewReader(
+		`{"source_id":"`+sourceID.String()+`",`+
+			`"target_id":"`+targetID.String()+`",`+
+			`"relation_type":"supersedes",`+
+			`"reason":"decision updated"}`))
+	req, actorID, tokenID, workspaceID := memoryHandlerContext(req, []string{"/Projects"})
+	rec := httptest.NewRecorder()
+
+	server.handleCreateMemoryRelation(rec, req)
+
+	if rec.Code != http.StatusCreated ||
+		!strings.Contains(rec.Body.String(), `"relation_type":"supersedes"`) {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	cmd := stub.createRelationCommand
+	if cmd.WorkspaceID != workspaceID || cmd.SourceID != sourceID || cmd.TargetID != targetID ||
+		cmd.RelationType != "supersedes" || cmd.Reason != "decision updated" {
+		t.Fatalf("create relation command = %+v", cmd)
+	}
+	if cmd.ActorUserID == nil || *cmd.ActorUserID != actorID ||
+		cmd.ActorTokenID == nil || *cmd.ActorTokenID != tokenID {
+		t.Fatalf("create relation actor = %+v", cmd)
+	}
+	if len(cmd.AllowedPaths) != 1 || cmd.AllowedPaths[0] != "/Projects" {
+		t.Fatalf("create relation allowed paths = %#v", cmd.AllowedPaths)
+	}
+}
+
+func TestHandleCreateMemoryRelationReplayUsesOK(t *testing.T) {
+	stub := &memoryServiceStub{relationResult: &memory.CreateRelationResult{
+		Relation: memory.Relation{
+			ID:           uuid.New(),
+			SourceID:     uuid.New(),
+			TargetID:     uuid.New(),
+			RelationType: memory.RelCorrects,
+		},
+		Created: false,
+	}}
+	server := &Server{Memory: stub}
+	req := httptest.NewRequest(http.MethodPost, "/v1/memory-relations", strings.NewReader(
+		`{"source_id":"`+stub.relationResult.Relation.SourceID.String()+`",`+
+			`"target_id":"`+stub.relationResult.Relation.TargetID.String()+`",`+
+			`"relation_type":"corrects"}`))
+	req, _, _, _ = memoryHandlerContext(req, nil)
+	rec := httptest.NewRecorder()
+
+	server.handleCreateMemoryRelation(rec, req)
+
+	if rec.Code != http.StatusOK ||
+		!strings.Contains(rec.Body.String(), `"relation_type":"corrects"`) {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleCreateMemoryRelationRejectsMalformedIDsBeforeService(t *testing.T) {
+	validID := uuid.New()
+	tests := []struct {
+		name string
+		body string
+		text string
+	}{
+		{
+			name: "bad source",
+			body: `{"source_id":"not-a-uuid","target_id":"` + validID.String() +
+				`","relation_type":"supersedes"}`,
+			text: "bad_source_id",
+		},
+		{
+			name: "bad target",
+			body: `{"source_id":"` + validID.String() +
+				`","target_id":"not-a-uuid","relation_type":"supersedes"}`,
+			text: "bad_target_id",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &memoryServiceStub{}
+			server := &Server{Memory: stub}
+			req := httptest.NewRequest(http.MethodPost, "/v1/memory-relations", strings.NewReader(tc.body))
+			req, _, _, _ = memoryHandlerContext(req, nil)
+			rec := httptest.NewRecorder()
+
+			server.handleCreateMemoryRelation(rec, req)
+
+			if rec.Code != http.StatusBadRequest || stub.calls != 0 ||
+				!strings.Contains(rec.Body.String(), tc.text) {
+				t.Fatalf("status=%d calls=%d body=%s", rec.Code, stub.calls, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestHandleCreateMemoryRelationMapsServiceErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		code int
+		text string
+	}{
+		{name: "invalid", err: memory.ErrInvalidCommand, code: 400, text: "invalid_relation"},
+		{name: "hidden", err: memory.ErrNotFound, code: 404, text: "not_found"},
+		{name: "forgotten", err: memory.ErrForgotten, code: 410, text: "memory_forgotten"},
+		{name: "cycle", err: memory.ErrRelationCycle, code: 409, text: "relation_cycle"},
+		{name: "cross workspace", err: memory.ErrCrossWorkspace, code: 400, text: "cross_workspace"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &memoryServiceStub{controlErr: tc.err}
+			server := &Server{Memory: stub}
+			req := httptest.NewRequest(http.MethodPost, "/v1/memory-relations", strings.NewReader(
+				`{"source_id":"`+uuid.NewString()+`",`+
+					`"target_id":"`+uuid.NewString()+`",`+
+					`"relation_type":"supersedes"}`))
+			req, _, _, _ = memoryHandlerContext(req, nil)
+			rec := httptest.NewRecorder()
+
+			server.handleCreateMemoryRelation(rec, req)
+
+			if rec.Code != tc.code || !strings.Contains(rec.Body.String(), tc.text) {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestHandleListMemoryRelationsPassesFilters(t *testing.T) {
+	memoryID := uuid.New()
+	stub := &memoryServiceStub{relations: []memory.Relation{{
+		ID:           uuid.New(),
+		SourceID:     uuid.New(),
+		TargetID:     memoryID,
+		RelationType: memory.RelCorrects,
+	}}}
+	server := &Server{Memory: stub}
+	req := memoryRouteRequest(
+		http.MethodGet,
+		"/v1/memories/"+memoryID.String()+"/relations?direction=target&relation_type=corrects&limit=5",
+		memoryID,
+		"",
+	)
+	req, _, _, workspaceID := memoryHandlerContext(req, []string{"/Work"})
+	rec := httptest.NewRecorder()
+
+	server.handleListMemoryRelations(rec, req)
+
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"relations":[`) {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	q := stub.listRelationsQuery
+	if q.WorkspaceID != workspaceID || q.MemoryID != memoryID ||
+		q.Direction != "target" || q.RelationType != "corrects" || q.Limit != 5 {
+		t.Fatalf("list relations query = %+v", q)
+	}
+	if len(q.AllowedPaths) != 1 || q.AllowedPaths[0] != "/Work" {
+		t.Fatalf("list relations allowed paths = %#v", q.AllowedPaths)
+	}
+}
+
+func TestHandleListMemoryRelationsReturnsEmptyArray(t *testing.T) {
+	memoryID := uuid.New()
+	stub := &memoryServiceStub{}
+	server := &Server{Memory: stub}
+	req := memoryRouteRequest(
+		http.MethodGet,
+		"/v1/memories/"+memoryID.String()+"/relations",
+		memoryID,
+		"",
+	)
+	req, _, _, _ = memoryHandlerContext(req, nil)
+	rec := httptest.NewRecorder()
+
+	server.handleListMemoryRelations(rec, req)
+
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"relations":[]`) {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleListMemoryRelationsMapsServiceErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		code int
+		text string
+	}{
+		{name: "invalid", err: memory.ErrInvalidCommand, code: 400, text: "invalid_relation_query"},
+		{name: "hidden", err: memory.ErrNotFound, code: 404, text: "not_found"},
+		{name: "forgotten", err: memory.ErrForgotten, code: 410, text: "memory_forgotten"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			memoryID := uuid.New()
+			stub := &memoryServiceStub{controlErr: tc.err}
+			server := &Server{Memory: stub}
+			req := memoryRouteRequest(
+				http.MethodGet,
+				"/v1/memories/"+memoryID.String()+"/relations",
+				memoryID,
+				"",
+			)
+			req, _, _, _ = memoryHandlerContext(req, nil)
+			rec := httptest.NewRecorder()
+
+			server.handleListMemoryRelations(rec, req)
+
+			if rec.Code != tc.code || !strings.Contains(rec.Body.String(), tc.text) {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestHandleListMemoryRelationsRejectsBadLimit(t *testing.T) {
+	memoryID := uuid.New()
+	stub := &memoryServiceStub{}
+	server := &Server{Memory: stub}
+	req := memoryRouteRequest(
+		http.MethodGet,
+		"/v1/memories/"+memoryID.String()+"/relations?limit=0",
+		memoryID,
+		"",
+	)
+	req, _, _, _ = memoryHandlerContext(req, nil)
+	rec := httptest.NewRecorder()
+
+	server.handleListMemoryRelations(rec, req)
+
+	if rec.Code != http.StatusBadRequest || stub.calls != 0 ||
+		!strings.Contains(rec.Body.String(), "bad_limit") {
+		t.Fatalf("status=%d calls=%d body=%s", rec.Code, stub.calls, rec.Body.String())
 	}
 }

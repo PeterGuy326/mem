@@ -165,6 +165,23 @@ export const MEMORY_FIXTURES: AgentMemory[] = [
     lifecycle_status: 'active',
     created_at: '2026-07-19T06:00:00Z',
   }),
+  memory({
+    id: '30000000-0000-4000-8000-000000000007',
+    kind: 'decision',
+    content:
+      '产品边界升级：mem 的 Context Pack 附带证据强度标注与引用指针；旧版边界决策与任务状态由本条记忆取代。',
+    path: '/Projects/mem',
+    event_at: '2026-07-29T08:45:00Z',
+    source_type: 'agent',
+    source_ref: 'codex://thread/mem-direction-v2',
+    producer_agent: 'codex',
+    producer_session: 'session-20260729',
+    producer_task: 'memory-plane',
+    lifecycle_status: 'active',
+    created_at: '2026-07-29T08:45:00Z',
+    attributes: { decision_scope: 'product-boundary', revision: 2 },
+  }),
 ];
 
 export const MOCK_WORKSPACE_ID = WORKSPACE_ID;
+export const MOCK_MEMORY_USER_ID = USER_ID;
