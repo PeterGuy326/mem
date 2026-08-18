@@ -235,6 +235,8 @@ export interface Capabilities {
     provider_modify: boolean;
     workspace_export: boolean;
     workspace_import: boolean;
+    /** Admin-only permissions surface; absent on older servers. */
+    permissions_manage?: boolean;
   };
 }
 

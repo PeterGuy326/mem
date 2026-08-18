@@ -38,7 +38,7 @@ type durableContextStub struct {
 	recallQuery  durablecontext.RecallQuery
 	getQuery     durablecontext.GetQuery
 	grant        *durablecontext.Grant
-	grants       []durablecontext.Grant
+	grantViews   []durablecontext.GrantView
 	recallResult *durablecontext.RecallResult
 	hit          *durablecontext.RecallHit
 	err          error
@@ -63,13 +63,13 @@ func (s *durableContextStub) Revoke(
 	return s.grant, s.err
 }
 
-func (s *durableContextStub) ListGrants(
+func (s *durableContextStub) ListGrantViews(
 	_ context.Context,
 	q durablecontext.ListGrantsQuery,
-) ([]durablecontext.Grant, error) {
+) ([]durablecontext.GrantView, error) {
 	s.calls++
 	s.listQuery = q
-	return s.grants, s.err
+	return s.grantViews, s.err
 }
 
 func (s *durableContextStub) Recall(
@@ -329,7 +329,12 @@ func TestHandleDurableContextGrantLifecycle(t *testing.T) {
 	})
 
 	t.Run("list passes principal filter", func(t *testing.T) {
-		stub := &durableContextStub{grants: []durablecontext.Grant{*grant}}
+		view := durablecontext.GrantView{
+			Grant:        *grant,
+			MemoryStatus: memory.StatusActive,
+			Status:       durablecontext.GrantStatusActive,
+		}
+		stub := &durableContextStub{grantViews: []durablecontext.GrantView{view}}
 		server := &Server{DurableContext: stub}
 		req := httptest.NewRequest(http.MethodGet,
 			"/v1/durable-context/grants?principal=alice&limit=10", nil)
@@ -345,13 +350,20 @@ func TestHandleDurableContextGrantLifecycle(t *testing.T) {
 			t.Fatalf("list query = %+v", stub.listQuery)
 		}
 		var page struct {
-			Grants []durablecontext.Grant `json:"grants"`
+			Grants []durablecontext.GrantView `json:"grants"`
 		}
 		if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
 			t.Fatal(err)
 		}
 		if len(page.Grants) != 1 || page.Grants[0].ID != grantID {
 			t.Fatalf("grants = %+v", page.Grants)
+		}
+		if page.Grants[0].Status != durablecontext.GrantStatusActive ||
+			page.Grants[0].MemoryStatus != memory.StatusActive {
+			t.Fatalf("grant view annotation = %+v", page.Grants[0])
+		}
+		if strings.Contains(rec.Body.String(), "granted_by_token_id") {
+			t.Fatalf("token identifier leaked: %s", rec.Body.String())
 		}
 	})
 }

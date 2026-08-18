@@ -14,6 +14,7 @@ import {
   ScrollText,
   Settings,
   Search,
+  ShieldCheck,
   Sun,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
@@ -65,6 +66,14 @@ export function TopBar({ children }: { children?: React.ReactNode }) {
       match: '/transfer',
     });
     items.push(baseNavItems[1]!);
+    if (capabilities.data?.permissions.permissions_manage) {
+      items.push({
+        to: '/permissions',
+        labelKey: 'permissions.nav',
+        icon: ShieldCheck,
+        match: '/permissions',
+      });
+    }
     return items;
   }, [capabilities.data]);
 

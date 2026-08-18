@@ -136,6 +136,18 @@ The project is not yet publishing stable semantic-versioned releases.
 - Go and Python coverage artifacts plus verified Go, Python, and Web build
   artifacts.
 - Checked-in Go and Python protobuf stubs for reproducible fresh-clone builds.
+- Additive durable-context grant allowlist view fields:
+  `GET /v1/durable-context/grants` now returns each grant's `memory_status`
+  plus a derived `status` (`active`/`revoked`/`superseded`/`forgotten`,
+  revocation wins over later memory lifecycle changes), and capabilities
+  expose a `permissions_manage` flag for the admin scope. Grant rows, query
+  semantics, and the idempotent soft-revoke response are unchanged.
+- Admin-gated Permissions page in the Web UI: issued agent tokens and browser
+  sessions with scopes, path restriction, creation/last-used timestamps and
+  revoke; durable-context recall grants with principal, workspace, lifecycle
+  status and grant/revoke audit, revocable through the existing idempotent
+  soft revoke; confirmation dialogs for destructive revokes and complete
+  bilingual loading/empty/error/forbidden states.
 
 ### Changed
 

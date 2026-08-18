@@ -911,6 +911,86 @@ const dict = {
     en: 'The current token lacks read permission for tasks and checkpoints.',
   },
 
+  // ---- permissions management ----
+  'permissions.nav': { zh: '权限', en: 'Permissions' },
+  'permissions.title': { zh: '权限管理', en: 'Permissions' },
+  'permissions.description': {
+    zh: '查看并控制谁能访问当前工作区：已签发的访问令牌，以及 durable-context 记忆召回授权。',
+    en: 'See and control who can access this workspace: issued access tokens and durable-context memory recall grants.',
+  },
+  'permissions.refresh': { zh: '刷新', en: 'Refresh' },
+  'permissions.forbidden.title': { zh: '需要管理权限', en: 'Admin permission required' },
+  'permissions.forbidden.description': {
+    zh: '当前会话没有 admin 权限，无法查看或管理工作区访问凭据。请使用具有 admin scope 的会话登录后重试。',
+    en: 'The current session lacks admin permission, so workspace access credentials cannot be listed or managed. Sign in with an admin-scoped session and retry.',
+  },
+  'permissions.actionFailed': { zh: '操作失败', en: 'Action failed' },
+
+  'permissions.tokens.title': { zh: '访问令牌', en: 'Access tokens' },
+  'permissions.tokens.description': {
+    zh: 'Agent 令牌绑定到工作区；浏览器会话令牌不绑定工作区。撤销后凭据立即失效。',
+    en: 'Agent tokens are bound to a workspace; browser session tokens are unbound. Revocation invalidates the credential immediately.',
+  },
+  'permissions.tokens.error': { zh: '令牌列表加载失败', en: 'Could not load tokens' },
+  'permissions.tokens.empty': { zh: '没有已签发的令牌', en: 'No issued tokens' },
+  'permissions.tokens.emptyHint': {
+    zh: '为 Agent 签发令牌后，它会出现在这里，可以随时撤销。',
+    en: 'Tokens issued to Agents appear here and can be revoked at any time.',
+  },
+  'permissions.tokens.col.name': { zh: '名称', en: 'Name' },
+  'permissions.tokens.col.scopes': { zh: '权限范围', en: 'Scopes' },
+  'permissions.tokens.col.created': { zh: '创建时间', en: 'Created' },
+  'permissions.tokens.col.lastUsed': { zh: '最近使用', en: 'Last used' },
+  'permissions.tokens.kind.agent': { zh: 'Agent 令牌', en: 'Agent token' },
+  'permissions.tokens.kind.session': { zh: '浏览器会话', en: 'Browser session' },
+  'permissions.tokens.allPaths': { zh: '不受路径限制', en: 'Unrestricted paths' },
+  'permissions.tokens.neverUsed': { zh: '从未使用', en: 'Never used' },
+  'permissions.tokens.expiresAt': { zh: '到期：{time}', en: 'Expires {time}' },
+  'permissions.tokens.revoke': { zh: '撤销', en: 'Revoke' },
+  'permissions.tokens.revokeTitle': { zh: '撤销令牌 “{name}”？', en: 'Revoke token "{name}"?' },
+  'permissions.tokens.revokeDescription': {
+    zh: '撤销后，使用该令牌的 Agent 或会话会立即失去访问权限，且无法恢复。',
+    en: 'The Agent or session using this token loses access immediately. This cannot be undone.',
+  },
+  'permissions.tokens.revokedNotice': { zh: '令牌 “{name}” 已撤销', en: 'Token "{name}" revoked' },
+
+  'permissions.grants.title': { zh: '记忆召回授权', en: 'Memory recall grants' },
+  'permissions.grants.description': {
+    zh: 'durable-context 允许列表：哪些 principal 可以恢复哪些已批准记忆的上下文。撤销是幂等软撤销，审计记录会保留。',
+    en: 'The durable-context allowlist: which principals can resume which approved memories. Revocation is an idempotent soft revoke; the audit row is preserved.',
+  },
+  'permissions.grants.error': { zh: '召回授权列表加载失败', en: 'Could not load recall grants' },
+  'permissions.grants.empty': { zh: '没有召回授权', en: 'No recall grants' },
+  'permissions.grants.emptyHint': {
+    zh: 'Agent 通过 durable-context 契约获得记忆召回授权后，会显示在这里。',
+    en: 'Grants issued through the durable-context contract appear here.',
+  },
+  'permissions.grants.col.principal': { zh: '被授权方', en: 'Grantee' },
+  'permissions.grants.col.memory': { zh: '记忆', en: 'Memory' },
+  'permissions.grants.col.status': { zh: '状态', en: 'Status' },
+  'permissions.grants.col.grantedAt': { zh: '授权时间', en: 'Granted' },
+  'permissions.grants.currentWorkspace': { zh: '当前工作区', en: 'Current workspace' },
+  'permissions.grants.grantedBy': { zh: '授权人：{user}', en: 'Granted by {user}' },
+  'permissions.grants.revokedAt': { zh: '撤销时间：{time}', en: 'Revoked {time}' },
+  'permissions.grants.revoke': { zh: '撤销', en: 'Revoke' },
+  'permissions.grants.revokeTitle': {
+    zh: '撤销 {principal} 的召回授权？',
+    en: 'Revoke recall grant for {principal}?',
+  },
+  'permissions.grants.revokeDescription': {
+    zh: '撤销后该 principal 不能再恢复这条记忆的上下文；授权记录会保留用于审计，重复撤销是安全的。',
+    en: 'The principal can no longer resume this memory. The audit row is preserved, and repeating the revoke is safe.',
+  },
+  'permissions.grants.revokedNotice': {
+    zh: '{principal} 的召回授权已撤销',
+    en: 'Recall grant for {principal} revoked',
+  },
+
+  'permissions.status.active': { zh: '生效', en: 'Active' },
+  'permissions.status.revoked': { zh: '已撤销', en: 'Revoked' },
+  'permissions.status.superseded': { zh: '已被替代', en: 'Superseded' },
+  'permissions.status.forgotten': { zh: '已遗忘', en: 'Forgotten' },
+
   // ---- portable task ledger ----
   'task.title': { zh: '任务账本', en: 'Task ledger' },
   'task.subtitle': {
