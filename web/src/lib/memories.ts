@@ -3,13 +3,17 @@ import { memoryActionKey } from './memory-idempotency';
 import type {
   AgentMemory,
   AgentMemorySummary,
+  CreateMemoryRelationRequest,
   ListMemoriesResponse,
+  ListMemoryRelationsResponse,
   MemoryFeedbackAction,
   MemoryForgetResponse,
   MemoryForgetReason,
   MemoryKind,
   MemoryLifecycleFilter,
   MemoryMutationResponse,
+  MemoryRelation,
+  MemoryRelationType,
 } from './types';
 
 export interface ListMemoriesParams {
@@ -90,6 +94,7 @@ export function normalizeMemorySummary(raw: AgentMemorySummary): AgentMemorySumm
     content_length: raw.content_length ?? Array.from(raw.excerpt ?? '').length,
     lifecycle_status: raw.lifecycle_status ?? 'active',
     state_version: raw.state_version ?? 1,
+    superseded: raw.superseded ?? false,
     pinned: raw.pinned ?? false,
     useful_count: raw.useful_count ?? 0,
     not_useful_count: raw.not_useful_count ?? 0,
@@ -200,4 +205,43 @@ export function forgetMemory(
       },
     },
   );
+}
+
+export interface ListMemoryRelationsParams {
+  direction?: 'source' | 'target';
+  relationType?: MemoryRelationType;
+  limit?: number;
+}
+
+export async function listMemoryRelations(
+  memoryID: string,
+  params: ListMemoryRelationsParams = {},
+): Promise<MemoryRelation[]> {
+  const response = await api.get<ListMemoryRelationsResponse>(
+    `${memoryPath(memoryID)}/relations`,
+    {
+      query: {
+        direction: params.direction,
+        relation_type: params.relationType,
+        limit: params.limit,
+      },
+    },
+  );
+  return response.relations ?? [];
+}
+
+/**
+ * Writes one immutable relation edge. The backend de-duplicates on
+ * (workspace, source, target, type), so retries are safe without an
+ * Idempotency-Key header.
+ */
+export function createMemoryRelation(
+  request: CreateMemoryRelationRequest,
+): Promise<MemoryRelation> {
+  return api.post<MemoryRelation>('/memory-relations', {
+    source_id: request.source_id,
+    target_id: request.target_id,
+    relation_type: request.relation_type,
+    ...(request.reason ? { reason: request.reason } : {}),
+  });
 }

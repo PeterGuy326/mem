@@ -115,6 +115,10 @@ export function MemoriesPage() {
     () => uniqueMemories((memories.data?.pages ?? []).flatMap((page) => page.memories ?? [])),
     [memories.data],
   );
+  const selectedSummary = React.useMemo(
+    () => (memoryId ? items.find((item) => item.id === memoryId) : undefined),
+    [items, memoryId],
+  );
   const detailForgotten = detail.error instanceof ApiException && detail.error.status === 410;
 
   function changeFilters(next: MemoryFilterValue) {
@@ -291,6 +295,8 @@ export function MemoriesPage() {
           ) : (
             <MemoryDetail
               memory={detail.data}
+              superseded={selectedSummary?.superseded ?? false}
+              candidates={items}
               onReload={() => void detail.refetch()}
               onForgotten={() => returnToLedger(true)}
             />

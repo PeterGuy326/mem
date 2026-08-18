@@ -9,7 +9,9 @@ import {
   FileText,
   Fingerprint,
   FolderClosed,
+  GitMerge,
   LockKeyhole,
+  PencilLine,
   Pin,
   PinOff,
   RotateCcw,
@@ -18,11 +20,14 @@ import {
   ThumbsUp,
   Trash2,
   UserRound,
+  Waypoints,
 } from 'lucide-react';
 import { Link } from 'react-router';
 import { toast } from 'sonner';
+import { CreateRelationDialog } from './CreateRelationDialog';
 import { ForgetMemoryDialog } from './ForgetMemoryDialog';
 import { MemoryKindBadge } from './MemoryList';
+import { MemoryRelationsPanel } from './MemoryRelationsPanel';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/Card';
@@ -36,7 +41,12 @@ import { useCapabilities } from '@/hooks/useWorkspace';
 import { useT } from '@/i18n';
 import { ApiException } from '@/lib/api';
 import { formatDateTime, truncateMiddle } from '@/lib/format';
-import type { AgentMemory, MemoryFeedbackAction, MemoryForgetReason } from '@/lib/types';
+import type {
+  AgentMemory,
+  AgentMemorySummary,
+  MemoryFeedbackAction,
+  MemoryForgetReason,
+} from '@/lib/types';
 
 function errorText(error: unknown, conflict: string): string {
   if (error instanceof ApiException) {
@@ -89,10 +99,14 @@ function Meta({
 
 export function MemoryDetail({
   memory,
+  superseded = false,
+  candidates = [],
   onReload,
   onForgotten,
 }: {
   memory: AgentMemory;
+  superseded?: boolean;
+  candidates?: AgentMemorySummary[];
   onReload: () => void;
   onForgotten: () => void;
 }) {
@@ -103,6 +117,9 @@ export function MemoryDetail({
   const restore = useRestoreMemory();
   const forget = useForgetMemory();
   const [forgetOpen, setForgetOpen] = React.useState(false);
+  const [relationDialog, setRelationDialog] = React.useState<'supersedes' | 'corrects' | null>(
+    null,
+  );
   const [actionError, setActionError] = React.useState<string | null>(null);
   const [isConflict, setIsConflict] = React.useState(false);
 
@@ -115,6 +132,7 @@ export function MemoryDetail({
     setActionError(null);
     setIsConflict(false);
     setForgetOpen(false);
+    setRelationDialog(null);
   }, [memory.id, memory.state_version]);
 
   async function runAction(action: string, command: () => Promise<unknown>): Promise<boolean> {
@@ -184,6 +202,13 @@ export function MemoryDetail({
         </div>
       )}
 
+      {superseded && (
+        <div className="flex items-center gap-2 rounded-lg border border-warn/30 bg-warn/5 px-4 py-3 text-xs text-fg-muted">
+          <Waypoints className="h-4 w-4 flex-none text-warn" />
+          <span>{t('memories.supersededNotice')}</span>
+        </div>
+      )}
+
       {actionError && (
         <div
           className="flex items-center justify-between gap-3 rounded-lg border border-danger/35 bg-danger/5 px-4 py-3 text-xs text-danger"
@@ -219,6 +244,11 @@ export function MemoryDetail({
             <Badge tone={memory.lifecycle_status === 'active' ? 'success' : 'muted'} dot>
               {t(`memory.lifecycle.${memory.lifecycle_status}`)}
             </Badge>
+            {superseded && (
+              <Badge tone="warn" title={t('memories.supersededHint')}>
+                {t('memories.superseded')}
+              </Badge>
+            )}
             {memory.pinned && (
               <Badge tone="warn">
                 <Pin className="h-3 w-3 fill-current" />
@@ -313,6 +343,35 @@ export function MemoryDetail({
               {t('memory.restore')}
             </Button>
           )}
+          <div className="mx-1 hidden h-5 w-px bg-border sm:block" aria-hidden />
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={!canWrite || busy}
+            title={writeTitle}
+            onClick={() => {
+              setActionError(null);
+              setRelationDialog('corrects');
+            }}
+          >
+            <PencilLine className="h-3.5 w-3.5" />
+            {t('memories.correctAction')}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={!canWrite || busy}
+            title={writeTitle}
+            onClick={() => {
+              setActionError(null);
+              setRelationDialog('supersedes');
+            }}
+          >
+            <GitMerge className="h-3.5 w-3.5" />
+            {t('memories.supersedeAction')}
+          </Button>
           <Button
             type="button"
             size="sm"
@@ -448,6 +507,16 @@ export function MemoryDetail({
         </Card>
       </div>
 
+      <Card>
+        <CardHeader className="flex items-center gap-2">
+          <Waypoints className="h-3.5 w-3.5 text-accent" />
+          <CardTitle>{t('memories.relationsTitle')}</CardTitle>
+        </CardHeader>
+        <CardBody>
+          <MemoryRelationsPanel memoryID={memory.id} />
+        </CardBody>
+      </Card>
+
       {hasAttributes && (
         <Card>
           <CardHeader>
@@ -469,6 +538,19 @@ export function MemoryDetail({
         onOpenChange={setForgetOpen}
         onConfirm={confirmForget}
       />
+
+      {relationDialog && (
+        <CreateRelationDialog
+          key={relationDialog}
+          memory={memory}
+          relationType={relationDialog}
+          open={relationDialog !== null}
+          candidates={candidates}
+          onOpenChange={(open) => {
+            if (!open) setRelationDialog(null);
+          }}
+        />
+      )}
     </article>
   );
 }

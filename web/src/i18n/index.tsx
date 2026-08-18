@@ -612,6 +612,91 @@ const dict = {
   'memory.detailUnavailable': { zh: '记忆不可用', en: 'Memory unavailable' },
   'memory.backToLedger': { zh: '返回记忆账本', en: 'Back to memory ledger' },
 
+  // ---- memory relations (correction / supersede chains) ----
+  'memories.superseded': { zh: '已被取代', en: 'Superseded' },
+  'memories.supersededHint': {
+    zh: '存在生效中的记忆替代或纠正了这条记忆；默认召回不再包含它。',
+    en: 'An active memory supersedes or corrects this one; default recall no longer includes it.',
+  },
+  'memories.supersededNotice': {
+    zh: '这条记忆已被生效中的记忆替代或纠正，默认召回不再包含它。记录本身保留，可继续审计。',
+    en: 'This memory has been superseded or corrected by an active memory and is excluded from default recall. The record is kept for audit.',
+  },
+  'memories.expandRelations': { zh: '展开记忆关系', en: 'Show memory relations' },
+  'memories.collapseRelations': { zh: '收起记忆关系', en: 'Hide memory relations' },
+  'memories.relationsTitle': { zh: '记忆关系', en: 'Memory relations' },
+  'memories.relationsLoading': { zh: '正在加载记忆关系…', en: 'Loading memory relations…' },
+  'memories.relationsEmpty': { zh: '没有记录任何关系', en: 'No relations recorded' },
+  'memories.relationsFailed': { zh: '记忆关系加载失败', en: 'Could not load memory relations' },
+  'memories.relations.outbound': { zh: '这条记忆指向', en: 'Points to' },
+  'memories.relations.inbound': { zh: '指向这条记忆', en: 'Pointed to by' },
+  'memories.relationType.supersedes': { zh: '替代', en: 'Supersedes' },
+  'memories.relationType.corrects': { zh: '纠正', en: 'Corrects' },
+  'memories.relationType.occurrence_of': { zh: '同源', en: 'Occurrence of' },
+  'memories.relation.peer': { zh: '记忆 {id}', en: 'Memory {id}' },
+  'memories.relation.peerUnavailable': { zh: '不可读的记忆', en: 'Unreadable memory' },
+  'memories.relation.reason': { zh: '原因', en: 'Reason' },
+  'memories.correctAction': { zh: '纠正', en: 'Correct' },
+  'memories.supersedeAction': { zh: '替代', en: 'Supersede' },
+  'memories.relationDialog.title.supersedes': { zh: '写入替代关系', en: 'Record a supersede relation' },
+  'memories.relationDialog.title.corrects': { zh: '写入纠正关系', en: 'Record a correction relation' },
+  'memories.relationDialog.description': {
+    zh: '关系一经写入不可修改；它只影响默认召回与展示，不会删除任何记忆。',
+    en: 'Relations are immutable once written. They only affect default recall and presentation; no memory is deleted.',
+  },
+  'memories.relationDialog.direction': { zh: '关系方向', en: 'Relation direction' },
+  'memories.relationDialog.directionOut.supersedes': {
+    zh: '由本条记忆替代所选记忆',
+    en: 'This memory supersedes the selected memory',
+  },
+  'memories.relationDialog.directionIn.supersedes': {
+    zh: '所选记忆替代本条记忆',
+    en: 'The selected memory supersedes this memory',
+  },
+  'memories.relationDialog.directionOut.corrects': {
+    zh: '由本条记忆纠正所选记忆',
+    en: 'This memory corrects the selected memory',
+  },
+  'memories.relationDialog.directionIn.corrects': {
+    zh: '所选记忆纠正本条记忆',
+    en: 'The selected memory corrects this memory',
+  },
+  'memories.relationDialog.peer': { zh: '关联记忆', en: 'Related memory' },
+  'memories.relationDialog.peerFromList': { zh: '从已加载列表选择', en: 'Choose from loaded memories' },
+  'memories.relationDialog.peerManual': { zh: '手动输入记忆 ID', en: 'Enter a memory ID' },
+  'memories.relationDialog.peerPlaceholder': { zh: '选择一条记忆…', en: 'Select a memory…' },
+  'memories.relationDialog.peerIdPlaceholder': { zh: '粘贴记忆 UUID', en: 'Paste a memory UUID' },
+  'memories.relationDialog.reason': { zh: '原因（可选）', en: 'Reason (optional)' },
+  'memories.relationDialog.reasonPlaceholder': {
+    zh: '例如：新决定更新了缓存 TTL',
+    en: 'e.g. a new decision updated the cache TTL',
+  },
+  'memories.relationDialog.submit': { zh: '写入关系', en: 'Write relation' },
+  'memories.relationDialog.cancel': { zh: '取消', en: 'Cancel' },
+  'memories.relationDialog.peerRequired': {
+    zh: '请选择或输入关联记忆',
+    en: 'Choose or enter a related memory',
+  },
+  'memories.relationDialog.peerInvalid': {
+    zh: '记忆 ID 必须是 UUID',
+    en: 'The memory ID must be a UUID',
+  },
+  'memories.relationDialog.failed': { zh: '关系写入失败', en: 'Could not write the relation' },
+  'memories.relationDialog.conflict': {
+    zh: '该关系会形成循环，已被拒绝',
+    en: 'The relation would form a cycle and was rejected',
+  },
+  'memories.relationDialog.notFound': {
+    zh: '找不到关联记忆',
+    en: 'The related memory was not found',
+  },
+  'memories.relationDialog.forgotten': {
+    zh: '关联记忆已被遗忘',
+    en: 'The related memory was forgotten',
+  },
+  'memories.relationSuccess.supersedes': { zh: '替代关系已写入', en: 'Supersede relation recorded' },
+  'memories.relationSuccess.corrects': { zh: '纠正关系已写入', en: 'Correction relation recorded' },
+
   // ---- portable workspace transfer ----
   'transfer.eyebrow': { zh: '可迁移 Agent 工作区', en: 'Portable Agent workspace' },
   'transfer.title': { zh: '工作区迁移', en: 'Workspace transfer' },

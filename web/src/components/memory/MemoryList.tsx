@@ -1,5 +1,7 @@
-import { Bot, ChevronRight, FolderClosed, Pin, ThumbsDown, ThumbsUp } from 'lucide-react';
+import * as React from 'react';
+import { Bot, ChevronDown, ChevronRight, FolderClosed, Pin, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { Link, useLocation } from 'react-router';
+import { MemoryRelationsPanel } from './MemoryRelationsPanel';
 import { Badge, type BadgeProps } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { useT } from '@/i18n';
@@ -59,6 +61,7 @@ export function MemoryList({
 }) {
   const { t } = useT();
   const location = useLocation();
+  const [expandedID, setExpandedID] = React.useState<string | null>(null);
 
   return (
     <section className="surface min-w-0 overflow-hidden" aria-label={t('memory.list')}>
@@ -73,53 +76,82 @@ export function MemoryList({
       <ol className="divide-y divide-border">
         {memories.map((memory) => {
           const selected = memory.id === selectedID;
+          const expanded = expandedID === memory.id;
           return (
             <li key={memory.id} data-testid={`memory-${memory.id}`}>
-              <Link
-                to={`/memories/${encodeURIComponent(memory.id)}${location.search}`}
-                className={
-                  'group block border-l-2 px-3 py-3 transition-colors ' +
-                  (selected
-                    ? 'border-l-accent bg-accent/5'
-                    : 'border-l-transparent hover:bg-bg-inset/45')
-                }
-                aria-current={selected ? 'page' : undefined}
-              >
-                <div className="flex min-w-0 items-center gap-1.5">
-                  <MemoryKindBadge kind={memory.kind} />
-                  <Badge tone={memory.lifecycle_status === 'active' ? 'success' : 'muted'} dot>
-                    {t(`memory.lifecycle.${memory.lifecycle_status}`)}
-                  </Badge>
-                  {memory.pinned && (
-                    <span className="inline-flex text-warn" title={t('memory.pinned')}>
-                      <Pin className="h-3.5 w-3.5 fill-current" />
+              <div className="flex items-stretch">
+                <Link
+                  to={`/memories/${encodeURIComponent(memory.id)}${location.search}`}
+                  className={
+                    'group block min-w-0 flex-1 border-l-2 px-3 py-3 transition-colors ' +
+                    (selected
+                      ? 'border-l-accent bg-accent/5'
+                      : 'border-l-transparent hover:bg-bg-inset/45')
+                  }
+                  aria-current={selected ? 'page' : undefined}
+                >
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <MemoryKindBadge kind={memory.kind} />
+                    <Badge tone={memory.lifecycle_status === 'active' ? 'success' : 'muted'} dot>
+                      {t(`memory.lifecycle.${memory.lifecycle_status}`)}
+                    </Badge>
+                    {memory.superseded && (
+                      <Badge tone="warn" title={t('memories.supersededHint')}>
+                        {t('memories.superseded')}
+                      </Badge>
+                    )}
+                    {memory.pinned && (
+                      <span className="inline-flex text-warn" title={t('memory.pinned')}>
+                        <Pin className="h-3.5 w-3.5 fill-current" />
+                      </span>
+                    )}
+                    <span className="ml-auto">
+                      <FeedbackSignal memory={memory} />
                     </span>
+                  </div>
+                  <p className="mt-2 line-clamp-3 whitespace-pre-wrap break-words text-sm leading-5 text-fg">
+                    {memory.excerpt}
+                  </p>
+                  <div className="mt-2 grid min-w-0 gap-1 text-2xs text-fg-subtle">
+                    <span className="inline-flex min-w-0 items-center gap-1.5">
+                      <FolderClosed className="h-3 w-3 flex-none" />
+                      <span className="truncate font-mono">{memory.path}</span>
+                    </span>
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <Bot className="h-3 w-3 flex-none" />
+                      <span className="truncate font-mono">
+                        {memory.producer_agent || t('memory.humanOrUnknown')}
+                      </span>
+                      <span aria-hidden>·</span>
+                      <time dateTime={memory.event_at ?? memory.created_at}>
+                        {formatDateTime(memory.event_at ?? memory.created_at)}
+                      </time>
+                      <ChevronRight className="ml-auto h-3.5 w-3.5 flex-none opacity-0 transition-opacity group-hover:opacity-100" />
+                    </span>
+                  </div>
+                </Link>
+                <button
+                  type="button"
+                  aria-expanded={expanded}
+                  aria-label={t(expanded ? 'memories.collapseRelations' : 'memories.expandRelations')}
+                  className="flex w-9 flex-none items-center justify-center border-l border-border text-fg-subtle transition-colors hover:bg-bg-inset/45 hover:text-fg"
+                  onClick={() => setExpandedID(expanded ? null : memory.id)}
+                >
+                  {expanded ? (
+                    <ChevronDown className="h-3.5 w-3.5" />
+                  ) : (
+                    <ChevronRight className="h-3.5 w-3.5" />
                   )}
-                  <span className="ml-auto">
-                    <FeedbackSignal memory={memory} />
-                  </span>
+                </button>
+              </div>
+              {expanded && (
+                <div className="border-t border-border bg-bg-subtle/30 px-3 py-3">
+                  <div className="mb-1 text-2xs uppercase tracking-wider text-fg-subtle">
+                    {t('memories.relationsTitle')}
+                  </div>
+                  <MemoryRelationsPanel memoryID={memory.id} />
                 </div>
-                <p className="mt-2 line-clamp-3 whitespace-pre-wrap break-words text-sm leading-5 text-fg">
-                  {memory.excerpt}
-                </p>
-                <div className="mt-2 grid min-w-0 gap-1 text-2xs text-fg-subtle">
-                  <span className="inline-flex min-w-0 items-center gap-1.5">
-                    <FolderClosed className="h-3 w-3 flex-none" />
-                    <span className="truncate font-mono">{memory.path}</span>
-                  </span>
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    <Bot className="h-3 w-3 flex-none" />
-                    <span className="truncate font-mono">
-                      {memory.producer_agent || t('memory.humanOrUnknown')}
-                    </span>
-                    <span aria-hidden>·</span>
-                    <time dateTime={memory.event_at ?? memory.created_at}>
-                      {formatDateTime(memory.event_at ?? memory.created_at)}
-                    </time>
-                    <ChevronRight className="ml-auto h-3.5 w-3.5 flex-none opacity-0 transition-opacity group-hover:opacity-100" />
-                  </span>
-                </div>
-              </Link>
+              )}
             </li>
           );
         })}

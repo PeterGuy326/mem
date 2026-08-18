@@ -1085,6 +1085,245 @@ func TestMemoryPostgres(t *testing.T) {
 			t.Fatalf("unique ids=%d newly-created=%d, want 1 and 1", len(ids), created)
 		}
 	})
+
+	t.Run("relations encode immutable supersede and correct chains", func(t *testing.T) {
+		scope := "/Relations-" + uuid.NewString()
+		actorID, tokenID := userA, uuid.New()
+		old, err := service.Remember(ctx, command(
+			"rel-old-"+uuid.NewString(),
+			"Superseded claim about the cache TTL",
+			scope+"/Project",
+		))
+		if err != nil {
+			t.Fatal(err)
+		}
+		fresh, err := service.Remember(ctx, command(
+			"rel-fresh-"+uuid.NewString(),
+			"Current claim about the cache TTL",
+			scope+"/Project",
+		))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		createdRel, err := service.CreateRelation(ctx, CreateRelationCommand{
+			WorkspaceID:  workspaceA,
+			SourceID:     fresh.Memory.ID,
+			TargetID:     old.Memory.ID,
+			RelationType: RelSupersedes,
+			ActorUserID:  &actorID,
+			ActorTokenID: &tokenID,
+			Reason:       "decision updated",
+			AllowedPaths: []string{scope},
+		})
+		if err != nil || createdRel == nil || !createdRel.Created {
+			t.Fatalf("create relation = %+v err=%v", createdRel, err)
+		}
+
+		replayedRel, err := service.CreateRelation(ctx, CreateRelationCommand{
+			WorkspaceID:  workspaceA,
+			SourceID:     fresh.Memory.ID,
+			TargetID:     old.Memory.ID,
+			RelationType: RelSupersedes,
+			AllowedPaths: []string{scope},
+		})
+		if err != nil || replayedRel.Created ||
+			replayedRel.Relation.ID != createdRel.Relation.ID {
+			t.Fatalf("replay relation = %+v err=%v", replayedRel, err)
+		}
+
+		if _, err := service.CreateRelation(ctx, CreateRelationCommand{
+			WorkspaceID:  workspaceA,
+			SourceID:     old.Memory.ID,
+			TargetID:     fresh.Memory.ID,
+			RelationType: RelSupersedes,
+			AllowedPaths: []string{scope},
+		}); !errors.Is(err, ErrRelationCycle) {
+			t.Fatalf("cycle error = %v", err)
+		}
+
+		// Multi-hop cycle: newest supersedes fresh supersedes old, so writing
+		// old supersedes newest must be rejected.
+		newest, err := service.Remember(ctx, command(
+			"rel-newest-"+uuid.NewString(),
+			"Newest claim about the cache TTL",
+			scope+"/Project",
+		))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.CreateRelation(ctx, CreateRelationCommand{
+			WorkspaceID:  workspaceA,
+			SourceID:     newest.Memory.ID,
+			TargetID:     fresh.Memory.ID,
+			RelationType: RelSupersedes,
+			AllowedPaths: []string{scope},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.CreateRelation(ctx, CreateRelationCommand{
+			WorkspaceID:  workspaceA,
+			SourceID:     old.Memory.ID,
+			TargetID:     newest.Memory.ID,
+			RelationType: RelSupersedes,
+			AllowedPaths: []string{scope},
+		}); !errors.Is(err, ErrRelationCycle) {
+			t.Fatalf("multi-hop cycle error = %v", err)
+		}
+
+		// Endpoints outside the caller's path scope are hidden as not found.
+		if _, err := service.CreateRelation(ctx, CreateRelationCommand{
+			WorkspaceID:  workspaceA,
+			SourceID:     fresh.Memory.ID,
+			TargetID:     old.Memory.ID,
+			RelationType: RelCorrects,
+			AllowedPaths: []string{"/Elsewhere"},
+		}); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("out-of-path relation error = %v", err)
+		}
+
+		// Cross-workspace endpoints are not found under this workspace.
+		foreignCmd := command(
+			"rel-foreign-"+uuid.NewString(),
+			"Foreign relation endpoint",
+			scope+"/Project",
+		)
+		foreignCmd.WorkspaceID = workspaceB
+		foreignCmd.CreatedByUserID = &userB
+		foreign, err := service.Remember(ctx, foreignCmd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.CreateRelation(ctx, CreateRelationCommand{
+			WorkspaceID:  workspaceA,
+			SourceID:     fresh.Memory.ID,
+			TargetID:     foreign.Memory.ID,
+			RelationType: RelSupersedes,
+			AllowedPaths: []string{scope},
+		}); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("cross-workspace relation error = %v", err)
+		}
+
+		// The superseded target is marked in list summaries while the
+		// superseding source is active.
+		listed, err := service.List(ctx, ListQuery{
+			WorkspaceID:  workspaceA,
+			Scope:        scope,
+			AllowedPaths: []string{scope},
+			Limit:        20,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		superseded := map[uuid.UUID]bool{}
+		for _, summary := range listed.Memories {
+			superseded[summary.ID] = summary.Superseded
+		}
+		if !superseded[old.Memory.ID] || !superseded[fresh.Memory.ID] ||
+			superseded[newest.Memory.ID] {
+			t.Fatalf("superseded markers = %+v", superseded)
+		}
+
+		outbound, err := service.ListRelations(ctx, ListRelationsQuery{
+			WorkspaceID:  workspaceA,
+			MemoryID:     fresh.Memory.ID,
+			Direction:    "source",
+			AllowedPaths: []string{scope},
+		})
+		if err != nil || len(outbound) != 1 ||
+			outbound[0].TargetID != old.Memory.ID ||
+			outbound[0].RelationType != RelSupersedes ||
+			outbound[0].Reason != "decision updated" {
+			t.Fatalf("outbound relations = %+v err=%v", outbound, err)
+		}
+		inbound, err := service.ListRelations(ctx, ListRelationsQuery{
+			WorkspaceID:  workspaceA,
+			MemoryID:     old.Memory.ID,
+			Direction:    "target",
+			RelationType: RelSupersedes,
+			AllowedPaths: []string{scope},
+		})
+		if err != nil || len(inbound) != 1 || inbound[0].SourceID != fresh.Memory.ID {
+			t.Fatalf("inbound relations = %+v err=%v", inbound, err)
+		}
+		typed, err := service.ListRelations(ctx, ListRelationsQuery{
+			WorkspaceID:  workspaceA,
+			MemoryID:     old.Memory.ID,
+			Direction:    "target",
+			RelationType: RelCorrects,
+			AllowedPaths: []string{scope},
+		})
+		if err != nil || len(typed) != 0 {
+			t.Fatalf("type-filtered relations = %+v err=%v", typed, err)
+		}
+
+		// Anchors the caller cannot read are hidden as not found.
+		if _, err := service.ListRelations(ctx, ListRelationsQuery{
+			WorkspaceID:  workspaceA,
+			MemoryID:     old.Memory.ID,
+			Direction:    "target",
+			AllowedPaths: []string{"/Elsewhere"},
+		}); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("out-of-path list relations error = %v", err)
+		}
+		if _, err := service.ListRelations(ctx, ListRelationsQuery{
+			WorkspaceID:  workspaceA,
+			MemoryID:     uuid.New(),
+			Direction:    "source",
+			AllowedPaths: []string{scope},
+		}); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("missing anchor list relations error = %v", err)
+		}
+
+		// Forgotten memories reject new relations and hide their edges.
+		// Forget redacts the path to '/', so path-scoped callers see the
+		// memory as not found while full-visibility callers see 410 gone.
+		if _, err := service.Forget(ctx, ForgetCommand{
+			LifecycleCommand: LifecycleCommand{
+				WorkspaceID:     workspaceA,
+				MemoryID:        old.Memory.ID,
+				AllowedPaths:    []string{scope},
+				ActorUserID:     &actorID,
+				ActorTokenID:    &tokenID,
+				IdempotencyKey:  "rel-forget-" + uuid.NewString(),
+				ExpectedVersion: old.Memory.StateVersion,
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		corrected, err := service.Remember(ctx, command(
+			"rel-corrected-"+uuid.NewString(),
+			"Corrected claim about the cache TTL",
+			scope+"/Project",
+		))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.CreateRelation(ctx, CreateRelationCommand{
+			WorkspaceID:  workspaceA,
+			SourceID:     corrected.Memory.ID,
+			TargetID:     old.Memory.ID,
+			RelationType: RelCorrects,
+		}); !errors.Is(err, ErrForgotten) {
+			t.Fatalf("forgotten target relation error = %v", err)
+		}
+		if _, err := service.CreateRelation(ctx, CreateRelationCommand{
+			WorkspaceID:  workspaceA,
+			SourceID:     corrected.Memory.ID,
+			TargetID:     old.Memory.ID,
+			RelationType: RelCorrects,
+			AllowedPaths: []string{scope},
+		}); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("path-scoped forgotten target relation error = %v", err)
+		}
+		if _, err := service.ListRelations(ctx, ListRelationsQuery{
+			WorkspaceID: workspaceA,
+			MemoryID:    old.Memory.ID,
+			Direction:   "target",
+		}); !errors.Is(err, ErrForgotten) {
+			t.Fatalf("forgotten anchor list relations error = %v", err)
+		}
+	})
 }
 
 var testRunSuffix = uuid.NewString()

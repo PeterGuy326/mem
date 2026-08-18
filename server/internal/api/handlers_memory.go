@@ -772,15 +772,21 @@ func (s *Server) handleListMemoryRelations(w http.ResponseWriter, r *http.Reques
 		Limit:        limit,
 	})
 	if err != nil {
-		if errors.Is(err, memory.ErrInvalidCommand) {
+		switch {
+		case errors.Is(err, memory.ErrInvalidCommand):
 			writeError(w, http.StatusBadRequest, "invalid_relation_query", err.Error())
-			return
+		case errors.Is(err, memory.ErrNotFound):
+			writeError(w, http.StatusNotFound, "not_found", "memory not found")
+		case errors.Is(err, memory.ErrForgotten):
+			writeError(w, http.StatusGone, "memory_forgotten",
+				"relations of a forgotten memory are not readable")
+		default:
+			if s.Log != nil {
+				s.Log.Error("memory.list_relations_failed", "memory_id", id, "err", err)
+			}
+			writeError(w, http.StatusInternalServerError, "relation_list_failed",
+				"relations could not be listed")
 		}
-		if s.Log != nil {
-			s.Log.Error("memory.list_relations_failed", "memory_id", id, "err", err)
-		}
-		writeError(w, http.StatusInternalServerError, "relation_list_failed",
-			"relations could not be listed")
 		return
 	}
 	if relations == nil {

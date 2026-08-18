@@ -112,16 +112,16 @@ type Query struct {
 
 // RecallQuery describes deterministic lexical retrieval.
 type RecallQuery struct {
-	WorkspaceID        uuid.UUID
-	Text               string
-	Scope              string
-	AllowedPaths       []string
-	Since              *time.Time
-	Until              *time.Time
-	Kinds              []string
-	LifecycleStatus    string
-	IncludeSuperseded  bool
-	Limit              int
+	WorkspaceID       uuid.UUID
+	Text              string
+	Scope             string
+	AllowedPaths      []string
+	Since             *time.Time
+	Until             *time.Time
+	Kinds             []string
+	LifecycleStatus   string
+	IncludeSuperseded bool
+	Limit             int
 }
 
 // ListQuery describes stable keyset pagination over memory records. Recursive
@@ -236,16 +236,20 @@ type MemorySummary struct {
 	ContentSHA256    string     `json:"content_sha256"`
 	LifecycleStatus  string     `json:"lifecycle_status"`
 	StateVersion     int64      `json:"state_version"`
-	Pinned           bool       `json:"pinned"`
-	PinnedAt         *time.Time `json:"pinned_at,omitempty"`
-	UsefulCount      int        `json:"useful_count"`
-	NotUsefulCount   int        `json:"not_useful_count"`
-	FeedbackScore    int        `json:"feedback_score"`
-	FeedbackCount    int        `json:"feedback_count"`
-	FeedbackAt       *time.Time `json:"feedback_at,omitempty"`
-	Citation         string     `json:"citation"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	// Superseded reports that an active memory supersedes or corrects this
+	// one. The record stays listable and inspectable but is excluded from
+	// default Agent recall, so the ledger must be able to mark it visibly.
+	Superseded     bool       `json:"superseded"`
+	Pinned         bool       `json:"pinned"`
+	PinnedAt       *time.Time `json:"pinned_at,omitempty"`
+	UsefulCount    int        `json:"useful_count"`
+	NotUsefulCount int        `json:"not_useful_count"`
+	FeedbackScore  int        `json:"feedback_score"`
+	FeedbackCount  int        `json:"feedback_count"`
+	FeedbackAt     *time.Time `json:"feedback_at,omitempty"`
+	Citation       string     `json:"citation"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 // Citation is the stable URI used by Context Packs and external Agents.
