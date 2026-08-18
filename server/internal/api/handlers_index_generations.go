@@ -36,7 +36,7 @@ func (s *Server) handleListIndexGenerations(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items":          builds,
+		"items":           builds,
 		"execution_wired": true,
 	})
 }
