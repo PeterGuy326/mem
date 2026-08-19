@@ -6,6 +6,7 @@ import { ExplorerPage } from '@/pages/ExplorerPage';
 import { FileDetailPage } from '@/pages/FileDetailPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import { ProvidersPage } from '@/pages/ProvidersPage';
+import { PermissionsPage } from '@/pages/PermissionsPage';
 import { SearchPage } from '@/pages/SearchPage';
 import { TasksPage } from '@/pages/TasksPage';
 import { TaskDetailPage } from '@/pages/TaskDetailPage';
@@ -41,6 +42,7 @@ export const router = createBrowserRouter([
       // Faces folded into Search (the People row); keep the path working.
       { path: '/faces', element: <Navigate to="/search" replace /> },
       { path: '/providers', element: <ProvidersPage /> },
+      { path: '/permissions', element: <PermissionsPage /> },
       { path: '/memories', element: <MemoriesPage /> },
       { path: '/memories/:memoryId', element: <MemoriesPage /> },
       { path: '/transfer', element: <TransferPage /> },

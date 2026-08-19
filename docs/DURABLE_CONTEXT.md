@@ -97,6 +97,12 @@ smoke and are compliant (forgotten context is never resumed either way).
   memories fail.
 - Grant token identifiers are server-internal audit fields and are never
   returned by the API.
+- The allowlist listing returns two additive view fields per grant:
+  `memory_status` (the granted memory's current `lifecycle_status`) and a
+  derived `status`: `revoked` when `revoked_at` is set (revocation wins over
+  any later memory lifecycle change), otherwise `superseded` for an archived
+  memory, `forgotten` for a forgotten memory, and `active` otherwise. The
+  underlying grant rows, query semantics, and revoke response are unchanged.
 
 ## MCP tool
 

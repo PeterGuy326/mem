@@ -69,6 +69,36 @@ func (g Grant) Active() bool {
 	return g.RevokedAt == nil
 }
 
+// Effective grant view states derived from the grant row and the lifecycle of
+// its granted memory. They are presentation metadata only: recall keeps
+// enforcing the canonical allowlist rules.
+const (
+	// GrantStatusActive means the grant is unrevoked and its memory recalls.
+	GrantStatusActive = "active"
+	// GrantStatusRevoked means the grant was soft-revoked; the audit row
+	// survives but recall is denied.
+	GrantStatusRevoked = "revoked"
+	// GrantStatusSuperseded means the grant is unrevoked but its memory was
+	// archived (superseded): recall reports it as stale until re-granted.
+	GrantStatusSuperseded = "superseded"
+	// GrantStatusForgotten means the granted memory was irreversibly
+	// forgotten after the grant was issued; it can never recall content.
+	GrantStatusForgotten = "forgotten"
+)
+
+// GrantView is one allowlist row annotated with the lifecycle of its granted
+// memory, so owners can see which approvals still resume context and which
+// are only retained for audit.
+type GrantView struct {
+	Grant
+	// MemoryStatus is the granted memory's lifecycle_status
+	// (active/archived/forgotten).
+	MemoryStatus string `json:"memory_status"`
+	// Status is the derived view state: one of GrantStatusActive,
+	// GrantStatusRevoked, GrantStatusSuperseded, GrantStatusForgotten.
+	Status string `json:"status"`
+}
+
 // GrantCommand creates or re-activates one explicit read grant. Re-granting a
 // revoked triple is an idempotent upsert, never a duplicate row.
 type GrantCommand struct {

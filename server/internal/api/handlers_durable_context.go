@@ -186,6 +186,8 @@ func (s *Server) handleCreateDurableContextGrant(w http.ResponseWriter, r *http.
 }
 
 // handleListDurableContextGrants lists the workspace allowlist for audit.
+// Items carry the grant fields plus a derived view status and the granted
+// memory's lifecycle so owners can tell stale approvals from active ones.
 func (s *Server) handleListDurableContextGrants(w http.ResponseWriter, r *http.Request) {
 	if s.DurableContext == nil {
 		writeError(w, http.StatusServiceUnavailable, "durable_context_disabled",
@@ -203,7 +205,7 @@ func (s *Server) handleListDurableContextGrants(w http.ResponseWriter, r *http.R
 		}
 		limit = parsed
 	}
-	grants, err := s.DurableContext.ListGrants(r.Context(), durablecontext.ListGrantsQuery{
+	grants, err := s.DurableContext.ListGrantViews(r.Context(), durablecontext.ListGrantsQuery{
 		WorkspaceID: ws.ID,
 		Principal:   query.Get("principal"),
 		Limit:       limit,

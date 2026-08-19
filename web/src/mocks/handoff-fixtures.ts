@@ -43,6 +43,7 @@ export const MOCK_CAPABILITIES: Capabilities = {
     provider_modify: true,
     workspace_export: true,
     workspace_import: true,
+    permissions_manage: true,
   },
 };
 

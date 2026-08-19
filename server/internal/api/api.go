@@ -74,7 +74,7 @@ type MemoryService interface {
 type DurableContextService interface {
 	Grant(context.Context, durablecontext.GrantCommand) (*durablecontext.Grant, error)
 	Revoke(context.Context, durablecontext.RevokeCommand) (*durablecontext.Grant, error)
-	ListGrants(context.Context, durablecontext.ListGrantsQuery) ([]durablecontext.Grant, error)
+	ListGrantViews(context.Context, durablecontext.ListGrantsQuery) ([]durablecontext.GrantView, error)
 	Recall(context.Context, durablecontext.RecallQuery) (*durablecontext.RecallResult, error)
 	Get(context.Context, durablecontext.GetQuery) (*durablecontext.RecallHit, error)
 }

@@ -369,6 +369,72 @@ func TestDurableContextPostgres(t *testing.T) {
 		}
 	})
 
+	t.Run("grant views expose lifecycle-aware status for owners", func(t *testing.T) {
+		// A dedicated principal keeps the assertion independent of the other
+		// scenario grants: one active row, then revoked for the revoked state.
+		erinMemory := remember(workspaceA, userA, "erin-view-"+uuid.NewString(),
+			"context granted to exercise the allowlist view")
+		erinGrant := grant(workspaceA, "erin", erinMemory.ID)
+
+		views, err := service.ListGrantViews(ctx, ListGrantsQuery{
+			WorkspaceID: workspaceA,
+			Principal:   "erin",
+		})
+		if err != nil {
+			t.Fatalf("list grant views: %v", err)
+		}
+		if len(views) != 1 {
+			t.Fatalf("expected 1 erin grant view, got %d", len(views))
+		}
+		if views[0].ID != erinGrant.ID ||
+			views[0].Status != GrantStatusActive ||
+			views[0].MemoryStatus != memory.StatusActive {
+			t.Fatalf("active view = %+v", views[0])
+		}
+
+		if _, err := service.Revoke(ctx, RevokeCommand{
+			WorkspaceID: workspaceA,
+			GrantID:     erinGrant.ID,
+			ActorUserID: &userA,
+		}); err != nil {
+			t.Fatalf("revoke erin grant: %v", err)
+		}
+		views, err = service.ListGrantViews(ctx, ListGrantsQuery{
+			WorkspaceID: workspaceA,
+			Principal:   "erin",
+		})
+		if err != nil {
+			t.Fatalf("list grant views after revoke: %v", err)
+		}
+		if len(views) != 1 || views[0].Status != GrantStatusRevoked ||
+			views[0].RevokedAt == nil {
+			t.Fatalf("revoked view = %+v", views)
+		}
+
+		// Alice's allowlist now spans every lifecycle-derived state:
+		// active, superseded (archived memory) and forgotten (redacted).
+		aliceViews, err := service.ListGrantViews(ctx, ListGrantsQuery{
+			WorkspaceID: workspaceA,
+			Principal:   "alice",
+		})
+		if err != nil {
+			t.Fatalf("list alice grant views: %v", err)
+		}
+		statusByMemory := map[uuid.UUID]string{}
+		for _, view := range aliceViews {
+			statusByMemory[view.MemoryID] = view.Status
+		}
+		if statusByMemory[activeTask.ID] != GrantStatusActive {
+			t.Fatalf("active task view = %q", statusByMemory[activeTask.ID])
+		}
+		if statusByMemory[superseded.ID] != GrantStatusSuperseded {
+			t.Fatalf("superseded view = %q", statusByMemory[superseded.ID])
+		}
+		if statusByMemory[toForget.ID] != GrantStatusForgotten {
+			t.Fatalf("forgotten view = %q", statusByMemory[toForget.ID])
+		}
+	})
+
 	t.Run("recall limit counts only active memories", func(t *testing.T) {
 		olderActive := []memory.Memory{
 			remember(workspaceA, userA, "carol-active-1-"+uuid.NewString(),

@@ -33,6 +33,7 @@ import {
   mockResume,
 } from './handoff-fixtures';
 import { WORKSPACE_BUNDLE_MEDIA_TYPE } from '@/lib/workspace-transfer';
+import type { ApiTokenRecord, DurableContextGrantView } from '@/lib/permissions';
 
 const BASE = '/v1';
 const EMPTY_ENRICHMENT_FILE_ID = 'empty-enrichment-e2e';
@@ -68,6 +69,106 @@ const EMPTY_ENRICHMENT_FILE: MemFile = {
 
 function jitter(min = 120, max = 320) {
   return delay(min + Math.random() * (max - min));
+}
+
+// ----- Permissions surface fixtures (tokens + durable-context grants) -----
+// Token rows use the capitalized Go field names because the server marshals
+// auth.Token without JSON tags (the CLI consumes the same shape).
+const MOCK_TOKENS: ApiTokenRecord[] = [
+  {
+    ID: 'cccccccc-cccc-4ccc-8ccc-cccccccccc01',
+    UserID: 'user-1',
+    Name: 'session-20260729-080000',
+    Scopes: ['search', 'read', 'write', 'delete', 'admin'],
+    Paths: [],
+    WorkspaceID: null,
+    RedactPII: false,
+    ExpiresAt: null,
+    LastUsedAt: '2026-07-29T09:30:00Z',
+    CreatedAt: '2026-07-29T08:00:00Z',
+  },
+  {
+    ID: 'cccccccc-cccc-4ccc-8ccc-cccccccccc02',
+    UserID: 'user-1',
+    Name: 'claude-code-laptop',
+    Scopes: ['search', 'read', 'write'],
+    Paths: ['/Projects'],
+    WorkspaceID: MOCK_WORKSPACE.id,
+    RedactPII: false,
+    ExpiresAt: '2026-12-31T23:59:59Z',
+    LastUsedAt: '2026-07-28T18:20:00Z',
+    CreatedAt: '2026-07-15T10:00:00Z',
+  },
+  {
+    ID: 'cccccccc-cccc-4ccc-8ccc-cccccccccc03',
+    UserID: 'user-1',
+    Name: 'codex-ci-readonly',
+    Scopes: ['read'],
+    Paths: [],
+    WorkspaceID: MOCK_WORKSPACE.id,
+    RedactPII: true,
+    ExpiresAt: null,
+    LastUsedAt: null,
+    CreatedAt: '2026-07-20T12:00:00Z',
+  },
+];
+
+const MOCK_DURABLE_GRANTS: DurableContextGrantView[] = [
+  {
+    id: 'cccccccc-cccc-4ccc-8ccc-cccccccccc11',
+    workspace_id: MOCK_WORKSPACE.id,
+    principal: 'agent.claude-code',
+    memory_id: 'dddddddd-dddd-4ddd-8ddd-dddddddddd01',
+    mode: 'read',
+    granted_by_user_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    granted_at: '2026-07-20T09:00:00Z',
+    updated_at: '2026-07-20T09:00:00Z',
+    memory_status: 'active',
+    status: 'active',
+  },
+  {
+    id: 'cccccccc-cccc-4ccc-8ccc-cccccccccc12',
+    workspace_id: MOCK_WORKSPACE.id,
+    principal: 'agent.codex',
+    memory_id: 'dddddddd-dddd-4ddd-8ddd-dddddddddd02',
+    mode: 'read',
+    granted_by_user_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    granted_at: '2026-07-18T09:00:00Z',
+    updated_at: '2026-07-25T09:00:00Z',
+    memory_status: 'archived',
+    status: 'superseded',
+  },
+  {
+    id: 'cccccccc-cccc-4ccc-8ccc-cccccccccc13',
+    workspace_id: MOCK_WORKSPACE.id,
+    principal: 'agent.claude-code',
+    memory_id: 'dddddddd-dddd-4ddd-8ddd-dddddddddd03',
+    mode: 'read',
+    granted_at: '2026-07-10T09:00:00Z',
+    revoked_at: '2026-07-12T09:00:00Z',
+    updated_at: '2026-07-12T09:00:00Z',
+    memory_status: 'active',
+    status: 'revoked',
+  },
+  {
+    id: 'cccccccc-cccc-4ccc-8ccc-cccccccccc14',
+    workspace_id: MOCK_WORKSPACE.id,
+    principal: 'agent.codex',
+    memory_id: 'dddddddd-dddd-4ddd-8ddd-dddddddddd04',
+    mode: 'read',
+    granted_by_user_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    granted_at: '2026-07-05T09:00:00Z',
+    updated_at: '2026-07-22T09:00:00Z',
+    memory_status: 'forgotten',
+    status: 'forgotten',
+  },
+];
+
+function permissionsForbidden() {
+  return HttpResponse.json(
+    { error: 'forbidden', hint: 'admin scope required for permissions management' },
+    { status: 403 },
+  );
 }
 
 function inferKind(mime: string, name: string): MemFile['kind'] {
@@ -569,6 +670,50 @@ export const handlers = [
         created_at: '2024-01-01T00:00:00Z',
       },
     });
+  }),
+
+  // ----- Permissions surface: tokens + durable-context grants -----
+  http.get(`${BASE}/auth/tokens`, async ({ request }) => {
+    await jitter(60, 140);
+    if (!mockPermissions(request).permissions_manage) return permissionsForbidden();
+    return HttpResponse.json({ tokens: structuredClone(MOCK_TOKENS) });
+  }),
+
+  http.delete(`${BASE}/auth/tokens/:id`, async ({ params, request }) => {
+    await jitter(60, 140);
+    if (!mockPermissions(request).permissions_manage) return permissionsForbidden();
+    const idx = MOCK_TOKENS.findIndex((token) => token.ID === String(params.id));
+    if (idx < 0) {
+      return HttpResponse.json({ error: 'not_found', hint: 'no such token' }, { status: 404 });
+    }
+    MOCK_TOKENS.splice(idx, 1);
+    return HttpResponse.json({ ok: true });
+  }),
+
+  http.get(`${BASE}/durable-context/grants`, async ({ request }) => {
+    await jitter(60, 140);
+    if (!mockPermissions(request).permissions_manage) return permissionsForbidden();
+    return HttpResponse.json({ grants: structuredClone(MOCK_DURABLE_GRANTS) });
+  }),
+
+  http.post(`${BASE}/durable-context/grants/:grantID/revoke`, async ({ params, request }) => {
+    await jitter(60, 140);
+    if (!mockPermissions(request).permissions_manage) return permissionsForbidden();
+    const grant = MOCK_DURABLE_GRANTS.find(
+      (candidate) => candidate.id === String(params.grantID),
+    );
+    if (!grant) {
+      return HttpResponse.json({ error: 'not_found', hint: 'no such grant' }, { status: 404 });
+    }
+    // Idempotent soft revoke: stamp once, keep the audit row.
+    if (!grant.revoked_at) {
+      grant.revoked_at = '2026-07-29T10:00:00Z';
+      grant.updated_at = grant.revoked_at;
+      grant.status = 'revoked';
+    }
+    // The real endpoint returns the bare grant row, never view annotations.
+    const { memory_status: _memoryStatus, status: _status, ...grantRow } = grant;
+    return HttpResponse.json(structuredClone(grantRow));
   }),
 
   // ----- Workspace / deployment capabilities -----

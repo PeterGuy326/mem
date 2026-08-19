@@ -207,6 +207,67 @@ func (s *Service) ListGrants(ctx context.Context, q ListGrantsQuery) ([]Grant, e
 	return grants, rows.Err()
 }
 
+// ListGrantViews returns workspace grants newest-first, annotated with the
+// lifecycle of each granted memory, optionally narrowed to one principal.
+// The grants table foreign-keys memories with ON DELETE CASCADE, so the join
+// cannot drop rows; a grant always sees its memory's current lifecycle.
+func (s *Service) ListGrantViews(ctx context.Context, q ListGrantsQuery) ([]GrantView, error) {
+	if s == nil || s.pool == nil {
+		return nil, fmt.Errorf("durable context service is not configured")
+	}
+	if q.WorkspaceID == uuid.Nil {
+		return nil, invalid("workspace_id is required")
+	}
+	principal := strings.TrimSpace(q.Principal)
+	if principal != "" && !principalRE.MatchString(principal) {
+		return nil, invalid("principal must match " + PrincipalPattern)
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+grantColumnsAliased+`, m.lifecycle_status
+		  FROM durable_context_grants g
+		  JOIN memories m
+		    ON m.workspace_id = g.workspace_id AND m.id = g.memory_id
+		 WHERE g.workspace_id = $1
+		   AND ($2 = '' OR g.principal = $2)
+		 ORDER BY g.granted_at DESC, g.id DESC
+		 LIMIT $3`,
+		q.WorkspaceID, principal, clampLimit(q.Limit),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list durable context grants: %w", err)
+	}
+	defer rows.Close()
+
+	views := make([]GrantView, 0)
+	for rows.Next() {
+		var view GrantView
+		if err := scanGrantRow(rows, &view.Grant, &view.MemoryStatus); err != nil {
+			return nil, fmt.Errorf("list durable context grants: %w", err)
+		}
+		view.Status = deriveGrantStatus(view.RevokedAt != nil, view.MemoryStatus)
+		views = append(views, view)
+	}
+	return views, rows.Err()
+}
+
+// deriveGrantStatus maps one grant row plus its memory lifecycle to the view
+// state surfaced by the allowlist listing. Revocation wins: a revoked grant
+// stays revoked even if its memory later changes lifecycle.
+func deriveGrantStatus(revoked bool, memoryStatus string) string {
+	if revoked {
+		return GrantStatusRevoked
+	}
+	switch memoryStatus {
+	case memory.StatusArchived:
+		return GrantStatusSuperseded
+	case memory.StatusForgotten:
+		return GrantStatusForgotten
+	default:
+		return GrantStatusActive
+	}
+}
+
 // Recall resumes the approved, active context for one principal. A principal
 // with no unrevoked grants is denied explicitly; granted memories that are
 // outside the token path boundary, archived, or forgotten are absent.
@@ -377,13 +438,27 @@ const grantColumns = `
 	granted_by_user_id, granted_by_token_id, granted_at,
 	revoked_at, revoked_by_user_id, revoked_by_token_id, updated_at`
 
+// grantColumnsAliased is the same projection qualified for queries that join
+// durable_context_grants against other tables (aliased g).
+const grantColumnsAliased = `
+	g.id, g.workspace_id, g.principal, g.memory_id, g.mode,
+	g.granted_by_user_id, g.granted_by_token_id, g.granted_at,
+	g.revoked_at, g.revoked_by_user_id, g.revoked_by_token_id, g.updated_at`
+
 type rowScanner interface {
 	Scan(dest ...any) error
 }
 
 func scanGrant(row rowScanner) (Grant, error) {
 	var grant Grant
-	err := row.Scan(
+	err := scanGrantRow(row, &grant)
+	return grant, err
+}
+
+// scanGrantRow scans the canonical grant column projection into grant,
+// followed by any extra joined columns (e.g. the memory lifecycle status).
+func scanGrantRow(row rowScanner, grant *Grant, extra ...any) error {
+	dest := []any{
 		&grant.ID,
 		&grant.WorkspaceID,
 		&grant.Principal,
@@ -396,6 +471,7 @@ func scanGrant(row rowScanner) (Grant, error) {
 		&grant.RevokedByUserID,
 		&grant.RevokedByTokenID,
 		&grant.UpdatedAt,
-	)
-	return grant, err
+	}
+	dest = append(dest, extra...)
+	return row.Scan(dest...)
 }
