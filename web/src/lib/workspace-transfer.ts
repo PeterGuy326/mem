@@ -1,6 +1,8 @@
 import { apiRawResponse } from './api';
 import type {
   WorkspaceImportConflict,
+  WorkspaceImportHistory,
+  WorkspaceImportHistoryEntry,
   WorkspaceImportResult,
   WorkspaceObjectCounts,
 } from './types';
@@ -388,6 +390,82 @@ export async function importWorkspaceBundle(file: File): Promise<WorkspaceImport
       });
     }
     return result;
+  } catch (error) {
+    throw networkError(error);
+  }
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+/**
+ * The ledger only ever contains fully committed imports, so every entry is
+ * structurally succeeded. Fresh entries carry zero conflicts and zero skips;
+ * merge_conservative entries carry their recorded counts. Entries that do not
+ * match the contract are dropped rather than rendered half-typed.
+ */
+function parseImportHistoryEntry(value: unknown): WorkspaceImportHistoryEntry | null {
+  if (!isRecord(value)) return null;
+  if (
+    typeof value.bundle_id !== 'string' ||
+    typeof value.archive_sha256 !== 'string' ||
+    typeof value.source_workspace_id !== 'string' ||
+    typeof value.imported_at !== 'string' ||
+    typeof value.restore_mode !== 'string' ||
+    !isNonNegativeSafeInteger(value.schema_version) ||
+    !isNonNegativeSafeInteger(value.conflict_count) ||
+    !isNonNegativeSafeInteger(value.skipped_count)
+  ) {
+    return null;
+  }
+  return {
+    bundle_id: value.bundle_id,
+    archive_sha256: value.archive_sha256,
+    source_workspace_id: value.source_workspace_id,
+    schema_version: value.schema_version,
+    restore_mode: value.restore_mode as WorkspaceImportHistoryEntry['restore_mode'],
+    result_status: 'succeeded',
+    conflict_count: value.conflict_count,
+    skipped_count: value.skipped_count,
+    imported_at: value.imported_at,
+  };
+}
+
+function parseImportHistory(value: unknown): WorkspaceImportHistory | null {
+  if (!isRecord(value) || !Array.isArray(value.items)) return null;
+  const items = value.items
+    .map(parseImportHistoryEntry)
+    .filter((entry): entry is WorkspaceImportHistoryEntry => entry !== null);
+  return { items, count: items.length };
+}
+
+/**
+ * Lists committed bundle imports for the current workspace, newest first.
+ * Read-only projection of the workspace_imports idempotency ledger.
+ */
+export async function listImportHistory(options?: {
+  limit?: number;
+  signal?: AbortSignal;
+}): Promise<WorkspaceImportHistory> {
+  try {
+    const response = await apiRawResponse('/workspaces/current/imports', {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      query: options?.limit !== undefined ? { limit: options.limit } : undefined,
+      signal: options?.signal,
+    });
+    if (!response.ok) throw await errorFromResponse(response);
+    const history = parseImportHistory(await response.json().catch(() => undefined));
+    if (!history) {
+      throw new WorkspaceTransferError({
+        kind: 'unsupported',
+        message: 'workspace import history returned an unsupported response',
+        status: response.status,
+        code: 'unsupported_workspace_import_history_response',
+      });
+    }
+    return history;
   } catch (error) {
     throw networkError(error);
   }

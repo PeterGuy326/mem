@@ -413,6 +413,35 @@ const MOCK_WORKSPACE_BUNDLE_TEXT =
   'PK\u0003\u0004MEM.WORKSPACE_BUNDLE.V1\nmanifest.json\nchecksums.sha256\n';
 const IMPORTED_WORKSPACE_BUNDLES = new Set<string>();
 
+// Deterministic workspace_imports ledger projection, newest first. Every entry
+// is a committed import, so result_status is always succeeded; fresh entries
+// carry zero conflicts and zero skips, merge_conservative entries carry their
+// recorded counts.
+const MOCK_IMPORT_HISTORY = [
+  {
+    bundle_id: '77777777-7777-4777-8777-777777777777',
+    archive_sha256: 'c'.repeat(64),
+    source_workspace_id: '99999999-9999-4999-8999-999999999999',
+    schema_version: 2,
+    restore_mode: 'fresh',
+    result_status: 'succeeded',
+    conflict_count: 0,
+    skipped_count: 0,
+    imported_at: '2026-07-28T07:08:09Z',
+  },
+  {
+    bundle_id: '66666666-6666-4666-8666-666666666666',
+    archive_sha256: 'b'.repeat(64),
+    source_workspace_id: '88888888-8888-4888-8888-888888888888',
+    schema_version: 1,
+    restore_mode: 'fresh',
+    result_status: 'succeeded',
+    conflict_count: 0,
+    skipped_count: 0,
+    imported_at: '2026-07-01T03:04:05Z',
+  },
+];
+
 function mockToken(request: Request): string {
   return request.headers.get('Authorization')?.replace(/^Bearer\s+/i, '') ?? '';
 }
@@ -946,6 +975,34 @@ export const handlers = [
       },
       replayed,
     });
+  }),
+
+  http.get(`${BASE}/workspaces/current/imports`, async ({ request }) => {
+    await delay(60);
+    if (!mockPermissions(request).workspace_import) {
+      return HttpResponse.json(
+        {
+          error: 'forbidden',
+          hint: 'workspace import history requires an unrestricted owner/admin token',
+        },
+        { status: 403 },
+      );
+    }
+    const url = new URL(request.url);
+    const limitRaw = url.searchParams.get('limit');
+    let limit = 50;
+    if (limitRaw !== null && limitRaw !== '') {
+      const parsed = Number(limitRaw);
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 100) {
+        return HttpResponse.json(
+          { error: 'bad_limit', hint: 'limit must be between 1 and 100' },
+          { status: 400 },
+        );
+      }
+      limit = parsed;
+    }
+    const items = MOCK_IMPORT_HISTORY.slice(0, limit);
+    return HttpResponse.json({ items, count: items.length });
   }),
 
   // ----- Structured Agent memory ledger -----
