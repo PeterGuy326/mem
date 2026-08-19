@@ -82,6 +82,7 @@ func TestUploadArchiveBlobsVerifiesAndCleansUp(t *testing.T) {
 			context.Background(),
 			target,
 			archive,
+			nil,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -105,6 +106,7 @@ func TestUploadArchiveBlobsVerifiesAndCleansUp(t *testing.T) {
 			context.Background(),
 			target,
 			archive,
+			nil,
 		)
 		if err == nil || !strings.Contains(err.Error(), "storage unavailable") {
 			t.Fatalf("error = %v", err)
@@ -128,6 +130,7 @@ func TestUploadArchiveBlobsVerifiesAndCleansUp(t *testing.T) {
 			context.Background(),
 			target,
 			archive,
+			nil,
 		)
 		if !errors.Is(err, ErrIntegrity) {
 			t.Fatalf("error = %v", err)
@@ -149,6 +152,7 @@ func TestUploadArchiveBlobCreatesIndependentObjectsForSharedContent(t *testing.T
 			OwnerID:     uuid.New(),
 		},
 		archive,
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)

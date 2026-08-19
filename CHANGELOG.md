@@ -9,6 +9,18 @@ The project is not yet publishing stable semantic-versioned releases.
 
 ### Added
 
+- `merge_conservative` workspace bundle restore: importing a validated
+  bundle into an existing, possibly non-empty workspace now compares every
+  bundle object against the target under the import lock by stable identity
+  and content hash, inserts only absent objects, skips identical or
+  already-present content, and reports divergent objects as structured
+  conflicts without ever overwriting target state. A durable per-object
+  ledger (migration 0023, `workspace_import_objects`) records each decision
+  in the same transaction as the merged state, so retried merges are
+  idempotent and replay the exact inserted/skipped/conflict summary;
+  conflict sets beyond the bounded detail budget abort the whole merge
+  without writing anything. Available through the existing import API
+  (`mode=merge_conservative`) and advertised in workspace capabilities.
 - Web UI for the immutable memory correction/supersede relations landed in
   #90: memory list rows carry a server-derived `superseded` marker, detail
   and expanded ledger views show a bidirectional relations panel with peer
