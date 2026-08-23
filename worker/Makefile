@@ -18,13 +18,14 @@ PROTO_OUT := mem_worker/proto
 install:
 	$(UV) sync --extra test --extra dev
 
-# Regenerate Python protobuf + grpc stubs.
+# Regenerate Python protobuf + grpc stubs. worker/uv.lock is the canonical
+# pinned producer graph; --frozen prevents an implicit resolver update.
 # We rewrite the "import processor_pb2" -> "from . import processor_pb2"
 # so the generated package is importable from anywhere.
 proto:
 	@mkdir -p $(PROTO_OUT)
 	@touch $(PROTO_OUT)/__init__.py
-	$(UV) run python -m grpc_tools.protoc \
+	$(UV) run --frozen python -m grpc_tools.protoc \
 		-I$(PROTO_SRC) \
 		--python_out=$(PROTO_OUT) \
 		--grpc_python_out=$(PROTO_OUT) \

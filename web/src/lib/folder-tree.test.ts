@@ -100,8 +100,8 @@ describe('buildTree', () => {
   it('includes ghost folders', () => {
     const tree = buildTree([], ['/Empty']);
     expect(tree.children).toHaveLength(1);
-    expect(tree.children[0].name).toBe('Empty');
-    expect(tree.children[0].fileCount).toBe(0);
+    expect(tree.children[0]?.name).toBe('Empty');
+    expect(tree.children[0]?.fileCount).toBe(0);
   });
 });
 
@@ -125,7 +125,7 @@ describe('buildCrumbs', () => {
   it('root crumbs', () => {
     const crumbs = buildCrumbs('/');
     expect(crumbs).toHaveLength(1);
-    expect(crumbs[0].path).toBe('/');
+    expect(crumbs[0]?.path).toBe('/');
   });
   it('nested crumbs', () => {
     const crumbs = buildCrumbs('/Photos/2012');

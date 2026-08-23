@@ -19,9 +19,9 @@ classifiers = [
 
 dependencies = [
     # gRPC
-    "grpcio>=1.80",
-    "grpcio-tools>=1.80",
-    "protobuf>=6.31.1",
+    "grpcio>=1.83",
+    "grpcio-tools>=1.83",
+    "protobuf>=7.35.1",
     # Config / validation
     "pydantic>=2.6",
     "pydantic-settings>=2.2",

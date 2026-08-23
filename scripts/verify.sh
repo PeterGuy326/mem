@@ -179,7 +179,7 @@ assert_migration_version() {
 
 run_migration_round_trip() {
   require_command go
-  log "Migration validation and explicit 0016/0017/0018/0019/0020 rollback round trips"
+  log "Migration validation and explicit 0016 through 0022 rollback round trips"
   (
     cd "${REPO_ROOT}/server"
     go run github.com/pressly/goose/v3/cmd/goose@v3.22.1 \
