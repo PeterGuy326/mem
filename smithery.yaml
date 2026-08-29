@@ -1,0 +1,28 @@
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    required:
+      - memToken
+    properties:
+      memServer:
+        type: string
+        default: "http://localhost:8787"
+        description: "memd base URL"
+      memToken:
+        type: string
+        description: "Bearer token for memd authentication"
+      memWorkspace:
+        type: string
+        description: "Optional workspace UUID"
+  commandFunction:
+    |-
+      (config) => ({
+        command: "mem-mcp",
+        args: [],
+        env: {
+          MEM_SERVER: config.memServer || "http://localhost:8787",
+          MEM_TOKEN: config.memToken,
+          MEM_WORKSPACE: config.memWorkspace || ""
+        }
+      })

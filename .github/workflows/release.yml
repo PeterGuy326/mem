@@ -1,0 +1,118 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag to create (e.g., v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build mem-mcp binaries
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            asset: mem-mcp-linux-amd64
+          - goos: linux
+            goarch: arm64
+            asset: mem-mcp-linux-arm64
+          - goos: darwin
+            goarch: amd64
+            asset: mem-mcp-darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            asset: mem-mcp-darwin-arm64
+          - goos: windows
+            goarch: amd64
+            asset: mem-mcp-windows-amd64.exe
+          - goos: windows
+            goarch: arm64
+            asset: mem-mcp-windows-arm64.exe
+    env:
+      GOFLAGS: "-trimpath -ldflags=-s -w"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+
+      - name: Build mem-mcp (${{ matrix.asset }})
+        working-directory: server
+        run: |
+          mkdir -p "${RUNNER_TEMP}/assets"
+          CGO_ENABLED=0 GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" \
+            go build -o "${RUNNER_TEMP}/assets/${{ matrix.asset }}" ./cmd/mem-mcp
+
+      - name: Upload asset
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ runner.temp }}/assets/${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Create Release
+    needs: [build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download all assets
+        uses: actions/download-artifact@dcaceae705f1b3fe3482f4e0ebf3e44f58f0c0e2 # v7.0.1
+        with:
+          path: /tmp/release-assets
+          pattern: mem-mcp-*
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: /tmp/release-assets
+        run: sha256sum mem-mcp-* > mem-mcp-checksums.txt
+
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME:-${INPUT_VERSION}}"
+          # The `v*` tag glob and the workflow_dispatch input are both
+          # caller-controlled, so the version is asserted before it reaches
+          # the release API and the asset paths.
+          if ! printf '%s' "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "refusing to release non-semver version: ${VERSION}" >&2
+            exit 1
+          fi
+          gh release create "${VERSION}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${VERSION}" \
+            --generate-notes \
+            /tmp/release-assets/mem-mcp-*

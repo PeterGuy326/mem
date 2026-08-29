@@ -9,6 +9,10 @@ The project is not yet publishing stable semantic-versioned releases.
 
 ### Added
 
+- MCP distribution packaging: smithery.yaml, npm wrapper, README Tools table,
+  and mcp-server repository topic (preparation for MCP Registry, Smithery,
+  mcp.so, Glama, and PulseMCP discovery).
+
 - `merge_conservative` workspace bundle restore: importing a validated
   bundle into an existing, possibly non-empty workspace now compares every
   bundle object against the target under the import lock by stable identity
@@ -249,6 +253,14 @@ The project is not yet publishing stable semantic-versioned releases.
 
 ### Fixed
 
+- Close the `mem-mcp` distribution gaps that made the npm wrapper installable on
+  only three platforms: the release matrix excluded windows and `linux-arm64`,
+  the package `os` field omitted `win32` so npm rejected Windows installs with
+  `EBADPLATFORM`, and the `mem-mcp` bin wrapper was a bash script that npm's
+  Windows cmd/ps1 shims cannot execute. All six published platform targets are
+  now covered, the wrapper is a Node script, and the platform-to-asset mapping
+  that `install.js` and the wrapper each carried separately now lives in one
+  table in `npm/platforms.js` so the two cannot drift again.
 - Make combined file and folder move-plus-rename requests atomic, including
   validation, final-path conflict handling and destination folder creation.
 - Keep rejected/superseded AI descriptions out of file detail, visual-search

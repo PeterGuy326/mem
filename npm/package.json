@@ -1,0 +1,42 @@
+{
+  "name": "@fullstack-ai-infra/mem-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for mem — a portable, self-hosted memory plane for AI agents",
+  "mcpName": "io.github.fullstack-ai-infra/mem-mcp",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "mem",
+    "memory",
+    "ai-agents",
+    "knowledge-management",
+    "mcp-server"
+  ],
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/fullstack-ai-infra/mem",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fullstack-ai-infra/mem.git"
+  },
+  "bugs": {
+    "url": "https://github.com/fullstack-ai-infra/mem/issues"
+  },
+  "bin": {
+    "mem-mcp": "./mem-mcp"
+  },
+  "os": ["linux", "darwin", "win32"],
+  "cpu": ["x64", "arm64"],
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "files": [
+    "install.js",
+    "mem-mcp",
+    "platforms.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

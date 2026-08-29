@@ -7,6 +7,8 @@
 [![CI](https://github.com/fullstack-ai-infra/mem/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/fullstack-ai-infra/mem/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-experimental-orange.svg)](#project-status)
+[![MCP Server](https://img.shields.io/badge/MCP%20Server-26%20tools-blue?logo=modelcontextprotocol)](docs/mcp.md)
+[![smithery](https://smithery.ai/badge/@fullstack-ai-infra/mem-mcp)](https://smithery.ai/server/@fullstack-ai-infra/mem-mcp)
 
 **A portable, self-hosted memory plane for AI agents.**
 
@@ -65,6 +67,65 @@ The current implementation includes file and folder operations, token-based
 access, search and retrieval surfaces, an extensible processing worker, and MCP
 tools backed by the same service API. See [SPEC.md](SPEC.md) for the evolving
 product and architecture contract.
+
+## MCP Server
+
+`mem-mcp` is a stdio MCP server exposing the mem memory plane to any MCP-compatible
+Agent host (Claude Desktop, Claude Code, Codex, Cursor, Cline). It is a thin
+adapter over the canonical `memd` HTTP API — one core across API / MCP / CLI / UI.
+
+### Tools
+
+| Tool | Description |
+|------|-------------|
+| `mem_put` | Upload content (text or base64 binary) and trigger AI indexing |
+| `mem_get` | Read file content; binary returned base64-encoded, capped at 4 MiB |
+| `mem_info` | File metadata + AI fields (caption / summary / tags / timeline_at / index_status) |
+| `mem_file_annotation_decide` | Accept or reject one pending AI description/tag suggestion |
+| `mem_list` | List files with filters (tag / mime-prefix / since / until / path-prefix) |
+| `mem_ls` | List immediate subfolders + files under a folder path |
+| `mem_mkdir` | Create folder (mkdir -p semantics) |
+| `mem_mv` | Move file to a different folder, or rename in place |
+| `mem_folder_tree` | Full folder tree as nested structure |
+| `mem_remember` | Idempotently persist an observation, decision, preference, task state, fact, note or artifact reference |
+| `mem_memory_list` | List bounded structured-memory summaries |
+| `mem_memory_get` | Get one full structured memory by UUID within the token path boundary |
+| `mem_feedback` | Record useful/not-useful or pin/unpin feedback with optimistic concurrency |
+| `mem_archive` | Reversibly exclude a memory from normal recall |
+| `mem_restore` | Return an archived memory to normal recall |
+| `mem_forget` | Irreversibly redact one live memory payload after explicit confirmation |
+| `mem_checkpoint` | Persist a versioned task checkpoint or an explicit handoff to another Agent/device |
+| `mem_task_list` | List bounded resumable-task summaries |
+| `mem_checkpoint_list` | List newest-first bounded checkpoint summaries for one task |
+| `mem_checkpoint_get` | Get one immutable checkpoint and its full handoff payload |
+| `mem_resume` | Restore the current task head or a selected historical checkpoint |
+| `mem_search` | Natural-language search (text / visual / auto fuse); ranked files + snippets |
+| `mem_context` | Build an evidence-backed context pack for the calling Agent |
+| `mem_related` | Top-K files related to a `file_id` by embedding similarity |
+| `mem_face` | Person clusters: `action=list` / `name` / `merge` |
+| `mem_durable_context_recall` | Resume explicitly granted, workspace-scoped active memories for one principal |
+
+### Quick start
+
+```bash
+# build
+make build-mem-mcp            # produces ./bin/mem-mcp
+
+# run with an existing memd + token
+MEM_SERVER=http://localhost:8787 MEM_TOKEN=mem_... ./bin/mem-mcp
+```
+
+Register with Claude Code:
+
+```bash
+claude mcp add --scope user --transport stdio \
+  --env MEM_SERVER=http://localhost:8787 \
+  --env MEM_TOKEN=mem_... \
+  mem -- /absolute/path/to/bin/mem-mcp
+```
+
+Full configuration, per-tool semantics, and host setup guides are in
+[docs/mcp.md](docs/mcp.md).
 
 ## 五个高频场景
 

@@ -1,0 +1,53 @@
+{
+  "mcpName": "io.github.fullstack-ai-infra/mem-mcp",
+  "name": "mem-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for mem — a portable, self-hosted memory plane for AI agents",
+  "protocol": "2024-11-05",
+  "transport": "stdio",
+  "command": "mem-mcp",
+  "env": {
+    "MEM_SERVER": {
+      "description": "memd base URL",
+      "default": "http://localhost:8787"
+    },
+    "MEM_TOKEN": {
+      "description": "Bearer token for memd authentication",
+      "required": true
+    },
+    "MEM_WORKSPACE": {
+      "description": "Optional workspace UUID"
+    }
+  },
+  "tools": [
+    "mem_put",
+    "mem_get",
+    "mem_info",
+    "mem_file_annotation_decide",
+    "mem_list",
+    "mem_ls",
+    "mem_mkdir",
+    "mem_mv",
+    "mem_folder_tree",
+    "mem_remember",
+    "mem_memory_list",
+    "mem_memory_get",
+    "mem_feedback",
+    "mem_archive",
+    "mem_restore",
+    "mem_forget",
+    "mem_checkpoint",
+    "mem_task_list",
+    "mem_checkpoint_list",
+    "mem_checkpoint_get",
+    "mem_resume",
+    "mem_search",
+    "mem_context",
+    "mem_related",
+    "mem_face",
+    "mem_durable_context_recall"
+  ],
+  "categories": ["memory", "knowledge-management", "ai-agents"],
+  "repo": "https://github.com/fullstack-ai-infra/mem",
+  "license": "Apache-2.0"
+}

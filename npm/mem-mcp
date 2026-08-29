@@ -1,0 +1,52 @@
+#!/usr/bin/env node
+
+/**
+ * mem-mcp — npm bin wrapper.
+ *
+ * Resolves the platform binary downloaded by install.js into npm/bin/ and runs
+ * it with inherited stdio, which is what the MCP stdio transport needs.
+ *
+ * This is deliberately a Node script rather than a POSIX shell script: npm
+ * generates cmd/ps1 shims on Windows, and a bash shebang there cannot start the
+ * binary at all. Node is guaranteed present because npm just ran.
+ */
+
+"use strict";
+
+const { spawn } = require("child_process");
+const { existsSync } = require("fs");
+const { platform, arch } = require("os");
+const { join } = require("path");
+const { assetFor } = require("./platforms");
+
+const PACKAGE = "@fullstack-ai-infra/mem-mcp";
+
+let asset;
+try {
+  asset = assetFor(platform(), arch());
+} catch (err) {
+  console.error(`mem-mcp: ${err.message}`);
+  process.exit(1);
+}
+
+const binPath = join(__dirname, "bin", asset);
+
+if (!existsSync(binPath)) {
+  console.error(`mem-mcp: binary not found at ${binPath}`);
+  console.error(`mem-mcp: run 'npm rebuild ${PACKAGE}' to download it`);
+  process.exit(1);
+}
+
+const child = spawn(binPath, process.argv.slice(2), { stdio: "inherit" });
+
+child.on("error", (err) => {
+  console.error(`mem-mcp: failed to start ${binPath}: ${err.message}`);
+  process.exit(1);
+});
+
+child.on("exit", (code, signal) => {
+  if (signal) {
+    process.exit(1);
+  }
+  process.exit(code === null ? 1 : code);
+});
