@@ -54,6 +54,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newLegacyAuthCommand(newLogoutCmd(), "mem auth logout"))
 	root.AddCommand(newLegacyTokenCmd())
 	root.AddCommand(newRememberCmd())
+	root.AddCommand(newIngestCmd())
 	root.AddCommand(newMemoryCmd())
 	root.AddCommand(newMemoriesCmd())
 	root.AddCommand(newFeedbackCmd())

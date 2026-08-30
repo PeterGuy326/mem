@@ -12,6 +12,19 @@ The project is not yet publishing stable semantic-versioned releases.
 - MCP distribution packaging: smithery.yaml, npm wrapper, README Tools table,
   and mcp-server repository topic (preparation for MCP Registry, Smithery,
   mcp.so, Glama, and PulseMCP discovery).
+- `mem ingest qoder` — a local-artifacts connector that makes AI-agent
+  conversation transcripts (Qoder/CLI session stores, `~/.qoder/projects/**/*.jsonl`)
+  a first-class mem input source (`#103`). It normalizes each conversation turn
+  into a memory `observation` with Qoder source flags, producer session/model,
+  and message timestamp, and writes through the standard `/v1/memories` API so
+  records are recallable from the API/MCP/CLI/UI unchanged. Ingestion is
+  incremental (per-file line cursors under `~/.mem/ingest/qoder`, reset when a
+  transcript is rewritten shorter) and idempotent (stable `Idempotency-Key` per
+  file+line; a conflict degrades to skipping that file instead of aborting the
+  run). The tolerant JSONL parser skips unparseable or empty-content lines
+  rather than failing a run; a `--dry-run` mode plans without writing and leaves
+  no checkpoint behind, so a previewed transcript stays ingestible.
+  See `docs/integrations/qoder-ingest.md`.
 
 - `merge_conservative` workspace bundle restore: importing a validated
   bundle into an existing, possibly non-empty workspace now compares every
