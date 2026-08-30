@@ -3,9 +3,11 @@
 All notable changes to this project are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-The project is not yet publishing stable semantic-versioned releases.
+The project publishes 0.x prerelease versions; a stable release line is not yet published.
 
 ## [Unreleased]
+
+## [0.1.0] - 2026-08-30
 
 ### Added
 
