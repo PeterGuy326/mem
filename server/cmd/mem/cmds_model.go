@@ -425,7 +425,7 @@ func activateLocalModelProfile(
 		return providerSetResp{}, err
 	}
 	if cfg.Token == "" {
-		return providerSetResp{}, newCliError(3, "not logged in", "run `mem auth login` first")
+		return providerSetResp{}, errNotLoggedIn()
 	}
 	var response providerSetResp
 	client := newHTTPClient(cfg)

@@ -42,7 +42,7 @@ func newPutCmd() *cobra.Command {
 				return err
 			}
 			if cfg.Token == "" {
-				return newCliError(3, "not logged in", "run `mem auth login` first")
+				return errNotLoggedIn()
 			}
 			c := newHTTPClient(cfg)
 			sourceMetadata, err := cliSourceMetadata(
@@ -491,7 +491,7 @@ func newVersionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print client + server version",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Println("mem CLI dev")
+			fmt.Printf("mem CLI %s\n", cliVersion)
 			cfg, _ := resolveConfig("")
 			if cfg != nil && cfg.Server != "" {
 				c := newHTTPClient(cfg)
@@ -499,7 +499,7 @@ func newVersionCmd() *cobra.Command {
 					Version string `json:"version"`
 				}
 				if err := c.doJSON(http.MethodGet, "/v1/version", nil, &resp); err == nil {
-					fmt.Printf("server: %s (%s)\n", resp.Version, cfg.Server)
+					fmt.Printf("server: %s (%s)\n", resp.Version, redactURL(cfg.Server))
 				}
 			}
 			return nil

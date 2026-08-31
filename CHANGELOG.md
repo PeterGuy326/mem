@@ -7,6 +7,26 @@ The project publishes 0.x prerelease versions; a stable release line is not yet 
 
 ## [Unreleased]
 
+### Added
+
+- `mem doctor` — a read-only diagnosis of why the CLI cannot talk to a working
+  server (`#112`). It reports four checks in a fixed order: reachability of the
+  configured server URL, whether a credential exists, the workspace the server
+  resolved for that credential, and CLI/server version skew. Each finding carries
+  the SPEC §7.1 exit code it contributes (`0` ok · `2` not_found · `3` auth ·
+  `4` plan/quota · `5` provider/timeout), and a check that an earlier failure made
+  impossible is reported as `skipped` instead of guessed. It issues only `GET`
+  requests and never writes configuration, starts a container, or installs a
+  dependency; `--format json` emits the `mem.doctor` v1 document described by
+  `docs/schemas/mem-doctor.v1.schema.json`, with no secret value in it (the
+  configured URL is reported with credentials removed). See
+  `docs/DEPLOYMENT.md`.
+- First-run guidance: a command that fails because no credential exists now says
+  so on a machine with no configuration at all by naming the documented
+  deployment path (`deploy/compose`, `docs/DEPLOYMENT.md`), instead of telling
+  somebody to log in against a server that is not running yet. Hosts that already
+  have a configuration keep the previous, shorter hint.
+
 ### Fixed
 
 - The npm installer now verifies the selected Release binary against the

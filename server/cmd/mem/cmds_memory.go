@@ -123,7 +123,7 @@ cursor and bounded memory summaries for scripts.`,
 				return err
 			}
 			if cfg.Token == "" {
-				return newCliError(3, "not logged in", "run `mem auth login` first")
+				return errNotLoggedIn()
 			}
 
 			options := apiclient.MemoryListOptions{
@@ -393,7 +393,7 @@ func configuredMemoryClient() (*apiclient.Client, error) {
 		return nil, err
 	}
 	if cfg.Token == "" {
-		return nil, newCliError(3, "not logged in", "run `mem auth login` first")
+		return nil, errNotLoggedIn()
 	}
 	return newHTTPClient(cfg).api, nil
 }

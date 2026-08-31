@@ -24,6 +24,25 @@ func newCliError(code int, msg, hint string) *cliError {
 	return &cliError{code: code, msg: msg, hint: hint}
 }
 
+// notLoggedInHint is the credential guidance that always applies.
+const notLoggedInHint = "run `mem auth login` first"
+
+// firstRunDeployHint names the documented deployment path rather than a
+// host-specific install recipe, so a machine that has never been configured is
+// not sent off to build the bare-metal stack by hand.
+const firstRunDeployHint = "no server configured yet — the documented path is deploy/compose, see docs/DEPLOYMENT.md"
+
+// errNotLoggedIn is the one fail-closed auth error for commands that need a
+// credential. When no config file exists at all, the run is a first run: the
+// hint additionally names the documented deployment path, because telling
+// somebody to log in against a server that does not exist yet is not guidance.
+func errNotLoggedIn() error {
+	if configFileExists() {
+		return newCliError(3, "not logged in", notLoggedInHint)
+	}
+	return newCliError(3, "not logged in", notLoggedInHint+"; "+firstRunDeployHint)
+}
+
 // fromAPIError maps an *apiclient.APIError to a *cliError with the SPEC §7.1
 // exit code. Any other error is returned unchanged.
 func fromAPIError(err error) error {

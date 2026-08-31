@@ -82,7 +82,7 @@ func configuredFileAnnotationClient() (*apiclient.Client, error) {
 		return nil, err
 	}
 	if cfg.Token == "" {
-		return nil, newCliError(3, "not logged in", "run `mem auth login` first")
+		return nil, errNotLoggedIn()
 	}
 	return newHTTPClient(cfg).api, nil
 }

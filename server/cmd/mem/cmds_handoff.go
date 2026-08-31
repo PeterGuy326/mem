@@ -58,7 +58,7 @@ Examples:
 				return err
 			}
 			if cfg.Token == "" {
-				return newCliError(3, "not logged in", "run `mem auth login` first")
+				return errNotLoggedIn()
 			}
 			raw, err := newHTTPClient(cfg).api.Checkpoint(
 				commandContext(cmd),
@@ -265,7 +265,7 @@ Examples:
 				return err
 			}
 			if cfg.Token == "" {
-				return newCliError(3, "not logged in", "run `mem auth login` first")
+				return errNotLoggedIn()
 			}
 			raw, err := newHTTPClient(cfg).api.Resume(
 				commandContext(cmd),

@@ -91,3 +91,16 @@ func resolveConfig(serverOverride string) (*cliConfig, error) {
 	}
 	return c, nil
 }
+
+// configFileExists reports whether a CLI config file is present on disk.
+// loadConfig deliberately succeeds without one, so this is the only signal that
+// separates "never configured" from "configured, but not logged in" — the
+// distinction first-run guidance has to get right.
+func configFileExists() bool {
+	p, err := configPath()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(p)
+	return err == nil
+}

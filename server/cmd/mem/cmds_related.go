@@ -82,7 +82,7 @@ Relation types currently supported:
 				return err
 			}
 			if cfg.Token == "" {
-				return newCliError(3, "not logged in", "run `mem auth login` first")
+				return errNotLoggedIn()
 			}
 			c := newHTTPClient(cfg)
 			path := "/v1/files/" + args[0] + "/related"
@@ -161,7 +161,7 @@ outgoing rows before recomputing.`,
 				return err
 			}
 			if cfg.Token == "" {
-				return newCliError(3, "not logged in", "run `mem auth login` first")
+				return errNotLoggedIn()
 			}
 			c := newHTTPClient(cfg)
 			body := rebuildReq{FileID: file}

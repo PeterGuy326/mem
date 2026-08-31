@@ -155,6 +155,37 @@ docker compose --env-file .env -f compose.yaml ps
 docker compose --env-file .env -f compose.yaml logs --tail=200 migrate memd worker web
 ```
 
+### Diagnose from the client side
+
+`mem doctor` answers the client half of the same question: why the CLI cannot
+reach a working server. It issues only `GET` requests, and it never writes
+configuration, starts or stops a container, or installs a dependency — a failed
+diagnosis changes nothing on the machine.
+
+```bash
+mem doctor
+mem doctor --format json
+```
+
+It reports four checks in a fixed order and stops guessing after the first
+failure: reachability of the configured server URL (`/healthz`, probed without a
+credential so a bad token is not misread as an outage), whether a credential
+exists, the workspace the server resolved for that credential
+(`/v1/capabilities`), and CLI/server version skew (`/v1/version`). A check that
+an earlier failure made impossible is reported as `skipped`, naming the blocking
+check, rather than as an inferred pass.
+
+The process exits with the first failing check's SPEC §7.1 code — `0` ok ·
+`2` not_found · `3` auth · `4` plan/quota · `5` provider/timeout — so a wrapper
+can branch on it. Version skew is advisory and contributes `0`; it is also not
+computable in builds that do not inject a CLI version, which today includes
+release builds, so the check reports that limit instead of claiming agreement.
+
+`--format json` emits the `mem.doctor` v1 document validated by
+[`schemas/mem-doctor.v1.schema.json`](schemas/mem-doctor.v1.schema.json). It
+contains no secret value: the configured URL is reported with any credentials
+removed, and a token is described only by where it came from.
+
 ### First account and login
 
 The default `MEM_REGISTRATION_MODE=first_user` atomically allows exactly one

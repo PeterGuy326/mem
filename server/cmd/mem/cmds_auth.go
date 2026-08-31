@@ -132,7 +132,7 @@ func newAuthStatusCmd() *cobra.Command {
 				return err
 			}
 			if cfg.Token == "" {
-				return newCliError(3, "not logged in", "run `mem auth login` first")
+				return errNotLoggedIn()
 			}
 
 			var capabilities struct {
@@ -241,7 +241,7 @@ func newTokenCreateCmd() *cobra.Command {
 				return err
 			}
 			if cfg.Token == "" {
-				return newCliError(3, "not logged in", "run `mem auth login` first")
+				return errNotLoggedIn()
 			}
 			scopeList := splitCommas(scopes)
 			body := map[string]any{

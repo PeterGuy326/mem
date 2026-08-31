@@ -143,7 +143,7 @@ func configuredWorkspaceAIProfileClient() (*httpClient, error) {
 		return nil, err
 	}
 	if cfg.Token == "" {
-		return nil, newCliError(3, "not logged in", "run `mem auth login` first")
+		return nil, errNotLoggedIn()
 	}
 	return newHTTPClient(cfg), nil
 }

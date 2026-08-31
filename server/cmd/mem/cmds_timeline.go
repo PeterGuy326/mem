@@ -43,7 +43,7 @@ func newTimelineCmd() *cobra.Command {
 				return err
 			}
 			if cfg.Token == "" {
-				return newCliError(3, "not logged in", "run `mem auth login` first")
+				return errNotLoggedIn()
 			}
 			c := newHTTPClient(cfg)
 			var resp timelineResp

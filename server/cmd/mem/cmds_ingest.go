@@ -158,7 +158,7 @@ func runIngestQoder(cmd *cobra.Command, o ingestOptions) error {
 		return err
 	}
 	if !o.dryRun && cfg.Token == "" {
-		return newCliError(3, "not logged in", "run `mem auth login` first")
+		return errNotLoggedIn()
 	}
 	client := newHTTPClient(cfg)
 	stateDir := o.checkpointDir()

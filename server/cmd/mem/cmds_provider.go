@@ -56,7 +56,7 @@ func newProviderListCmd() *cobra.Command {
 				return err
 			}
 			if cfg.Token == "" {
-				return newCliError(3, "not logged in", "run `mem auth login` first")
+				return errNotLoggedIn()
 			}
 			c := newHTTPClient(cfg)
 			var resp providerListResp
@@ -116,7 +116,7 @@ vectors cannot silently enter different spaces.`,
 				return err
 			}
 			if cfg.Token == "" {
-				return newCliError(3, "not logged in", "run `mem auth login` first")
+				return errNotLoggedIn()
 			}
 			c := newHTTPClient(cfg)
 			kind := args[0]
@@ -164,7 +164,7 @@ historical provider identity was not recorded.`,
 				return err
 			}
 			if cfg.Token == "" {
-				return newCliError(3, "not logged in", "run `mem auth login` first")
+				return errNotLoggedIn()
 			}
 			var resp struct {
 				Provider string `json:"provider"`
@@ -201,7 +201,7 @@ func newProviderTestCmd() *cobra.Command {
 				return err
 			}
 			if cfg.Token == "" {
-				return newCliError(3, "not logged in", "run `mem auth login` first")
+				return errNotLoggedIn()
 			}
 			c := newHTTPClient(cfg)
 			kind := args[0]

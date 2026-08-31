@@ -162,8 +162,17 @@ func TestAuthStatusWithoutTokenReturnsAuthExitCode(t *testing.T) {
 	if !errors.As(err, &cliErr) {
 		t.Fatalf("error type = %T, want *cliError", err)
 	}
-	if cliErr.code != 3 || cliErr.hint != "run `mem auth login` first" {
-		t.Fatalf("cli error = %#v", cliErr)
+	// #112 REQ-002 changed this hint's text for a host with no config file at
+	// all, so the old exact-equality assertion is intentionally widened: the
+	// login step must stay, and the documented deployment path must now appear.
+	if cliErr.code != 3 {
+		t.Fatalf("cli error code = %d, want 3 (%#v)", cliErr.code, cliErr)
+	}
+	if !strings.HasPrefix(cliErr.hint, "run `mem auth login` first") {
+		t.Errorf("hint = %q, want it to keep the login step", cliErr.hint)
+	}
+	if !strings.Contains(cliErr.hint, "deploy/compose") || !strings.Contains(cliErr.hint, "docs/DEPLOYMENT.md") {
+		t.Errorf("hint = %q, want first-run guidance naming the documented path", cliErr.hint)
 	}
 }
 

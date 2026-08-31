@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://getmem.dev/schemas/mem-doctor.v1.schema.json",
+  "title": "mem doctor report v1",
+  "description": "Read-only diagnosis emitted by `mem doctor --format json`. Mirrors doctorReport and doctorCheck in server/cmd/mem/cmds_doctor.go. Contains no credential, token or DSN value: the server URL is reported with userinfo removed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract",
+    "schema_version",
+    "server",
+    "cli_version",
+    "exit_code",
+    "checks"
+  ],
+  "properties": {
+    "contract": {
+      "const": "mem.doctor"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "server": {
+      "type": "string",
+      "description": "Configured memd base URL, userinfo redacted.",
+      "minLength": 1
+    },
+    "cli_version": {
+      "type": "string",
+      "description": "Version this CLI build reports; \"dev\" when none was injected at build time."
+    },
+    "server_version": {
+      "type": "string",
+      "description": "Version the server reported. Absent when the version probe did not run."
+    },
+    "exit_code": {
+      "type": "integer",
+      "description": "SPEC 7.1 process exit code: first failing check's code, else 0.",
+      "enum": [0, 2, 3, 4, 5]
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "description": "Fixed ordered list, never a wizard: server_reachability, credential, workspace, version_skew.",
+      "prefixItems": [
+        { "allOf": [ { "$ref": "#/$defs/check" }, { "properties": { "name": { "const": "server_reachability" } } } ] },
+        { "allOf": [ { "$ref": "#/$defs/check" }, { "properties": { "name": { "const": "credential" } } } ] },
+        { "allOf": [ { "$ref": "#/$defs/check" }, { "properties": { "name": { "const": "workspace" } } } ] },
+        { "allOf": [ { "$ref": "#/$defs/check" }, { "properties": { "name": { "const": "version_skew" } } } ] }
+      ],
+      "items": { "$ref": "#/$defs/check" }
+    }
+  },
+  "$defs": {
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "status", "exit_code", "detail"],
+      "properties": {
+        "name": {
+          "enum": ["server_reachability", "credential", "workspace", "version_skew"]
+        },
+        "status": {
+          "enum": ["ok", "warn", "fail", "skipped"],
+          "description": "\"skipped\" means an earlier failure made this check unrunnable; it is never an inferred pass."
+        },
+        "exit_code": {
+          "type": "integer",
+          "description": "This finding's contribution to the process exit code. Advisory and skipped findings contribute 0.",
+          "enum": [0, 2, 3, 4, 5]
+        },
+        "detail": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hint": {
+          "type": "string",
+          "description": "Actionable next step. First-run hints name the documented container path."
+        }
+      }
+    }
+  }
+}

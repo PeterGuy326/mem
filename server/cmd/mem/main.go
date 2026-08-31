@@ -20,6 +20,17 @@ var (
 	cliWorkspaceOverride string
 )
 
+// devCLIVersion is the placeholder this build reports when no version was
+// injected.
+const devCLIVersion = "dev"
+
+// cliVersion is the CLI's reported version. Nothing injects it yet:
+// .github/workflows/release.yml builds with `-s -w` only, so release binaries
+// currently report devCLIVersion, and `mem doctor`'s version_skew check reports
+// "skew not computable" instead of inventing a comparison. Wiring this up is a
+// release-side change (GOFLAGS/-ldflags=-X main.cliVersion=…), not a CLI one.
+var cliVersion = devCLIVersion
+
 func main() {
 	root := newRootCmd()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -85,6 +96,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newModelCmd())
 	root.AddCommand(newTimelineCmd())
 	root.AddCommand(newWorkspaceCmd())
+	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newVersionCmd())
 	return root
 }
