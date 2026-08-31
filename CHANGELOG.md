@@ -9,6 +9,21 @@ The project publishes 0.x prerelease versions; a stable release line is not yet 
 
 ### Fixed
 
+- The npm installer now verifies the selected Release binary against the
+  release's SHA-256 manifest before making it executable, rejects malformed or
+  ambiguous manifest entries, verifies cached binaries, and removes partial or
+  unverified files on failure.
+- The npm wrapper no longer relies on a dependency `postinstall` script, which
+  npm 12 blocks by default. The first explicit `mem-mcp` invocation performs the
+  checksum-verified binary bootstrap, later invocations reverify and reuse a
+  valid cache, all bootstrap diagnostics stay on stderr to preserve MCP stdout,
+  and installer failures prevent the child process from starting. Runtime
+  binaries now live in a user-writable, version-and-platform-scoped cache rather
+  than the installed package; an atomic per-asset lock prevents concurrent
+  installers from deleting each other's verified result, stale recovery cleans
+  only its owner's artifacts, manifest failures remove any unverifiable service
+  path, and wrapper shutdown forwards signals with bounded escalation so the
+  native MCP child is not left orphaned.
 - Release validation now verifies that every immutable GitHub Action pin used
   by the release workflow resolves in the action's official repository.
 

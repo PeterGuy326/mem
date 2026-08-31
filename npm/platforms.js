@@ -3,8 +3,8 @@
 /**
  * platforms.js — single source of truth for the mem-mcp release assets.
  *
- * Both install.js (postinstall download) and the `mem-mcp` bin wrapper resolve
- * the platform binary through this table, so the two can never drift apart.
+ * Both install.js (checksum-verified bootstrap) and the `mem-mcp` bin wrapper
+ * resolve the platform binary through this table, so the two cannot drift.
  * The keys are `<os>-<cpu>` as reported by Node's `os.platform()` and
  * `os.arch()`; the values must match the asset names built by
  * .github/workflows/release.yml exactly.

@@ -96,7 +96,53 @@ make test-worker
 make test-web
 ```
 
-## 3.1 Production deployment assets
+### 3.1 npm wrapper integrity
+
+Run the dependency-free npm wrapper tests and inspect the package payload:
+
+```bash
+(cd npm && npm test)
+(cd npm && npm pack --dry-run --ignore-scripts)
+```
+
+The tests use deterministic local download doubles; they do not mutate a live
+Release or publish a package. They prove strict checksum-manifest parsing,
+SHA-256 verification before executable installation, verified cache reuse, and
+fail-closed cleanup of unverifiable service-path files, directories and symlinks
+after manifest, checksum, and partial-download failures. Wrapper tests
+also prove verification-before-spawn, stderr-only bootstrap diagnostics,
+argument/environment/inherited-stdio propagation, child exit handling, and that
+installer failures never start a child. They also exercise platform-default and
+absolute override cache paths, serialized bootstrap within one process and
+across 12 independent processes, single-download publication, failed-installer
+isolation, stale-owner cleanup that preserves foreign temporary files,
+invalid-cache replacement, and real parent/child signal forwarding with bounded
+escalation. A real child also proves stdin EOF, normal exit and child-only stdout,
+while a bootstrap-interruption process test proves signal abort removes its
+temporary download and lock. Run `npm test` with Node 18, 20, and 24 when changing
+the wrapper; CI keeps Node 24 as the npm 11 gate and adds Node 18/20 Linux plus
+Node 24 Windows compatibility jobs. The Windows job also packs and installs the
+package, then invokes npm's generated `.cmd` shim against a preverified local
+executable and deterministic manifest double.
+
+The npm 12 clean-tarball acceptance test is an explicit additional gate:
+
+```bash
+(cd npm && npx --yes npm@12.0.2 run test:tarball)
+```
+
+It packs the documented six runtime files, installs the local tarball with npm
+12's default lifecycle-script policy and an empty user config, proves no binary
+appears during installation, then invokes the installed npm bin shim. A local
+HTTPS module double supplies deterministic manifest and binary bytes without a
+certificate, private key, live Release request, or registry mutation. The test
+requires bootstrap and cache verification logs on stderr, clean child-only MCP
+stdout, one verified binary download on first use, and manifest-only reuse on a
+subsequent invocation. The installed package tree is made read-only before the
+first wrapper invocation; the executable must be created only in the explicit
+user-writable, version-and-platform-scoped cache.
+
+## 3.2 Production deployment assets
 
 Validate the single-node Compose graph and the default, production and
 Worker-disabled Helm renders:

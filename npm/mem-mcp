@@ -3,8 +3,9 @@
 /**
  * mem-mcp — npm bin wrapper.
  *
- * Resolves the platform binary downloaded by install.js into npm/bin/ and runs
- * it with inherited stdio, which is what the MCP stdio transport needs.
+ * Resolves the platform binary in the user's versioned cache, verifies or
+ * bootstraps it through install.js, and runs it with inherited stdio, which is
+ * what the MCP stdio transport needs.
  *
  * This is deliberately a Node script rather than a POSIX shell script: npm
  * generates cmd/ps1 shims on Windows, and a bash shebang there cannot start the
@@ -14,39 +15,235 @@
 "use strict";
 
 const { spawn } = require("child_process");
-const { existsSync } = require("fs");
 const { platform, arch } = require("os");
-const { join } = require("path");
+const { install } = require("./install");
 const { assetFor } = require("./platforms");
 
-const PACKAGE = "@fullstack-ai-infra/mem-mcp";
+const SIGNAL_GRACE_MS = 5 * 1000;
 
-let asset;
-try {
-  asset = assetFor(platform(), arch());
-} catch (err) {
-  console.error(`mem-mcp: ${err.message}`);
-  process.exit(1);
+function installerLogger(logger) {
+  return {
+    log(...args) {
+      logger.error(...args);
+    },
+    warn(...args) {
+      logger.error(...args);
+    },
+  };
 }
 
-const binPath = join(__dirname, "bin", asset);
-
-if (!existsSync(binPath)) {
-  console.error(`mem-mcp: binary not found at ${binPath}`);
-  console.error(`mem-mcp: run 'npm rebuild ${PACKAGE}' to download it`);
-  process.exit(1);
+function forwardedSignals(osPlatform) {
+  return osPlatform === "win32"
+    ? ["SIGINT", "SIGTERM", "SIGBREAK"]
+    : ["SIGINT", "SIGTERM", "SIGHUP"];
 }
 
-const child = spawn(binPath, process.argv.slice(2), { stdio: "inherit" });
+async function runProcess(options = {}) {
+  const osPlatform = options.osPlatform || platform();
+  const osArch = options.osArch || arch();
+  const bootstrap = options.install || install;
+  const spawnProcess = options.spawn || spawn;
+  const args = options.args || process.argv.slice(2);
+  const env = options.env || process.env;
+  const logger = options.logger || console;
+  const signalSource = options.signalSource || process;
+  const signalGraceMs = options.signalGraceMs ?? SIGNAL_GRACE_MS;
+  const schedule = options.setTimeout || setTimeout;
+  const cancelSchedule = options.clearTimeout || clearTimeout;
 
-child.on("error", (err) => {
-  console.error(`mem-mcp: failed to start ${binPath}: ${err.message}`);
-  process.exit(1);
-});
-
-child.on("exit", (code, signal) => {
-  if (signal) {
-    process.exit(1);
+  try {
+    assetFor(osPlatform, osArch);
+  } catch (err) {
+    logger.error(`mem-mcp: ${err.message}`);
+    return { code: 1, signal: null };
   }
-  process.exit(code === null ? 1 : code);
-});
+
+  let binPath;
+  let bootstrapCompleted = false;
+  let bootstrapSignal = null;
+  const bootstrapAbort = new AbortController();
+  const bootstrapHandlers = [];
+  const removeBootstrapHandlers = () => {
+    for (const [signal, handler] of bootstrapHandlers) {
+      signalSource.removeListener(signal, handler);
+    }
+    bootstrapHandlers.length = 0;
+  };
+  for (const signal of forwardedSignals(osPlatform)) {
+    const handler = () => {
+      if (bootstrapSignal !== null) return;
+      bootstrapSignal = signal;
+      bootstrapAbort.abort(new Error(`bootstrap interrupted by ${signal}`));
+    };
+    try {
+      signalSource.on(signal, handler);
+      bootstrapHandlers.push([signal, handler]);
+    } catch (_) {
+      // Some signals are not available on every Node/Windows combination.
+    }
+  }
+
+  try {
+    // install() verifies an existing cache against the versioned manifest and
+    // downloads the binary only when it is missing or fails verification.
+    binPath = await bootstrap({
+      osPlatform,
+      osArch,
+      cacheDir: options.cacheDir,
+      environment: env,
+      logger: installerLogger(logger),
+      signal: bootstrapAbort.signal,
+    });
+    bootstrapCompleted = true;
+  } catch (err) {
+    if (bootstrapSignal !== null) {
+      logger.error(`mem-mcp: bootstrap interrupted by ${bootstrapSignal}`);
+      return { code: 1, signal: bootstrapSignal };
+    }
+    logger.error(
+      `mem-mcp: failed to download and verify the platform binary: ${err.message}`,
+    );
+    logger.error(
+      `mem-mcp: retry the command, or build manually from https://github.com/fullstack-ai-infra/mem`,
+    );
+    return { code: 1, signal: null };
+  } finally {
+    if (!bootstrapCompleted) removeBootstrapHandlers();
+  }
+
+  if (bootstrapSignal !== null) {
+    removeBootstrapHandlers();
+    return { code: 1, signal: bootstrapSignal };
+  }
+
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawnProcess(binPath, args, { env, stdio: "inherit" });
+    } catch (err) {
+      removeBootstrapHandlers();
+      logger.error(`mem-mcp: failed to start ${binPath}: ${err.message}`);
+      resolve({ code: 1, signal: null });
+      return;
+    }
+
+    let settled = false;
+    let terminationSignal = null;
+    let escalationTimer = null;
+    const installedHandlers = [];
+
+    const removeHandlers = () => {
+      removeBootstrapHandlers();
+      for (const [event, handler] of installedHandlers) {
+        signalSource.removeListener(event, handler);
+      }
+      installedHandlers.length = 0;
+      if (escalationTimer !== null) {
+        cancelSchedule(escalationTimer);
+        escalationTimer = null;
+      }
+    };
+
+    const finish = (code, childSignal = null) => {
+      if (settled) return;
+      settled = true;
+      removeHandlers();
+      const signal = terminationSignal || childSignal;
+      resolve({
+        code: signal ? 1 : code === null ? 1 : code,
+        signal: signal || null,
+      });
+    };
+
+    const killChild = (signal) => {
+      try {
+        child.kill(signal);
+      } catch (err) {
+        logger.error(`mem-mcp: failed to forward ${signal} to child: ${err.message}`);
+      }
+    };
+
+    const forceChildExit = () => {
+      if (settled) return;
+      killChild("SIGKILL");
+    };
+
+    const forwardSignal = (signal) => {
+      if (settled) return;
+      if (terminationSignal !== null) {
+        forceChildExit();
+        return;
+      }
+      terminationSignal = signal;
+      killChild(signal);
+      escalationTimer = schedule(forceChildExit, signalGraceMs);
+    };
+
+    child.once("error", (err) => {
+      if (!settled) {
+        logger.error(`mem-mcp: failed to start ${binPath}: ${err.message}`);
+      }
+      finish(1, null);
+    });
+
+    child.once("exit", (code, signal) => {
+      finish(code, signal);
+    });
+
+    for (const signal of forwardedSignals(osPlatform)) {
+      const handler = () => forwardSignal(signal);
+      try {
+        signalSource.on(signal, handler);
+        installedHandlers.push([signal, handler]);
+      } catch (_) {
+        // Some signals are not available on every Node/Windows combination.
+      }
+    }
+
+    const onParentExit = () => forceChildExit();
+    signalSource.once("exit", onParentExit);
+    installedHandlers.push(["exit", onParentExit]);
+
+    removeBootstrapHandlers();
+    if (bootstrapSignal !== null && terminationSignal === null) {
+      forwardSignal(bootstrapSignal);
+    }
+  });
+}
+
+async function run(options = {}) {
+  const result = await runProcess(options);
+  return result.code;
+}
+
+function applyExitResult(result, processObject = process, osPlatform = platform()) {
+  if (result.signal && osPlatform !== "win32") {
+    try {
+      processObject.kill(processObject.pid, result.signal);
+      return;
+    } catch (err) {
+      console.error(`mem-mcp: failed to preserve ${result.signal} exit: ${err.message}`);
+    }
+  }
+  processObject.exitCode = result.code;
+}
+
+if (require.main === module) {
+  runProcess().then(
+    (result) => {
+      applyExitResult(result);
+    },
+    (err) => {
+      console.error(`mem-mcp: unexpected wrapper failure: ${err.message}`);
+      process.exitCode = 1;
+    },
+  );
+}
+
+module.exports = {
+  applyExitResult,
+  forwardedSignals,
+  installerLogger,
+  run,
+  runProcess,
+};
