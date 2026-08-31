@@ -25,7 +25,9 @@ The project publishes 0.x prerelease versions; a stable release line is not yet 
   path, and wrapper shutdown forwards signals with bounded escalation so the
   native MCP child is not left orphaned.
 - Release validation now verifies that every immutable GitHub Action pin used
-  by the release workflow resolves in the action's official repository.
+  by the release workflow resolves in the action's official repository, runs
+  on the macOS system Bash 3.2, and has a deterministic compatibility gate
+  against Bash 4-only collection builtins.
 
 ## [0.1.0] - 2026-08-30
 

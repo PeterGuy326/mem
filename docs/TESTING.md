@@ -19,6 +19,7 @@ major versions or compatible patch releases:
 | Browser | Playwright Chromium or an installed Google Chrome |
 | Database integration | Docker Compose v2 and `pgvector/pgvector:pg16` |
 | Process acceptance | `curl`, `jq`, Docker Compose v2 |
+| Release pin validation | Bash 3.2 or newer, including macOS `/bin/bash` |
 
 The default regression suite does not need Redis, MinIO, Ollama, a cloud
 provider or any API key. The Web acceptance tests use MSW fixtures. Worker
@@ -33,6 +34,19 @@ and process-level HTTP/CLI/MCP acceptance. Their shared toolchain and service
 versions must stay aligned.
 Database tests intentionally overlap where artifact production and the
 Agent-memory contract need independent evidence.
+
+Release action pins can be validated from a stock macOS checkout with:
+
+```bash
+/bin/bash ./scripts/test_validate_release_action_pins_compat.sh
+/bin/bash ./scripts/validate_release_action_pins.sh
+```
+
+The first command is a deterministic, network-free compatibility regression:
+it disables the Bash 4-only `mapfile` and `readarray` collection builtins and
+replays the validator with local action-ref fixtures. The second command
+resolves every immutable pin against its official GitHub repository. Expected
+result: both commands exit `0` and print the documented `PASS` lines.
 
 ## 2. Bootstrap a clean checkout
 

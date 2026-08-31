@@ -4,7 +4,10 @@ set -euo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 workflow="${repo_root}/.github/workflows/release.yml"
 
-mapfile -t pins < <(
+pins=()
+while IFS= read -r pin; do
+  pins[${#pins[@]}]="${pin}"
+done < <(
   sed -nE \
     's|^[[:space:]]*uses:[[:space:]]+([^@[:space:]#]+)@([^[:space:]#]+).*|\1 \2|p' \
     "${workflow}" | sort -u
