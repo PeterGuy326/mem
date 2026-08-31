@@ -28,8 +28,9 @@ The two checked-in workflows have distinct responsibilities. `ci.yml` owns
 component build, lint, unit/race, generated-protobuf, coverage, release
 artifact checks, and production Compose/Helm/image validation.
 `memory-validation.yml` owns repository metadata, deployment-script lint,
-browser acceptance, owned-database migrations, and process-level HTTP/CLI/MCP
-acceptance. Their shared toolchain and service versions must stay aligned.
+release-action pin resolution, browser acceptance, owned-database migrations,
+and process-level HTTP/CLI/MCP acceptance. Their shared toolchain and service
+versions must stay aligned.
 Database tests intentionally overlap where artifact production and the
 Agent-memory contract need independent evidence.
 

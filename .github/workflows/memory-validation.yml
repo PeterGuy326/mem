@@ -36,12 +36,16 @@ jobs:
       - name: Validate workflow
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
 
+      - name: Validate release action pins
+        run: ./scripts/validate_release_action_pins.sh
+
       - name: Validate project scripts
         run: |
           git ls-files -z 'scripts/*.sh' 'deploy/compose/*.sh' | xargs -0 -n1 bash -n
           shellcheck \
             scripts/verify.sh \
             scripts/acceptance_agent_memory.sh \
+            scripts/validate_release_action_pins.sh \
             scripts/validate_deploy.sh \
             deploy/compose/backup.sh \
             deploy/compose/generate-env.sh \

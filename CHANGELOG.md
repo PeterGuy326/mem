@@ -7,6 +7,11 @@ The project publishes 0.x prerelease versions; a stable release line is not yet 
 
 ## [Unreleased]
 
+### Fixed
+
+- Release validation now verifies that every immutable GitHub Action pin used
+  by the release workflow resolves in the action's official repository.
+
 ## [0.1.0] - 2026-08-30
 
 ### Added
