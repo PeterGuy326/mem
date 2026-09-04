@@ -410,9 +410,51 @@ func TestRedactURLStripsUserinfo(t *testing.T) {
 	if !strings.Contains(got, "REDACTED@mem.internal:8787") {
 		t.Errorf("redactURL = %q, want the userinfo replaced and the host kept", got)
 	}
+	got = redactURL("http://admin:" + secret + "@ho st.example.com:8787")
+	if strings.Contains(got, secret) {
+		t.Errorf("redactURL = %q, still carries the malformed-password value", got)
+	}
+	if !strings.Contains(got, "REDACTED@ho st.example.com:8787") {
+		t.Errorf("redactURL = %q, want malformed URLs to redact their userinfo", got)
+	}
 	plain := "http://localhost:8787"
 	if redactURL(plain) != plain {
 		t.Errorf("redactURL(%q) = %q, want it unchanged", plain, redactURL(plain))
+	}
+}
+
+func TestDoctorMalformedServerURLDoesNotLeakCredentials(t *testing.T) {
+	const secret = "malformed-psswd"
+	malformed := "http://admin:" + secret + "@ho st.example.com:1/healthz"
+	configureDoctor(t, malformed, "tok", true)
+
+	for _, format := range []string{"json", "text"} {
+		stdout, stderr, err := execDoctor(t, "--format", format)
+		if err == nil {
+			t.Fatalf("doctor should fail with malformed server URL in %s format\n%s", format, stdout)
+		}
+		if strings.Contains(stdout, secret) {
+			t.Errorf("stdout leaked credential for %s: %s", format, stdout)
+		}
+		if strings.Contains(stderr, secret) {
+			t.Errorf("stderr leaked credential for %s: %s", format, stderr)
+		}
+		if strings.Contains(stdout, malformed) {
+			t.Errorf("stdout should not carry raw malformed URL in %s: %s", format, stdout)
+		}
+		if format == "json" {
+			rep := decodeReport(t, stdout)
+			reach := checkByName(t, rep, "server_reachability")
+			if strings.Contains(reach.Detail, secret) {
+				t.Errorf("server_reachability detail leaked secret: %s", reach.Detail)
+			}
+			if strings.Contains(reach.Detail, malformed) {
+				t.Errorf("server_reachability detail leaked raw URL: %s", reach.Detail)
+			}
+			if !strings.Contains(reach.Detail, "REDACTED") {
+				t.Errorf("server_reachability detail should redact credentials: %s", reach.Detail)
+			}
+		}
 	}
 }
 

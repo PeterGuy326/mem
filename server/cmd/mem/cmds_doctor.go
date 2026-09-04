@@ -154,10 +154,10 @@ func runDoctor(cmd *cobra.Command, timeout time.Duration) (doctorReport, error) 
 		Server:        redactURL(cfg.Server),
 		CLIVersion:    cliVersion,
 	}
-	ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
-	defer cancel()
 
-	reach := probeReachability(ctx, cfg.Server)
+	reachCtx, cancel := context.WithTimeout(cmd.Context(), timeout)
+	reach := probeReachability(reachCtx, cfg.Server)
+	cancel()
 	report.Checks = append(report.Checks, reach)
 
 	cred := probeCredential(cfg)
@@ -173,8 +173,13 @@ func runDoctor(cmd *cobra.Command, timeout time.Duration) (doctorReport, error) 
 	case cred.Status == doctorFail:
 		ws, ver = skippedCheck("workspace", cred.Name), skippedCheck("version_skew", cred.Name)
 	default:
-		ws = probeWorkspace(ctx, cfg)
-		ver = probeVersion(ctx, cfg.Server, &report)
+		wsCtx, wsCancel := context.WithTimeout(cmd.Context(), timeout)
+		ws = probeWorkspace(wsCtx, cfg)
+		wsCancel()
+
+		verCtx, verCancel := context.WithTimeout(cmd.Context(), timeout)
+		ver = probeVersion(verCtx, cfg.Server, &report)
+		verCancel()
 	}
 	report.Checks = append(report.Checks, ws, ver)
 
@@ -334,7 +339,7 @@ func classifyProbe(err error) (status string, code int, detail, hint string) {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return doctorFail, exitProvider, "probe timed out", "raise --timeout, or check that the server is not behind a stalled proxy"
 	}
-	return doctorFail, exitProvider, "cannot reach the configured server: " + err.Error(), deployPathHint()
+	return doctorFail, exitProvider, "cannot reach the configured server: " + sanitizeProbeError(err), deployPathHint()
 }
 
 // deployPathHint points at the container path the docs recommend, instead of a
@@ -348,11 +353,60 @@ func deployPathHint() string {
 // unreserved characters, because url.User("***") would percent-encode it.
 func redactURL(raw string) string {
 	u, err := url.Parse(raw)
-	if err != nil || u.User == nil {
+	if err == nil && u.User != nil {
+		u.User = url.User("REDACTED")
+		return u.String()
+	}
+
+	// If url.Parse fails, malformed credential URLs can still slip through
+	// unchanged unless we fall back to a simple schema/userinfo splitter.
+	if err != nil {
+		if redacted := redactMalformedURL(raw); redacted != raw {
+			return redacted
+		}
 		return raw
 	}
-	u.User = url.User("REDACTED")
-	return u.String()
+	return raw
+}
+
+func redactMalformedURL(raw string) string {
+	sep := "://"
+	if i := strings.Index(raw, sep); i >= 0 {
+		prefix := raw[:i+len(sep)]
+		rest := raw[i+len(sep):]
+		at := strings.Index(rest, "@")
+		if at > 0 {
+			return prefix + "REDACTED@" + rest[at+1:]
+		}
+	}
+	return raw
+}
+
+func sanitizeProbeError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	const quoted = "\""
+	for start := 0; ; {
+		left := strings.Index(msg[start:], quoted)
+		if left < 0 {
+			return msg
+		}
+		left += start
+		right := strings.Index(msg[left+1:], quoted)
+		if right < 0 {
+			return msg
+		}
+		right += left + 1
+		token := msg[left+1 : right]
+		if strings.Contains(token, "://") {
+			if redacted := redactURL(token); redacted != token {
+				msg = msg[:left+1] + redacted + msg[right:]
+			}
+		}
+		start = right + 1
+	}
 }
 
 func printDoctorReport(cmd *cobra.Command, r doctorReport) {

@@ -155,3 +155,23 @@ func TestUploadStreamWithSourceMetadata(t *testing.T) {
 		t.Fatal("source_metadata leaked into the request URL")
 	}
 }
+
+func TestRequestBuildErrorRedactsCredentialedURL(t *testing.T) {
+	const secret = "bad-token-xyz"
+	err := New("http://admin:"+secret+"@ho st.example.com:1", "token").DoJSON(
+		context.Background(),
+		http.MethodGet,
+		"/v1/test",
+		nil,
+		nil,
+	)
+	if err == nil {
+		t.Fatal("expected request construction to fail for malformed URL")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("request-build error leaked credential: %v", err)
+	}
+	if !strings.Contains(err.Error(), "REDACTED") {
+		t.Fatalf("request-build error should redact credentials: %v", err)
+	}
+}

@@ -70,7 +70,7 @@ type WorkspaceImportConflict struct {
 // in memory. The server does not publish response headers until its complete
 // archive has been built and validated.
 func (c *Client) ExportWorkspace(ctx context.Context) (*WorkspaceBundleDownload, error) {
-	req, err := http.NewRequestWithContext(
+	req, err := c.newRequest(
 		ctx,
 		http.MethodGet,
 		c.baseURL+"/v1/workspaces/current/export",
@@ -133,7 +133,7 @@ func (c *Client) ImportWorkspace(
 		return nil, fmt.Errorf("workspace bundle size must be -1 or non-negative")
 	}
 	query := url.Values{"mode": []string{mode}}
-	req, err := http.NewRequestWithContext(
+	req, err := c.newRequest(
 		ctx,
 		http.MethodPost,
 		c.baseURL+"/v1/workspaces/current/import?"+query.Encode(),

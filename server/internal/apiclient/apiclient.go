@@ -97,7 +97,7 @@ func (c *Client) DoJSONWithHeaders(ctx context.Context, method, path string, bod
 		}
 		rdr = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, rdr)
+	req, err := c.newRequest(ctx, method, c.baseURL+path, rdr)
 	if err != nil {
 		return err
 	}
@@ -167,7 +167,7 @@ func (c *Client) UploadMultipartWithSourceMetadata(ctx context.Context, name, mi
 		errCh <- nil
 	}()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/files", pr)
+	req, err := c.newRequest(ctx, http.MethodPost, c.baseURL+"/v1/files", pr)
 	if err != nil {
 		return err
 	}
@@ -214,7 +214,7 @@ func (c *Client) UploadStreamWithSourceMetadata(ctx context.Context, name, mimeT
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/files?"+q.Encode(), body)
+	req, err := c.newRequest(ctx, http.MethodPost, c.baseURL+"/v1/files?"+q.Encode(), body)
 	if err != nil {
 		return err
 	}
@@ -239,7 +239,7 @@ func (c *Client) UploadStreamWithSourceMetadata(ctx context.Context, name, mimeT
 // DownloadStream returns a streaming reader for GET /v1/files/{id}/content.
 // Callers MUST close the returned ReadCloser.
 func (c *Client) DownloadStream(ctx context.Context, fileID string) (io.ReadCloser, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/files/"+fileID+"/content", nil)
+	req, err := c.newRequest(ctx, http.MethodGet, c.baseURL+"/v1/files/"+fileID+"/content", nil)
 	if err != nil {
 		return nil, "", err
 	}
@@ -266,6 +266,71 @@ func marshalSourceMetadata(sourceMetadata *FileSourceMetadata) (string, error) {
 		return "", fmt.Errorf("encode source metadata: %w", err)
 	}
 	return string(raw), nil
+}
+
+func (c *Client) newRequest(ctx context.Context, method, target string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, target, body)
+	if err == nil {
+		return req, nil
+	}
+	return nil, requestBuildError(method, target, err)
+}
+
+func requestBuildError(method, target string, err error) error {
+	return &redactErr{
+		message: fmt.Sprintf("%s %s: %s", method, redactURL(target), redactedRequestFailure(err)),
+	}
+}
+
+type redactErr struct {
+	message string
+}
+
+func (e *redactErr) Error() string { return e.message }
+
+func redactedRequestFailure(err error) string {
+	msg := err.Error()
+	const quoted = "\""
+	for start := 0; ; {
+		left := strings.Index(msg[start:], quoted)
+		if left < 0 {
+			break
+		}
+		left += start
+		right := strings.Index(msg[left+1:], quoted)
+		if right < 0 {
+			break
+		}
+		right += left + 1
+		token := msg[left+1 : right]
+		if strings.Contains(token, "://") {
+			if redacted := redactURL(token); redacted != token {
+				msg = msg[:left+1] + redacted + msg[right:]
+				return msg
+			}
+		}
+		start = right + 1
+	}
+	return msg
+}
+
+func redactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err == nil && u.User != nil {
+		u.User = url.User("REDACTED")
+		return u.String()
+	}
+	if err != nil && strings.Contains(raw, "://") {
+		sep := "://"
+		if i := strings.Index(raw, sep); i >= 0 {
+			prefix := raw[:i+len(sep)]
+			rest := raw[i+len(sep):]
+			if at := strings.Index(rest, "@"); at > 0 {
+				return prefix + "REDACTED@" + rest[at+1:]
+			}
+		}
+	}
+	return raw
 }
 
 func (c *Client) attachAuth(req *http.Request) {
