@@ -253,6 +253,10 @@ jobs:
         working-directory: web
         run: npm run audit
 
+      - name: Run unit tests
+        working-directory: web
+        run: npm test
+
       - name: Lint
         working-directory: web
         run: npm run lint

@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "audit": "npm audit --omit=dev --audit-level=moderate && npm audit --audit-level=high",
+    "audit": "node audit-retry.mjs",
     "lint": "eslint . --ext .ts,.tsx --max-warnings 0",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
     "test:enrichment": "node enrichment-acceptance.mjs",

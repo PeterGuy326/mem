@@ -13,6 +13,13 @@ The project publishes 0.x prerelease versions; a stable release line is not yet 
   to the canonical `bytefolk` organization while retaining the published npm
   scope, MCP identity, and existing cache paths.
 
+### Fixed
+
+- CI Web job now runs vitest unit tests (`npm test`) so the six test files
+  under `web/src/` are covered by the pipeline. The `npm run audit` step
+  retries transient registry failures (503, timeout, ECONNRESET) up to three
+  times instead of failing the entire Web leg on the first network hiccup.
+
 ### Security
 
 - Normalize the client-declared MIME type of a stored file before deciding how
