@@ -38,13 +38,14 @@ function isVulnerabilityReport(stdout) {
 }
 
 function runWithRetry(label, args) {
+  let result;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const ts = new Date().toISOString();
     process.stderr.write(
       `[audit-retry] ${ts} — ${label} (attempt ${attempt}/${MAX_ATTEMPTS})\n`
     );
 
-    const result = spawnSync("npm", args, {
+    result = spawnSync("npm", args, {
       encoding: "utf8",
       stdio: ["inherit", "pipe", "pipe"],
     });
@@ -63,7 +64,7 @@ function runWithRetry(label, args) {
       );
       process.stdout.write(stdout);
       process.stderr.write(stderr);
-      return result.status;
+      return result.status ?? 1;
     }
 
     if (isNetworkError(stderr)) {
@@ -81,14 +82,13 @@ function runWithRetry(label, args) {
     );
     process.stdout.write(stdout);
     process.stderr.write(stderr);
-    return result.status;
+    return result.status ?? 1;
   }
 
   process.stderr.write(
     `[audit-retry] ${label} exhausted ${MAX_ATTEMPTS} attempts.\n`
   );
-  const final = spawnSync("npm", args, { encoding: "utf8", stdio: "inherit" });
-  return final.status ?? 1;
+  return result.status ?? 1;
 }
 
 let exitCode = 0;
